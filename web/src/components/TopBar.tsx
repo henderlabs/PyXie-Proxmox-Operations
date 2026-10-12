@@ -44,6 +44,29 @@ function useUpdateInfo(enabled: boolean, pathname: string): UpdateInfo | null {
   return info;
 }
 
+/** The current date and time in the viewer's own time zone, in the top bar. Rendered after mount (the server has no idea of the
+ * viewer's zone, so rendering it there would mismatch), and refreshed every 10 seconds. */
+function Clock() {
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const iv = setInterval(() => setNow(new Date()), 10000);
+    return () => clearInterval(iv);
+  }, []);
+  if (!now) return <span className="flex items-center px-3 w-[150px]" aria-hidden />;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return (
+    <span
+      className="flex items-center px-3 text-muted tabular-nums whitespace-nowrap"
+      title={`${now.toLocaleString([], { dateStyle: "full", timeStyle: "long" })}\nYour browser's time zone (${zone}). Times in PyXie are shown in it.`}
+    >
+      {now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}
+      <span className="mx-1.5 text-border">·</span>
+      <span className="text-text">{now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+    </span>
+  );
+}
+
 /** Top right of every page, on the same row as the page title: an update pill when one is waiting,
  * then one capsule holding which PyXie this is, who is signed in (with Sign out) and the theme switch.
  * Floats over the page (no row of its own), so nothing is pushed down when the update pill appears. */
@@ -85,6 +108,7 @@ export default function TopBar({ instance }: { instance: string }) {
         <span className="flex items-center px-3 font-semibold tracking-wide text-text" title="Which PyXie this is">
           {instance}
         </span>
+        <Clock />
         {me ? (
           <>
             <Link href="/profile" className="flex items-center gap-1.5 px-3 text-muted hover:text-text" title={`${me.email} — edit profile`}>
