@@ -1190,3 +1190,25 @@ class BalanceCheck(Base):
     moves = Column(Integer, nullable=False, default=0)
     operation_id = Column(UUID(as_uuid=True), nullable=True)
     details = Column(JSONB, nullable=True)
+
+
+class PlacementPinRule(Base):
+    """Host pinning: a guest (scope "workload") or every guest carrying a tag (scope "tag_group") pinned to one or more hosts.
+    Soft (strict=False): those hosts are preferred -- Balance Load leaves a guest that is on one alone and placement favors them,
+    but maintenance may move it. Hard (strict=True): only those hosts are allowed, maintenance included.
+    origin "workload_page" marks the single-host soft pin set from the workload page (mirrored in workloads.preferred_node_id)."""
+
+    __tablename__ = "placement_pin_rules"
+
+    id = uuid_pk()
+    scope_type = Column(String, nullable=False)
+    workload_id = Column(UUID(as_uuid=True), ForeignKey("workloads.id", ondelete="CASCADE"), nullable=True)
+    tag = Column(String, nullable=True)
+    node_ids = Column(JSONB, nullable=False)
+    strict = Column(Boolean, nullable=False, default=False)
+    origin = Column(String, nullable=False, default="rule")
+    description = Column(Text, nullable=True)
+    color = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)

@@ -11,6 +11,7 @@ import { colorForPct } from "@/components/Gauges";
 import { notifyOperationsChanged, onOperationsChanged } from "@/lib/operationsBus";
 import { useMe } from "@/lib/useMe";
 import { isInFlight, isTerminal } from "@/lib/operationStatus";
+import { onPinnedHost, type PinRule } from "@/lib/pins";
 
 /** Balance Load on its own page: pick which nodes to take guests off (none = the whole cluster), preview the plan,
  *  approve it. Same dry-run/approve path as every other batch migration; nothing moves until Approve. */
@@ -30,7 +31,7 @@ function agoText(iso?: string | null) {
   return m < 1 ? "just now" : m < 90 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
 
-export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, pendingOperationId, autoSummary }: { nodes: Node[]; workloads: Workload[]; initialNodeId?: string; pendingOperationId?: string; autoSummary?: { mode: string; level: string; trigger: number } }) {
+export default function BalanceLoadWorkspace({ nodes, workloads, pins = [], initialNodeId, pendingOperationId, autoSummary }: { nodes: Node[]; workloads: Workload[]; pins?: PinRule[]; initialNodeId?: string; pendingOperationId?: string; autoSummary?: { mode: string; level: string; trigger: number } }) {
   const [selected, setSelected] = useState<string[]>(initialNodeId ? [initialNodeId] : []);
   const [ops, setOps] = useState<Operation[]>([]);
   const [busy, setBusy] = useState(false);
@@ -141,8 +142,8 @@ export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, 
   const b = computeBalance(nodes);
   const avg = b ? b.memAvg : null;
   const guests = (id: string) => workloads.filter((w) => w.node_id === id && w.status === "running").length;
-  const pinnedHere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && w.preferred_node_id === id).length;
-  const lockedElsewhere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && w.preferred_node_id !== id && w.do_not_move).length;
+  const pinnedHere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && onPinnedHost(w, pins)).length;
+  const lockedElsewhere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && !onPinnedHost(w, pins) && w.do_not_move).length;
   const heavy = live.filter((n) => loadOf(n, avg).label === "Heavy");
   const selectable = live.filter((n) => n.status === "online" && !n.maintenance_mode);
   const previewed = ops.length > 0;

@@ -5,7 +5,7 @@ import type { Node, Workload } from "@/lib/api";
 import { Card, CardTitle, EmptyState } from "@/components/Card";
 import { useMe } from "@/lib/useMe";
 import WorkloadSearchSelect from "@/components/WorkloadSearchSelect";
-import AffinityPlacement, { GuestPill, PALETTE, ruleColor, ruleStatus, ruleTail } from "@/components/AffinityPlacement";
+import { GuestPill, PALETTE, ruleColor, ruleStatus, ruleTail } from "@/components/AffinityPlacement";
 
 type Rule = {
   id: string;
@@ -21,8 +21,9 @@ type Rule = {
 
 const EMPTY_FORM = { ruleType: "keep_apart", scopeType: "tag_group", workloadA: "", workloadB: "", tag: "", strict: true, description: "", color: "" };
 
-export default function AffinityRuleManager({ initialRules, workloads, nodes }: { initialRules: Rule[]; workloads: Workload[]; nodes: Node[] }) {
-  const [rules, setRules] = useState(initialRules);
+export type AffinityRule = Rule;
+
+export default function AffinityRuleManager({ rules, setRules, workloads, nodes }: { rules: Rule[]; setRules: React.Dispatch<React.SetStateAction<Rule[]>>; workloads: Workload[]; nodes: Node[] }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [pending, setPending] = useState(false);
@@ -118,11 +119,6 @@ export default function AffinityRuleManager({ initialRules, workloads, nodes }: 
 
   return (
     <>
-      <p className="text-sm text-muted mb-4 max-w-3xl">
-        A <span className="text-text">keep apart</span> rule stops guests from sharing a node (for example two domain controllers, so one host failing can&apos;t take both). A{" "}
-        <span className="text-text">keep together</span> rule keeps guests on one node (for example an app and its cache). Below: where every guest sits today, then the rules, each with its current status. Click a swatch (or pick any color) when creating or editing a rule to change the color of its line and guest pills.
-      </p>
-      <AffinityPlacement rules={rules} workloads={workloads} nodes={nodes} />
       {isAdmin && (
       <div ref={formRef}>
       <Card className="mb-4">

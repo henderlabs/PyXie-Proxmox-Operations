@@ -25,7 +25,7 @@ than the node it came from. The refused list says why (for example "it would lea
 
 ## Affinity Rules
 
-Operations > **Affinity Rules**: keep-apart and keep-together rules for guest pairs or for every guest carrying a tag, with the current status of each
+Operations > **Affinity & Pinning**: keep-apart and keep-together rules for guest pairs or for every guest carrying a tag, with the current status of each
 (Holding, Broken, Not met, Nothing to check). Guests are shown as coloured pills that link to the guest; a **hard** rule that is broken is red, a **soft**
 preference that is not met is amber. PyXie never moves a guest by itself to fix a rule; it checks the rules on every new move.
 
@@ -88,3 +88,15 @@ whether automatic balancing is on, what the last check decided and when the next
 
 **How often to check.** Under Automatic balancing, *How often to check* sets the schedule per cluster: every 5, 15 or 30 minutes, every hour, 2, 4, 6 or 8 hours, or once a day (default every 5 minutes). Minute steps run on the clock (:00, :15, :30, :45). For hourly and longer steps you choose the time the slots are counted from: every 4 hours from 02:00 checks at 02:00, 06:00, 10:00, 14:00, 18:00 and 22:00; once a day checks at the time you pick. Times use the server's timezone (Settings). The status strip shows the schedule and when the next check is due. The schedule only says when PyXie looks; it can still prepare plans only inside the "When it may prepare plans" windows, and auto-approve still waits out its cooldown after a move, then plans the next move at the next scheduled check. Saving a new schedule does not run a check by itself: the next one happens at the next slot (or at once if none has run since the latest slot). Between scheduled checks nothing is recorded. API/config keys: `check_every` (`5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `daily`) and `check_at` (`HH:MM`).
 
+
+## Pinning (Affinity & Pinning page)
+
+The Affinity Rules page is now **Affinity & Pinning**: *Where the guests sit now* runs the full width, then affinity rules on the left and pins on the right.
+
+A **pin** ties one guest, or every guest carrying a tag, to **one or more hosts**:
+- **Soft pin (default).** Those hosts are preferred. Balance Load and automatic balancing leave a guest that is on one of them alone, and placement adds a strong bonus for each of them when it picks a host (a guest pinned to st-pve101 or st-pve103 is happy on either). Maintenance and evacuation may still move it, so a soft pin never blocks a maintenance run.
+- **Hard pin.** Only those hosts are allowed, maintenance included: every other host is refused as a destination ("hard pin: this guest may only run on ..."), so a maintenance plan that cannot honor it says so instead of moving the guest. Several hard pins on one guest combine to the hosts they all allow. A guest already outside a hard pin is shown as broken; PyXie never moves a guest on its own to fix it.
+
+In *Where the guests sit now* a pinned guest has a **dashed outline and a pin mark** in its pin's color (affinity members keep their solid fill), and each host box shows small dashed squares for the pins that name it. Pins have their own color set, deliberately different from the affinity colors; pick a swatch or any color when creating or editing a pin. Status per pin: Holding, Elsewhere (a soft pin whose guest is not on a pinned host), Broken (a hard pin), or Nothing to check.
+
+The single-host pin on the workload page still works: it is shown here as a soft pin marked "set on the workload page", and clearing it on either page clears both. Editing it here into several hosts, a hard pin or a tag pin turns it into an ordinary pin. API: `GET/POST /api/placement/pin-rules`, `PUT/DELETE /api/placement/pin-rules/{id}`; table `placement_pin_rules` (migration 0051).

@@ -45,6 +45,7 @@ from .placement import (
     recommend_destinations,
     recommend_storage_for_candidate,
 )
+from .pins import compute_pin_info, load_pin_rules, node_names
 from .recommendations import _placement_recommendations
 
 
@@ -130,15 +131,19 @@ def dry_run_balance(
     )
 
     migrate_plan = []
+    pin_rules = load_pin_rules(db)
     for r in recs:
         wl = db.query(Workload).filter(Workload.id == r["object_id"]).one_or_none()
         if wl is None or wl.is_missing:
             continue
         ev = r["evidence"]
+        pin = compute_pin_info(pin_rules, wl)
+        pin_names = node_names(db, pin.soft_nodes)
         migrate_plan.append({
             "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
             "memory_bytes": wl.memory_bytes,
-            "pinned_node": wl.preferred_node.name if wl.preferred_node_id and wl.preferred_node else None,
+            "pinned_node": " / ".join(pin_names) if pin_names else None,
+            "pinned_nodes": pin_names, "pin_hard": pin.hard_nodes is not None,
             "source_node_id": str(wl.node_id), "source_node": ev["current_node"],
             "improvement": ev.get("improvement"),
             "destination_node_id": ev["suggested_node_id"], "destination_node": ev["suggested_node"],

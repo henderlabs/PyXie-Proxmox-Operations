@@ -1,23 +1,15 @@
 import { apiFetch } from "@/lib/api";
 import type { Node, Workload } from "@/lib/api";
 import { PageHeader } from "@/components/Card";
-import AffinityRuleManager from "@/components/AffinityRuleManager";
+import AffinityPinWorkspace from "@/components/AffinityPinWorkspace";
+import type { AffinityRule } from "@/components/AffinityRuleManager";
+import type { PinRule } from "@/lib/pins";
 import { LinkIcon } from "@/components/Icons";
 
-type AffinityRule = {
-  id: string;
-  rule_type: string;
-  scope_type: string;
-  workload_ids: string[] | null;
-  tag: string;
-  strict: boolean;
-  description: string | null;
-  created_by: string | null;
-};
-
 export default async function AffinityRulesPage() {
-  const [rules, workloads, nodes] = await Promise.all([
+  const [rules, pins, workloads, nodes] = await Promise.all([
     apiFetch<AffinityRule[]>("/api/placement/affinity-rules"),
+    apiFetch<PinRule[]>("/api/placement/pin-rules"),
     apiFetch<Workload[]>("/api/workloads"),
     apiFetch<Node[]>("/api/nodes"),
   ]);
@@ -25,11 +17,11 @@ export default async function AffinityRulesPage() {
   return (
     <div>
       <PageHeader
-        title="Affinity Rules"
-        subtitle="Rules PyXie checks before it places or moves a guest. They are separate from Proxmox's own HA affinity rules."
+        title="Affinity Rules & Pinning"
+        subtitle="Rules PyXie checks before it places or moves a guest, and the hosts guests are pinned to. Separate from Proxmox's own HA affinity rules."
         icon={<LinkIcon className="w-5 h-5" />}
       />
-      <AffinityRuleManager initialRules={rules} workloads={workloads} nodes={nodes} />
+      <AffinityPinWorkspace initialRules={rules} initialPins={pins} workloads={workloads} nodes={nodes} />
     </div>
   );
 }

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from .capacity import compute_capacity
 from .discovery import build_pve_client
 from .models import Cluster, Node, PveTarget, Recommendation, Workload
+from .pins import compute_pin_info, load_pin_rules
 from .placement import (
     note_planned_move,
     current_storage_name,
@@ -250,13 +251,12 @@ def _rightsizing_recommendations(assessments: list[dict], capacity_reports: list
     return recs
 
 
-def left_alone_reason(wl) -> str | None:
-    """Why Balance Load never considers this guest: marked Do not move, or sitting on the host it is pinned to.
-    A pin is the soft "Pinned host" on the workload page; balancing will not move a guest away from it
-    (Maintenance still can, and placement still prefers the pin when it chooses)."""
+def left_alone_reason(wl, pin_rules=None) -> str | None:
+    """Why Balance Load never considers this guest: marked Do not move, or sitting on one of the hosts it is pinned to (Affinity Rules >
+    Pinning, or the workload page). Balancing will not move a guest away from a pin; a soft pin still lets Maintenance move it, a hard pin does not."""
     if getattr(wl, "do_not_move", False):
         return "do_not_move"
-    if wl.preferred_node_id is not None and wl.preferred_node_id == wl.node_id:
+    if pin_rules and compute_pin_info(pin_rules, wl).on_pin(wl.node_id):
         return "pinned"
     return None
 
@@ -299,6 +299,7 @@ def _placement_recommendations(
     "evaluate every running VM cluster-wide", unchanged.
     """
     recs: list[dict] = []
+    pin_rules = load_pin_rules(db)
     from .balance_config import get_config, resolve_metric, swaps_imbalance
 
     threshold = PLACEMENT_IMPROVEMENT_THRESHOLD if min_improvement is None else min_improvement
@@ -344,7 +345,7 @@ def _placement_recommendations(
                     break
                 if source_node_ids is not None and wl.node_id not in source_node_ids:
                     continue
-                reason = left_alone_reason(wl)
+                reason = left_alone_reason(wl, pin_rules)
                 if reason:
                     if left_alone_out is not None:
                         left_alone_out.append({

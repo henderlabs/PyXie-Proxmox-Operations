@@ -218,6 +218,8 @@ type MigratePlanItem = {
   source_node?: string;
   memory_bytes?: number | null;
   pinned_node?: string | null;
+  pinned_nodes?: string[];
+  pin_hard?: boolean;
   // "shutdown_in_place" opts a workload that DOES have a clean auto-found
   // destination out of migrating at all -- just power it off for the
   // maintenance window and back on here afterward (node.exit_maintenance's
@@ -439,8 +441,8 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
               </span>
             )}
             {op.operation_type_id === "cluster.rebalance" && item.pinned_node && (
-              <span className="shrink-0 px-1.5 py-0.5 rounded text-xs bg-accent/15 text-accent" title="Pinned host: a soft pin set on the workload page">
-                {item.pinned_node === item.destination_node ? "moving to its pin" : `pinned to ${item.pinned_node}`}
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-xs bg-accent/15 text-accent" title="Host pin: set on the Affinity Rules page (Pinning) or the workload page">
+                {(item.pinned_nodes ?? [item.pinned_node]).includes(item.destination_node) ? "moving to its pin" : `${item.pin_hard ? "hard-pinned" : "pinned"} to ${item.pinned_node}`}
               </span>
             )}
             {item.transport !== "skip" && item.transport !== "shutdown_in_place" && (item.current_storage || item.destination_storage) && (

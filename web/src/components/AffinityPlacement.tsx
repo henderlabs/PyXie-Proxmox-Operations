@@ -4,6 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import type { Node, Workload } from "@/lib/api";
 import { Card, CardTitle } from "@/components/Card";
+import { PinIcon } from "@/components/Icons";
+import { pinColor, pinMembers, pinProblem, pinSentence, type PinRule } from "@/lib/pins";
 
 export type PlacementRule = {
   id: string;
@@ -45,18 +47,29 @@ export function ruleTail(r: PlacementRule): string {
 }
 
 /** A guest as a colored pill (the rule's color; grey without a rule), linking to the guest. Shared by the placement card and the rules list. */
-export function GuestPill({ w, color, dots = [], flag = null, title }: { w: Workload; color?: string; dots?: string[]; flag?: "broken" | "unmet" | null; title?: string }) {
+export function GuestPill({ w, color, dots = [], flag = null, title, pin = null }: { w: Workload; color?: string; dots?: string[]; flag?: "broken" | "unmet" | null; title?: string; pin?: { color: string; extra?: string[] } | null }) {
   const stopped = w.status !== "running";
+  // Pinned guests are drawn differently from affinity members: a dashed outline in the pin's own color and a pin mark, so the two read apart at a glance.
+  const style: React.CSSProperties = {};
+  if (color) { style.borderColor = color; style.background = `${color}22`; }
+  if (pin) {
+    if (!color) { style.borderColor = pin.color; style.background = `${pin.color}1f`; style.borderStyle = "dashed"; }
+    else { style.outline = `2px dashed ${pin.color}`; style.outlineOffset = "1px"; }
+  }
   return (
     <Link
       href={`/infrastructure/workloads/${w.id}`}
       title={title ?? `Open ${w.name || "guest"}`}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs hover:brightness-125 ${stopped ? "opacity-60" : ""} ${flag === "broken" ? "ring-2 ring-bad" : flag === "unmet" ? "ring-2 ring-warn" : ""} ${color ? "text-text" : "text-muted border-border bg-surface2"}`}
-      style={color ? { borderColor: color, background: `${color}22` } : undefined}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs hover:brightness-125 ${stopped ? "opacity-60" : ""} ${flag === "broken" ? "ring-2 ring-bad" : flag === "unmet" ? "ring-2 ring-warn" : ""} ${color || pin ? "text-text" : "text-muted border-border bg-surface2"}`}
+      style={Object.keys(style).length ? style : undefined}
     >
+      {pin && <span style={{ color: pin.color }}><PinIcon className="w-3 h-3" filled /></span>}
       {w.name || `vmid ${w.vmid}`}
       {dots.map((c, i) => (
         <span key={i} className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
+      ))}
+      {(pin?.extra || []).map((c, i) => (
+        <span key={`p${i}`} className="w-1.5 h-1.5 rounded-sm" style={{ background: c }} />
       ))}
       {flag === "broken" && <span className="text-bad font-semibold">!</span>}
       {flag === "unmet" && <span className="text-warn font-semibold">!</span>}
@@ -94,7 +107,7 @@ export function ruleStatus(r: PlacementRule, workloads: Workload[], nodes: Node[
   return { members, problem: ruleViolation(r, members, nodeName), nodeName };
 }
 
-export default function AffinityPlacement({ rules, workloads, nodes }: { rules: PlacementRule[]; workloads: Workload[]; nodes: Node[] }) {
+export default function AffinityPlacement({ rules, workloads, nodes, pins = [] }: { rules: PlacementRule[]; workloads: Workload[]; nodes: Node[]; pins?: PinRule[] }) {
   const [showOthers, setShowOthers] = useState(true);
   const byId = new Map(workloads.map((w) => [w.id, w]));
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -111,23 +124,40 @@ export default function AffinityPlacement({ rules, workloads, nodes }: { rules: 
   const unmetIds = new Set<string>(); // only a soft preference is unmet
   for (const x of info) if (x.problem) for (const m of x.members) (x.rule.strict ? brokenIds : unmetIds).add(m.id);
 
+  const pinInfo = pins.map((p, i) => {
+    const members = pinMembers(p, workloads);
+    return { pin: p, color: pinColor(p, pins, i), members, problem: pinProblem(p, members, nodes) };
+  });
+  const pinsOfGuest = new Map<string, typeof pinInfo>();
+  for (const x of pinInfo) for (const m of x.members) pinsOfGuest.set(m.id, [...(pinsOfGuest.get(m.id) || []), x]);
+  const pinBroken = new Set<string>();
+  const pinUnmet = new Set<string>();
+  for (const x of pinInfo) if (x.problem) for (const m of x.members.filter((m) => !x.pin.node_ids.includes(m.node_id))) (x.pin.strict ? pinBroken : pinUnmet).add(m.id);
+  const pinViolations = pinInfo.filter((x) => x.problem);
+
   const live = workloads.filter((w) => !(w as Workload & { is_missing?: boolean }).is_missing);
-  const others = live.filter((w) => !rulesOf.has(w.id));
+  const others = live.filter((w) => !rulesOf.has(w.id) && !pinsOfGuest.has(w.id));
   const violations = info.filter((x) => x.problem);
-  const anyHard = violations.some((x) => x.rule.strict);
+  const anyHard = violations.some((x) => x.rule.strict) || pinViolations.some((x) => x.pin.strict);
 
   function chip(w: Workload) {
     const rs = rulesOf.get(w.id) || [];
-    const broken = brokenIds.has(w.id);
-    const unmet = !broken && unmetIds.has(w.id);
+    const ps = pinsOfGuest.get(w.id) || [];
+    const broken = brokenIds.has(w.id) || pinBroken.has(w.id);
+    const unmet = !broken && (unmetIds.has(w.id) || pinUnmet.has(w.id));
+    const label = [
+      ...rs.map((x) => ruleLabel(x.rule, byId)),
+      ...ps.map((x) => `Pinned: ${pinSentence(x.pin, byId, nodes)}${x.pin.strict ? " (hard)" : " (soft)"}`),
+    ];
     return (
       <GuestPill
         key={w.id}
         w={w}
         color={rs[0]?.color}
         dots={rs.slice(1).map((x) => x.color)}
+        pin={ps.length ? { color: ps[0].color, extra: ps.slice(1).map((x) => x.color) } : null}
         flag={broken ? "broken" : unmet ? "unmet" : null}
-        title={`${rs.length ? rs.map((x) => ruleLabel(x.rule, byId)).join(" | ") : "No affinity rule"} (open ${w.name || "guest"})`}
+        title={`${label.length ? label.join(" | ") : "No affinity rule or pin"} (open ${w.name || "guest"})`}
       />
     );
   }
@@ -135,11 +165,16 @@ export default function AffinityPlacement({ rules, workloads, nodes }: { rules: 
   return (
     <Card className="mb-4">
       <CardTitle>Where the guests sit now</CardTitle>
-      {violations.length > 0 && (
+      {(violations.length > 0 || pinViolations.length > 0) && (
         <div className={`mb-3 rounded border px-3 py-2 text-sm ${anyHard ? "border-bad/40 bg-bad/10 text-bad" : "border-warn/40 bg-warn/10 text-warn"}`}>
           {violations.map((x) => (
             <div key={x.rule.id}>
               {ruleSentence(x.rule, byId)}, but {x.problem}.
+            </div>
+          ))}
+          {pinViolations.map((x) => (
+            <div key={x.pin.id}>
+              {pinSentence(x.pin, byId, nodes)}, but {x.problem}{x.pin.strict ? "" : " (a soft pin: maintenance or a manual move can leave a guest elsewhere)"}.
             </div>
           ))}
           <div className="text-xs text-muted mt-1">PyXie never moves a guest on its own to fix this. Rules are checked on every new move.</div>
@@ -148,29 +183,37 @@ export default function AffinityPlacement({ rules, workloads, nodes }: { rules: 
       <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(Math.max(sortedNodes.length, 1), 4)}, minmax(0, 1fr))` }}>
         {sortedNodes.map((n) => {
           const here = live.filter((w) => w.node_id === n.id);
-          const ruled = here.filter((w) => rulesOf.has(w.id));
-          const rest = here.filter((w) => !rulesOf.has(w.id));
+          const ruled = here.filter((w) => rulesOf.has(w.id) || pinsOfGuest.has(w.id));
+          const rest = here.filter((w) => !rulesOf.has(w.id) && !pinsOfGuest.has(w.id));
+          const pinsHere = pinInfo.filter((x) => x.pin.node_ids.includes(n.id));
           return (
             <div key={n.id} className="border border-border rounded-lg p-3 bg-surface2/40 min-h-[96px]">
               <div className="text-xs font-semibold tracking-wider text-muted mb-2">
                 {n.name} <span className="font-normal normal-case">· {here.length} guests</span>
+                {pinsHere.length > 0 && (
+                  <span className="float-right inline-flex gap-1" title={`Pinned here: ${pinsHere.map((x) => pinSentence(x.pin, byId, nodes)).join("; ")}`}>
+                    {pinsHere.slice(0, 8).map((x) => (
+                      <span key={x.pin.id} className="w-2.5 h-2.5 rounded-sm border border-dashed" style={{ borderColor: x.color, background: `${x.color}55` }} />
+                    ))}
+                  </span>
+                )}
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {ruled.map(chip)}
                 {showOthers && rest.map(chip)}
               </div>
-              {!showOthers && rest.length > 0 && <div className="text-xs text-muted mt-2">+ {rest.length} without a rule</div>}
+              {!showOthers && rest.length > 0 && <div className="text-xs text-muted mt-2">+ {rest.length} without a rule or pin</div>}
             </div>
           );
         })}
       </div>
       {others.length > 0 && (
         <button onClick={() => setShowOthers((v) => !v)} className="text-xs text-accent hover:underline mt-3">
-          {showOthers ? `Hide the ${others.length} guests without a rule` : `Show the ${others.length} guests without a rule`}
+          {showOthers ? `Hide the ${others.length} guests without a rule or pin` : `Show the ${others.length} guests without a rule or pin`}
         </button>
       )}
       <p className="text-xs text-muted mt-3">
-        Each colored chip belongs to the rule with the same color swatch below; grey guests have no rule; a small dot means a guest is in more than one rule; a red <span className="text-bad">!</span> means its rule is broken right now (an amber <span className="text-warn">!</span> means a soft preference is not met). Click a guest to open it. Migrations, evacuations and Balance Load check these rules first, and again against live state when each move runs.
+        Each solid colored chip belongs to the affinity rule with the same color swatch (left, below). A chip with a dashed outline and a pin mark is pinned to host(s): the small dashed squares in a host&apos;s header are the pins that name it, and each matches the swatch of its pin (right, below). A square dot on a chip means more than one pin; grey guests have no rule; a small dot means a guest is in more than one rule; a red <span className="text-bad">!</span> means its rule is broken right now (an amber <span className="text-warn">!</span> means a soft preference is not met). Click a guest to open it. Migrations, evacuations and Balance Load check these rules first, and again against live state when each move runs.
       </p>
     </Card>
   );

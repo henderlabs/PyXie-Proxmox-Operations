@@ -13,6 +13,7 @@ from pyxie_core.auto_balance import AUTOMATIC_ACTOR, LIVE_STATUSES
 from pyxie_core.balance_config import (
     PRESETS, ConfigError, balance_score, get_config, get_state, resolve_metric, save_config, save_state, smoothed_loads, smoothed_view, utcnow,
 )
+from pyxie_core.pins import compute_pin_info, load_pin_rules
 from pyxie_core.models import AppSettings, BalanceCheck, Cluster, Node, Operation, Workload
 
 from ..auth_deps import get_current_user, require_admin
@@ -23,10 +24,11 @@ router = APIRouter(prefix="/api/auto-balance", tags=["auto-balance"], dependenci
 
 def _locked_guests(db: Session, cluster: Cluster) -> dict:
     """Running VMs automatic balancing will never touch: marked Do not move, or sitting on the host they are pinned to."""
+    pin_rules = load_pin_rules(db)
     vms = db.query(Workload).filter(Workload.cluster_id == cluster.id, Workload.is_missing.is_(False), Workload.status == "running", Workload.type == "vm").all()
     return {
         "do_not_move": sum(1 for w in vms if w.do_not_move),
-        "pinned": sum(1 for w in vms if not w.do_not_move and w.preferred_node_id is not None and w.preferred_node_id == w.node_id),
+        "pinned": sum(1 for w in vms if not w.do_not_move and compute_pin_info(pin_rules, w).on_pin(w.node_id)),
     }
 
 
