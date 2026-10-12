@@ -5,7 +5,7 @@ import type { Node, Workload } from "@/lib/api";
 import { Card, CardTitle, EmptyState } from "@/components/Card";
 import { useMe } from "@/lib/useMe";
 import WorkloadSearchSelect from "@/components/WorkloadSearchSelect";
-import AffinityPlacement, { GuestPill, PALETTE, ruleColor, ruleStatus, ruleTail } from "@/components/AffinityPlacement";
+import { GuestPill, PALETTE, ruleColor, ruleStatus, ruleTail } from "@/components/AffinityPlacement";
 
 type Rule = {
   id: string;
@@ -19,10 +19,11 @@ type Rule = {
   created_by: string | null;
 };
 
-const EMPTY_FORM = { ruleType: "keep_apart", scopeType: "tag_group", workloadA: "", workloadB: "", tag: "", strict: true, description: "", color: "" };
+const EMPTY_FORM = { ruleType: "keep_apart", scopeType: "workload_pair", workloadA: "", workloadB: "", tag: "", strict: true, description: "", color: "" };
 
-export default function AffinityRuleManager({ initialRules, workloads, nodes }: { initialRules: Rule[]; workloads: Workload[]; nodes: Node[] }) {
-  const [rules, setRules] = useState(initialRules);
+export type AffinityRule = Rule;
+
+export default function AffinityRuleManager({ rules, setRules, workloads, nodes }: { rules: Rule[]; setRules: React.Dispatch<React.SetStateAction<Rule[]>>; workloads: Workload[]; nodes: Node[] }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [pending, setPending] = useState(false);
@@ -108,7 +109,7 @@ export default function AffinityRuleManager({ initialRules, workloads, nodes }: 
   async function deleteRule(id: string) {
     setConfirmDeleteId(null);
     const res = await fetch(`/api/placement/affinity-rules/${id}`, { method: "DELETE" });
-    if (!res.ok) {
+    if (!res.ok && res.status !== 404) {  // 404: already gone (deleted elsewhere since this page loaded)
       setError("Could not delete the rule. Nothing was changed.");
       return;
     }
@@ -117,12 +118,10 @@ export default function AffinityRuleManager({ initialRules, workloads, nodes }: 
   }
 
   return (
-    <>
-      <p className="text-sm text-muted mb-4 max-w-3xl">
-        A <span className="text-text">keep apart</span> rule stops guests from sharing a node (for example two domain controllers, so one host failing can&apos;t take both). A{" "}
-        <span className="text-text">keep together</span> rule keeps guests on one node (for example an app and its cache). Below: where every guest sits today, then the rules, each with its current status. Click a swatch (or pick any color) when creating or editing a rule to change the color of its line and guest pills.
+    <div className="space-y-4">
+      <p className="text-sm text-muted">
+        <span className="text-text">Affinity rules</span> control which guests share a node. A <span className="text-text">keep apart</span> rule stops guests from sharing a node (for example two domain controllers, so one host failing can&apos;t take both). A <span className="text-text">keep together</span> rule keeps guests on one node (for example an app and its cache). A <span className="text-text">hard</span> rule is a block; a soft one is only a scoring preference. Rules can name two guests or every guest with a tag.
       </p>
-      <AffinityPlacement rules={rules} workloads={workloads} nodes={nodes} />
       {isAdmin && (
       <div ref={formRef}>
       <Card className="mb-4">
@@ -140,15 +139,13 @@ export default function AffinityRuleManager({ initialRules, workloads, nodes }: 
             </select>
           </div>
           <div>
-            <label className="block text-xs text-muted mb-1">Scope</label>
-            <select
-              className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm"
-              value={form.scopeType}
-              onChange={(e) => setForm((f) => ({ ...f, scopeType: e.target.value }))}
-            >
-              <option value="tag_group">tag group</option>
-              <option value="workload_pair">workload pair</option>
-            </select>
+            <label className="block text-xs text-muted mb-1">Applies to</label>
+            <div className="inline-flex rounded border border-border overflow-hidden text-sm">
+              {([["workload_pair", "Two guests"], ["tag_group", "Every guest with a tag"]] as const).map(([id, label]) => (
+                <button key={id} type="button" onClick={() => setForm((f) => ({ ...f, scopeType: id }))}
+                  className={`px-3 py-1.5 ${form.scopeType === id ? "bg-accent/15 text-text" : "bg-surface2 text-muted hover:text-text"}`}>{label}</button>
+              ))}
+            </div>
           </div>
           {form.scopeType === "tag_group" ? (
             <div>
@@ -298,6 +295,6 @@ export default function AffinityRuleManager({ initialRules, workloads, nodes }: 
           </div>
         )}
       </Card>
-    </>
+    </div>
   );
 }

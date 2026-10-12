@@ -263,7 +263,10 @@ def _run_discovery_inner(db: Session, target: PveTarget, actor: str = "system") 
                 try:
                     status = client.node_status(node_name)
                     cpu = status.get("cpu")
-                    node.cpu_usage_pct = round(cpu * 100, 1) if cpu is not None else None
+                    if cpu == 0 and node.status == "online" and node.cpu_usage_pct:
+                        pass  # an online host does not use exactly 0% CPU: Proxmox returns that for one poll now and then, so keep the last real reading
+                    else:
+                        node.cpu_usage_pct = round(cpu * 100, 1) if cpu is not None else None
                     meminfo = status.get("memory") or {}
                     if meminfo.get("total"):
                         used_pct = meminfo.get("used", 0) / meminfo["total"] * 100

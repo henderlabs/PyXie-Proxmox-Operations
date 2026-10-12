@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from .capacity import compute_capacity
 from .discovery import build_pve_client
 from .models import Cluster, Node, PveTarget, Recommendation, Workload
+from .pins import compute_pin_info, load_pin_rules
 from .placement import (
     note_planned_move,
     current_storage_name,
@@ -250,13 +251,20 @@ def _rightsizing_recommendations(assessments: list[dict], capacity_reports: list
     return recs
 
 
-def left_alone_reason(wl) -> str | None:
-    """Why Balance Load never considers this guest: marked Do not move, or sitting on the host it is pinned to.
-    A pin is the soft "Pinned host" on the workload page; balancing will not move a guest away from it
-    (Maintenance still can, and placement still prefers the pin when it chooses)."""
+def rules_first(workloads: list, fix_ids) -> list:
+    """Guests that break an affinity rule or a pin come first (each group keeps its order, biggest first), so the rule fixes are planned
+    before any load balancing and the balancing pass then works from the loads those fixes leave behind."""
+    if not fix_ids:
+        return workloads
+    return sorted(workloads, key=lambda w: w.id not in fix_ids)  # stable: False (rule-fix guests) sorts before True
+
+
+def left_alone_reason(wl, pin_rules=None) -> str | None:
+    """Why Balance Load never considers this guest: marked Do not move, or sitting on one of the hosts it is pinned to (Affinity Rules >
+    Pinning, or the workload page). Balancing will not move a guest away from a pin; a soft pin still lets Maintenance move it, a hard pin does not."""
     if getattr(wl, "do_not_move", False):
         return "do_not_move"
-    if wl.preferred_node_id is not None and wl.preferred_node_id == wl.node_id:
+    if pin_rules and compute_pin_info(pin_rules, wl).on_pin(wl.node_id):
         return "pinned"
     return None
 
@@ -266,6 +274,7 @@ def _placement_recommendations(
     cluster_ids: set | None = None, metric: str | None = None, min_improvement: float | None = None,
     max_moves: int | None = None, skip_workload_ids: set | None = None, left_alone_out: list | None = None,
     skip_reasons: dict | None = None, avoid_nodes: dict | None = None, load_pct_override: dict | None = None,
+    only_workload_ids: set | None = None, fix_workload_ids: set | None = None,
 ) -> list[dict]:
     """DRS-style proactive load-balancing: for each running VM, re-run the
     exact same scoring engine the interactive migration form's 'recommend'
@@ -299,6 +308,7 @@ def _placement_recommendations(
     "evaluate every running VM cluster-wide", unchanged.
     """
     recs: list[dict] = []
+    pin_rules = load_pin_rules(db)
     from .balance_config import get_config, resolve_metric, swaps_imbalance
 
     threshold = PLACEMENT_IMPROVEMENT_THRESHOLD if min_improvement is None else min_improvement
@@ -339,12 +349,18 @@ def _placement_recommendations(
                 .order_by(Workload.memory_bytes.desc().nullslast())  # biggest movers first -- they matter most to real balance
                 .all()
             )
+            # Phase 1 is the affinity rules and pins (guests that break one are planned first, using the move slots first), phase 2 the
+            # load balancing, which starts from where phase 1 leaves the guests.
+            workloads = rules_first(workloads, fix_workload_ids)
             for wl in workloads:
                 if max_moves is not None and len(recs) - cluster_recs_start >= max_moves:
                     break
                 if source_node_ids is not None and wl.node_id not in source_node_ids:
                     continue
-                reason = left_alone_reason(wl)
+                if only_workload_ids is not None and wl.id not in only_workload_ids:
+                    continue  # a rules-only pass: just the guests an affinity rule or pin says should move
+                fixing = bool(fix_workload_ids) and wl.id in fix_workload_ids  # an affinity rule or pin is not met for this guest
+                reason = left_alone_reason(wl, pin_rules)
                 if reason:
                     if left_alone_out is not None:
                         left_alone_out.append({
@@ -395,7 +411,7 @@ def _placement_recommendations(
                 if current is None:
                     continue
                 swap_dropped = None
-                if not best.blocked and best.node_id != wl.node_id:
+                if not best.blocked and best.node_id != wl.node_id and not fixing:
                     swaps, after_pct = _swaps(wl, best)
                     if swaps:
                         # The scorer's favourite would just move the problem: remember why, and try the next best
@@ -408,7 +424,9 @@ def _placement_recommendations(
                         )
                 moving = not best.blocked and best.node_id != wl.node_id
                 improvement = _adjusted_score(best) - _adjusted_score(current)
-                moving = moving and improvement >= threshold
+                # A guest whose affinity rule or pin is not met moves to the best host that meets it, whatever the balance gain
+                # (the rule is the reason); every other guest needs the level's minimum benefit.
+                moving = moving and (improvement >= threshold or (fixing and (current.blocked or improvement > 0)))
                 if blocked_out is not None:
                     # Balance Load preview: a destination that would have been a real
                     # improvement but a hard rule (keep-apart, headroom, ...) refused it,
@@ -468,6 +486,9 @@ def _placement_recommendations(
                 except Exception:
                     currently_on_shared = False
                     current_storage = None
+                if fixing and currently_on_shared:
+                    # A rule fix moves the guest, not its disks: a guest on shared storage stays on it, whatever its storage preference says.
+                    effective_pref = "shared"
                 storage_rec = recommend_storage_for_candidate(
                     db, best.node_id, currently_on_shared, storage_preference=effective_pref
                 )
@@ -490,6 +511,7 @@ def _placement_recommendations(
                             "current_node": current.node_name, "current_score": current.score,
                             "suggested_node": best.node_name, "suggested_node_id": str(best.node_id), "suggested_score": best.score,
                             "improvement": round(improvement, 1), "reasons": best.reasons,
+                            "rule_fix": bool(fixing),
                             "suggested_storage": storage_rec,
                             # Everything below is unused by this function's own
                             # passive-Recommendations-card callers -- carried

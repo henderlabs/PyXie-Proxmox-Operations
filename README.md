@@ -51,13 +51,15 @@ Captured from the running app against a fictional demo dataset (no real hostname
 
 ![Maintenance](docs/screenshots/maintenance.png)
 
-**Balance Load** -- node load and a suggestion up front, then a preview with memory per node before and after the plan (with real GB figures and which guests leave and arrive), the planned moves, and a short, expandable list of moves that were considered but not made (no gain, blocked by a rule, redirected), plus the guests left alone on purpose (pinned, Do not move, moved recently). A per-cluster **Automatic balancing** card can prepare plans for you (Recommend only) or approve and run them one move at a time (Auto-approve, off by default, with a Revoke button). See [docs/balance-load.md](docs/balance-load.md):
+**Balance Load** -- node load and a suggestion up front, then a preview with memory per node before and after the plan (with real GB figures and which guests leave and arrive), the planned moves, and a short, expandable list of moves that were considered but not made (no gain, blocked by a rule, redirected), plus the guests left alone on purpose (pinned, Do not move, moved recently). A per-cluster **Automatic balancing** card can prepare plans for you (Recommend only) or approve and run them one move at a time (Auto-approve, off by default, with a Revoke button), on a schedule you choose (every 5 minutes to daily). Every check and preview first reviews the affinity rules and host pins and plans the moves that fix them before it balances load; every check is kept in a History with what it looked at, and a Dashboard banner shows when automatic balancing is on. See [docs/balance-load.md](docs/balance-load.md):
 
 ![Balance Load](docs/screenshots/balance-load.png)
 
 **Affinity Rules** -- where every guest sits now, shown as coloured pills that link to the guest, and each keep-together / keep-apart rule in plain words with its current status (a soft preference that is not met shows amber, a broken hard rule red); tag rules suggest the tags in use and show which guests they cover; enforced on migrations, evacuations and rebalancing:
 
 ![Affinity Rules](docs/screenshots/affinity-rules.png)
+
+**Affinity & Pinning** -- affinity rules (keep apart / keep together) on the left, host pins on the right (a guest or every guest with a tag pinned to one or more hosts, soft or hard), all drawn on a full-width "where the guests sit now" card. **Change storage** on a workload moves a VM's disks to another storage while it runs ([docs/storage-change.md](docs/storage-change.md)).
 
 The screenshots above are from the fictional demo dataset and are refreshed when the layouts change; the text next to each one describes the current behaviour.
 
@@ -316,6 +318,9 @@ high 60d+).
   rightsizing, capacity-pressure, and pending-update suggestions, each
   with evidence/benefit/impact/confidence. Lifecycle is partly user-owned
   -- regenerating never reopens something a user dismissed.
+- **Resize pre-check** (`workload.resize`): applying a resize to a running VM shuts it down first, so the preview checks the QEMU guest agent. If the agent
+  option is on in Proxmox but the agent is not answering inside the guest, the resize is blocked (rule `SAFE-GUEST-AGENT-001`) with the fix, instead of
+  failing after the shutdown times out.
 - **Rightsizing** (`shared/pyxie_core/rightsizing.py`): conservative by
   design -- only ever suggests a reduction, never below 30 days of
   observed history for `moderate`/`high` confidence. Assessing all

@@ -36,7 +36,16 @@ export default function MigrationBars({ op }: { op: Operation }) {
   const ctx = (op.context || {}) as Record<string, unknown>;
   const target = typeof ctx.target_storage_name === "string" ? ctx.target_storage_name : null;
   const p = op.progress as (Operation["progress"] & { storage?: Part; vm?: Part; phase?: string }) | null;
+  const storageOnly = op.operation_type_id === "workload.move_storage";
   const movesStorage = !!p?.storage || !!target;
+  if (storageOnly) {
+    return (
+      <div className="mt-1.5">
+        <div className="text-[11px] text-text">Moving the VM&apos;s disks{target ? ` to ${target}` : ""}, one at a time</div>
+        <Bar label={`Disk copy${target ? ` → ${target}` : ""}`} part={p?.storage} tone="storage" />
+      </div>
+    );
+  }
   const heading = movesStorage ? `Moving the VM and its disks${target ? ` to ${target}` : ""}` : "Moving the VM between hosts";
   return (
     <div className="mt-1.5">

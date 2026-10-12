@@ -13,7 +13,8 @@ Same planner, same hard blocks, same Safety Contract as Balance Load: the approv
 """
 
 import logging
-from datetime import timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_
@@ -21,9 +22,12 @@ from sqlalchemy.orm import Session, aliased
 
 from .audit import write_audit_event
 from .balance_config import (
-    MIN_HISTORY_HOURS, PRESETS, balance_score, get_config, get_state, hours_ago, in_window, resolve_metric, save_config, save_state,
+    MIN_HISTORY_HOURS, PRESETS, balance_score, check_due, cooldown_satisfied, get_config, get_state, hours_ago, in_window, resolve_metric, save_config, save_state,
     smoothed_loads, smoothed_view, utcnow,
 )
+from .balance_history import record_check
+from .node_sanity import suspect_nodes
+from .rule_review import review_rules
 from .balance_workflow import approve as approve_balance, dry_run_balance, projected_memory_rows
 from .models import AppSettings, Cluster, Node, Operation, ResourceLock, Workload
 from .notifications import dispatch_event
@@ -121,7 +125,10 @@ def auto_approve_blockers(
         reasons.append("a move is not a live migration")
     if any(m.get("destination_storage_id") for m in moves):
         reasons.append("a move also changes storage")
-    over = [p for p in projected if (p.get("after_pct") or 0) > ceiling_pct]
+    # Moves that only put guests where an affinity rule or pin says they belong are not held back by the memory ceiling: the rule is the
+    # operator's own instruction, and the planner already refuses any destination without real headroom.
+    all_rule_fixes = bool(moves) and all(m.get("rule_fix") for m in moves)
+    over = [] if all_rule_fixes else [p for p in projected if (p.get("after_pct") or 0) > ceiling_pct]
     if over:
         reasons.append(f"it would leave {over[0]['name']} above {round(ceiling_pct)}% memory")
     if busy_nodes:
@@ -143,9 +150,15 @@ def _recently_moved(db: Session, cluster_id, cooldown_hours: float, now) -> set:
     return {r[0] for r in rows}
 
 
-def _skip(db: Session, cluster: Cluster, state: dict, now, reason: str, **extra) -> dict:
+def _skip(db: Session, cluster: Cluster, state: dict, now, reason: str, details: dict | None = None, **extra) -> dict:
     state = {**state, "last_checked_at": now.isoformat(), "last_result": "skipped", "last_reason": reason, **extra}
     save_state(db, cluster.id, state)
+    cfg = get_config(db, cluster.id)
+    result = "balanced" if reason.startswith("balanced enough") else "no_moves" if reason.startswith("no move") else "skipped"
+    record_check(
+        db, cluster.id, trigger="automatic", result=result, reason=reason, actor=AUTOMATIC_ACTOR, mode=cfg.get("mode"), level=cfg.get("level"),
+        balance_score=extra.get("balance_score"), trigger_score=PRESETS.get(cfg.get("level"), {}).get("trigger_score"), details=details, now=now,
+    )
     return {"cluster": cluster.name, "result": "skipped", "reason": reason}
 
 
@@ -161,6 +174,7 @@ def _stop_if_last_failed(db: Session, cluster: Cluster, cfg: dict, state: dict, 
     why = (op.error or ", ".join(op.blocking_safety_rules or []) or op.status).strip()
     reason = f"the last automatic move {op.status}: {why[:200]}"
     save_config(db, cluster.id, {**cfg, "mode": "recommend"})
+    record_check(db, cluster.id, trigger="automatic", result="stopped", reason=reason, actor=AUTOMATIC_ACTOR, mode="auto_approve", level=cfg.get("level"), operation_id=op.id, now=now)
     save_state(db, cluster.id, {**state, "failure_handled": op_id, "last_checked_at": now.isoformat(), "last_result": "stopped", "last_reason": reason})
     write_audit_event(
         db, event_category="operation", event_type="balance.auto_stopped", actor=AUTOMATIC_ACTOR, actor_type="system",
@@ -199,29 +213,50 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         if stopped:
             return stopped
 
-    if cfg.get("paused_until"):
-        left = hours_ago(cfg["paused_until"], now)
-        if left is not None and left < 0:
-            return _skip(db, cluster, state, now, "paused")
     tz_name = (db.query(AppSettings.timezone).filter(AppSettings.id == 1).scalar()) or "UTC"
     try:
         local_now = now.astimezone(ZoneInfo(tz_name))
     except Exception:  # noqa: BLE001 -- an unknown timezone name must not stop balancing checks
         local_now = now
+    # The schedule (Automatic balancing > How often to check): between scheduled checks there is nothing to do and nothing is recorded.
+    try:
+        last_checked = datetime.fromisoformat(state["last_checked_at"]) if state.get("last_checked_at") else None
+    except ValueError:
+        last_checked = None
+    if last_checked is not None and last_checked.tzinfo is None:
+        last_checked = last_checked.replace(tzinfo=timezone.utc)
+    if not check_due(local_now, last_checked, cfg["check_every"], cfg["check_at"]):
+        return {"cluster": cluster.name, "result": "not_due"}
+
+    if cfg.get("paused_until"):
+        left = hours_ago(cfg["paused_until"], now)
+        if left is not None and left < 0:
+            return _skip(db, cluster, state, now, "paused")
     if not in_window(cfg["windows"], local_now):
         return _skip(db, cluster, state, now, "outside the allowed time window")
     if cluster.quorate is False:
         return _skip(db, cluster, state, now, "cluster is not quorate")
 
     # The cooldown runs from when the last auto-approved move FINISHED, so the next one always sees settled numbers.
+    # Only plans with a BALANCING move start the cooldown: a plan that just puts guests where an affinity rule or pin says they belong
+    # does not, and a pending rule fix is never held back by the cooldown (it then plans only the rule fixes).
     last = state.get("last_run_at")
-    if auto and state.get("auto_approved") and state.get("operation_id"):
-        prev = db.query(Operation).filter(Operation.id == state["operation_id"]).one_or_none()
-        if prev is not None and prev.completed_at is not None:
+    bop = state.get("balance_op_id")
+    if auto and bop:
+        prev = db.query(Operation).filter(Operation.id == bop).one_or_none()
+        if prev is not None and (prev.context or {}).get("auto_approved") and prev.completed_at is not None:
             last = prev.completed_at.isoformat()
-    since_run = hours_ago(last, now)
-    if since_run is not None and since_run < preset["cluster_cooldown_hours"]:
-        return _skip(db, cluster, state, now, "cooling down after the last automatic plan")
+    try:
+        last_dt = datetime.fromisoformat(last) if last else None
+    except ValueError:
+        last_dt = None
+    if last_dt is not None and last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    cooling = not cooldown_satisfied(local_now, last_dt, preset["cluster_cooldown_hours"], cfg["check_every"], cfg["check_at"])
+    if cooling:
+        pre = review_rules(db, cluster.id)
+        if not pre.violators:
+            return _skip(db, cluster, state, now, f"cooling down after the last automatic plan. {pre.sentence()}", details={"rules": pre.summary()})
 
     for op in _live_rebalance_ops(db):
         automatic = bool((op.context or {}).get("automatic"))
@@ -235,6 +270,12 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         return _skip(db, cluster, state, now, "a Balance Load plan is already waiting or running")
 
     nodes = db.query(Node).filter(Node.cluster_id == cluster.id, Node.is_missing.is_(False)).all()
+    suspects = suspect_nodes(db, [n for n in nodes if n.status == "online" and not n.maintenance_mode])
+    if suspects:
+        return _skip(
+            db, cluster, state, now,
+            "not checked: " + "; ".join(f"{s['name']} is {s['problem']}" for s in suspects[:2]) + ". Check the node before balancing on its numbers",
+        )
     # Judge by each node's busy level over the last week, not by right now, so a server that is only busy in business
     # hours never looks idle at night. Without enough history auto-approve waits; recommend falls back to live numbers.
     loads, enough = smoothed_loads(db, nodes, now)
@@ -245,13 +286,24 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
     if score is None:
         return _skip(db, cluster, state, now, "not enough nodes with live data")
     basis = "busy-hours score" if enough else "score"
-    if score >= preset["trigger_score"]:
-        return _skip(db, cluster, state, now, f"balanced enough ({basis} {round(score)}, acts below {preset['trigger_score']})", balance_score=round(score))
+    # Every check also reviews the affinity rules and host pins against where guests are now. A rule that is not met is a reason to
+    # plan a move even when the cluster itself is balanced (then only the guests that rule names are considered).
+    review = review_rules(db, cluster.id)
+    balanced = score >= preset["trigger_score"] or cooling  # while cooling down only rule fixes are planned, as when the cluster is balanced
+    if balanced and review.ok:
+        return _skip(
+            db, cluster, state, now, f"balanced enough ({basis} {round(score)}, acts below {preset['trigger_score']}). {review.sentence()}",
+            details={"rules": review.summary()}, balance_score=round(score),
+        )
 
     metric = resolve_metric(cfg["metric"], nodes)
     node_ids = {n.id for n in nodes if str(n.id) in set(cfg["node_ids"])} or None
     skip_ids = _recently_moved(db, cluster.id, preset["guest_cooldown_hours"], now)
     skip_reasons = {wid: "recent" for wid in skip_ids}
+    for wid in list(skip_ids):  # the per-guest cooldown does not apply to a guest that has to move to meet a rule
+        if str(wid) in review.violators:
+            skip_ids.discard(wid)
+            skip_reasons.pop(wid, None)
     settled, avoid = flapping_guests(_move_history(db, cluster.id, now), now)
     for wid in settled:
         skip_ids.add(wid)
@@ -259,19 +311,23 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
     if auto and cfg["level"] == "conservative":  # the gentlest level never touches guests that cannot tolerate downtime
         skip_ids |= {w.id for w in db.query(Workload.id).filter(Workload.cluster_id == cluster.id, Workload.downtime_tolerance == "low").all()}
     max_moves = AUTO_APPROVE_MOVES_PER_RUN if auto else preset["max_moves"]
+    refusals: dict = {}
     op = dry_run_balance(
-        db, actor=AUTOMATIC_ACTOR, node_ids=list(node_ids) if node_ids else None, cluster_id=cluster.id,
+        db, actor=AUTOMATIC_ACTOR, node_ids=list(node_ids) if node_ids else None, cluster_id=cluster.id, info_out=refusals,
         extra_context={
             "automatic": True, "cluster_id": str(cluster.id), "level": cfg["level"], "metric": metric,
             "metric_setting": cfg["metric"], "trigger_score": preset["trigger_score"], "balance_score": round(score),
             "min_benefit": preset["min_benefit"], "max_moves": max_moves, "auto_mode": cfg["mode"],
         },
         min_improvement=preset["min_benefit"], max_moves=max_moves, skip_workload_ids=skip_ids, only_if_moves=True,
-        skip_reasons=skip_reasons, avoid_nodes=avoid,
+        skip_reasons=skip_reasons, avoid_nodes=avoid, rules_review=review,
+        only_workload_ids={uuid.UUID(k) for k in review.violators} if balanced else None,
         load_pct_override={n.id: n.mem_usage_pct for n in scored} if enough else None,
     )
     if op is None:
-        return _skip(db, cluster, state, now, "no move is worth making at this level", balance_score=round(score))
+        why = (f"no move can fix the rules that are not met ({'; '.join(review.issues[:2])})" if balanced
+               else "no move is worth making at this level" + ("" if review.ok else f". {review.sentence()}"))
+        return _skip(db, cluster, state, now, why, details={"refusals": refusals, "metric": metric, "rules": review.summary()}, balance_score=round(score))
 
     plan = (op.dry_run_result or {}).get("migrate_plan", [])
     moves = len(plan)
@@ -299,13 +355,23 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
             enqueue(op)
             approved = True
 
+    has_balance_move = any(not m.get("rule_fix") for m in plan)
     save_state(db, cluster.id, {
-        "last_run_at": now.isoformat(), "last_checked_at": now.isoformat(),
+        **({"balance_op_id": str(op.id)} if has_balance_move else {"balance_op_id": state.get("balance_op_id")}),
+        "last_run_at": now.isoformat() if has_balance_move else state.get("last_run_at"), "last_checked_at": now.isoformat(),
         "last_result": "plan_auto_approved" if approved else "plan_created",
         "last_reason": f"left for your approval: {left_for_review}" if left_for_review else None,
         "operation_id": str(op.id), "moves": moves, "balance_score": round(score), "metric": metric, "auto_approved": approved,
     })
     what = ", ".join(f"{m['name']} {m['source_node']} -> {m['destination_node']}" for m in plan[:3])
+    record_check(
+        db, cluster.id, trigger="automatic", result="plan_auto_approved" if approved else "plan_created",
+        reason=f"left for your approval: {left_for_review}" if left_for_review else None, actor=AUTOMATIC_ACTOR, mode=cfg["mode"], level=cfg["level"],
+        balance_score=round(score), trigger_score=preset["trigger_score"], moves=moves, operation_id=op.id, now=now,
+        details={"metric": metric, "rules": review.summary(),
+                 "plan": [{"name": m["name"], "from": m["source_node"], "to": m["destination_node"], "storage": m.get("current_storage"), "rule_fix": m.get("rule_fix")} for m in plan],
+                 "refusals": refusals},
+    )
     write_audit_event(
         db, event_category="operation", event_type="balance.auto_plan_approved" if approved else "balance.auto_plan_created",
         actor=AUTOMATIC_ACTOR, actor_type="system",
@@ -335,5 +401,6 @@ def evaluate_all(db: Session, enqueue=None) -> list[dict]:
         except Exception as e:  # noqa: BLE001 -- one cluster failing must not stop the others
             log.exception("automatic balance check failed for %s", cluster.name)
             db.rollback()
+            record_check(db, cluster.id, trigger="automatic", result="error", reason=str(e)[:300], actor=AUTOMATIC_ACTOR)
             out.append({"cluster": cluster.name, "result": "error", "reason": str(e)})
     return out

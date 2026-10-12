@@ -10,6 +10,7 @@ import { Meter } from "@/components/Gauges";
 import MetricChart from "@/components/MetricChart";
 import WorkloadLifecycleButtons from "@/components/WorkloadLifecycleButtons";
 import MigrateWorkloadAction from "@/components/MigrateWorkloadAction";
+import ChangeStorageAction from "@/components/ChangeStorageAction";
 import ConsoleViewer, { useConsoleInfo } from "@/components/ConsoleViewer";
 import { DoNotMoveToggle, PreferredHostSelect, ProfileSelect, StoragePreferenceSelect } from "@/components/ProfileSelect";
 import { formatBytes, formatUptime, formatRelativeTime } from "@/lib/format";
@@ -313,7 +314,7 @@ export function WorkloadDetailPanel({
                 <div className="flex items-center justify-between" title="'restricted' means this workload is never placed on a node tagged Trust Tier = low."><span className="text-muted">Sensitivity</span><ProfileSelect workloadId={w.id} field="sensitivity" value={pv.sensitivity} options={["standard", "restricted"]} highlightWhen="restricted" onChanged={(v) => changeProfile({ sensitivity: v })} /></div>
                 <div className="flex items-center justify-between" title="How much outage this workload can absorb; 'low' favours the best, most-trusted nodes."><span className="text-muted">Downtime tolerance</span><ProfileSelect workloadId={w.id} field="downtime_tolerance" value={pv.downtime_tolerance} options={["low", "standard", "high"]} highlightWhen="low" onChanged={(v) => changeProfile({ downtime_tolerance: v })} /></div>
                 <div className="flex items-center justify-between" title="Where this workload's disk goes when migrated. 'auto' follows where it lives today."><span className="text-muted">Storage preference</span><StoragePreferenceSelect workloadId={w.id} value={pv.storage_preference} onChanged={(v) => changeProfile({ storage_preference: v })} /></div>
-                <div className="flex items-center justify-between" title="Pin this guest to a host. Balance Load and automatic balancing never move it away from the pin, and placement and maintenance prefer it whenever they choose a host. It is a soft pin: a real block (memory, CPU compatibility, affinity rules) still wins, and Maintenance can still move it."><span className="text-muted">Pinned host (soft)</span><PreferredHostSelect workloadId={w.id} clusterNodes={clusterNodes} value={pv.preferred_node_id} onChanged={(v) => changeProfile({ preferred_node_id: v })} /></div>
+                <div className="flex items-center justify-between" title="Pin this guest to a host. Balance Load and automatic balancing never move it away from the pin, and placement and maintenance prefer it whenever they choose a host. It is a soft pin: a real block (memory, CPU compatibility, affinity rules) still wins, and Maintenance can still move it. Several hosts, a hard pin, or a pin for every guest with a tag are set on Affinity & Pinning."><span className="text-muted">Pinned host (soft)</span><PreferredHostSelect workloadId={w.id} clusterNodes={clusterNodes} value={pv.preferred_node_id} onChanged={(v) => changeProfile({ preferred_node_id: v })} /></div>
                 <div className="flex items-center justify-between" title="Balance Load and automatic balancing never move this guest. Evacuating a node for maintenance still does."><span className="text-muted">Do not move</span><DoNotMoveToggle workloadId={w.id} value={!!w.do_not_move} /></div>
                 {w.placement_notes && <div className="text-muted whitespace-pre-wrap pt-1">{w.placement_notes}</div>}
               </div>
@@ -472,7 +473,10 @@ export default function WorkloadDetail({
             disabledReason={w.is_missing ? "Not currently visible to PVE" : "Guest lifecycle actions are only implemented for VMs, not containers"}
           />
           {!lxc && !w.is_missing && (
-            <MigrateWorkloadAction workloadId={w.id} workloadName={name} clusterId={w.cluster_id} currentNodeId={w.node_id} nodes={nodes} storage={storage} />
+            <>
+              <MigrateWorkloadAction workloadId={w.id} workloadName={name} clusterId={w.cluster_id} currentNodeId={w.node_id} nodes={nodes} storage={storage} />
+              <ChangeStorageAction workloadId={w.id} workloadName={name} nodeId={w.node_id} clusterId={w.cluster_id} nodes={nodes} storage={storage} />
+            </>
           )}
           <Link href={`/operations/maintenance?workload=${w.id}`} className="px-2.5 py-1 rounded border border-border text-sm text-muted hover:text-text">
             Maintenance

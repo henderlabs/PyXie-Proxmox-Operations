@@ -32,6 +32,7 @@ from .maintenance import (
     _workload_disk_storage_names, workload_node_local_disk_storages,
 )
 from .models import Node, PlacementAffinityRule, Policy, Storage, Workload
+from .pins import node_names, pin_info_for
 
 TIERS = ("low", "standard", "high")
 # Deliberately small relative to the live-utilization balance score below
@@ -272,6 +273,7 @@ def recommend_destinations(
     batch should count against a destination's headroom, not just its
     score."""
     source_node = db.query(Node).filter(Node.id == workload.node_id).one()
+    pin = pin_info_for(db, workload)  # host pinning rules covering this guest (see pins.py)
     config = _qemu_config(client, source_node.name, workload) if client else None
     passthrough = _has_pci_passthrough(config)
 
@@ -341,9 +343,14 @@ def recommend_destinations(
         # over ordinary balance/tier differences, but every real hard block
         # above (headroom, CRS/CPU, trust tier, affinity) still excludes this
         # node the same as any other candidate; there is no override here.
-        if workload.preferred_node_id and str(workload.preferred_node_id) == str(node.id):
+        # Pinning (Affinity Rules page): a HARD pin allows only its hosts -- every other candidate is blocked (staying where it is never is);
+        # a soft pin only prefers its hosts. A guest pinned to several hosts gets the bonus on each of them.
+        if pin.hard_nodes is not None and str(node.id) not in pin.hard_nodes and node.id != workload.node_id:
+            blocked = True
+            blocking_reasons.append(f"hard pin: this guest may only run on {', '.join(node_names(db, pin.hard_nodes))}")
+        elif pin.on_pin(node.id):
             score += _PREFERRED_HOST_SCORE
-            reasons.append(f"preferred host ({node.name})")
+            reasons.append(f"pinned host ({node.name})")
 
         # -- cluster balance: prefer the LEAST-loaded eligible node, using
         # real live host telemetry (cpu_usage_pct/mem_usage_pct, already

@@ -46,7 +46,7 @@ const SECTIONS: NavSection[] = [
       { label: "Health", href: "/operations/health", icon: <HealthIcon /> },
       { label: "Maintenance", href: "/operations/maintenance", icon: <WrenchIcon /> },
       { label: "Balance Load", href: "/operations/balance", icon: <MigrateIcon /> },
-      { label: "Affinity Rules", href: "/operations/affinity-rules", icon: <LinkIcon /> },
+      { label: "Affinity & Pinning", href: "/operations/affinity-rules", icon: <LinkIcon /> },
       { label: "Protection", href: "/operations/protection", icon: <ShieldIcon /> },
       { label: "Capacity", href: "/operations/capacity", icon: <GaugeIcon /> },
       { label: "Rightsizing", href: "/operations/recommendations", icon: <LightbulbIcon /> },

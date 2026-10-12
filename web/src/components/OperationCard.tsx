@@ -104,6 +104,7 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "node.exit_maintenance": "Exit Maintenance Mode",
   "cluster.rebalance": "Balance Load",
   "workload.network_vlan_change": "Network VLAN Change",
+  "workload.move_storage": "Change Storage",
 };
 
 /** Bulk Migrate is a cluster.rebalance whose plan was built from ticked VMs
@@ -116,6 +117,9 @@ export function operationTypeLabel(op: { operation_type_id: string; context?: Re
 
 function operationSummary(op: Operation): string {
   const r = op.dry_run_result;
+  if (op.operation_type_id === "workload.move_storage") {
+    return `${r?.workload_name || `vmid ${r?.vmid}`} — disks → ${r?.target_storage}`;
+  }
   if (op.operation_type_id === "vm.live_migrate") {
     const storagePart = r?.target_storage
       ? ` · storage → ${r.target_storage}`
@@ -218,6 +222,9 @@ type MigratePlanItem = {
   source_node?: string;
   memory_bytes?: number | null;
   pinned_node?: string | null;
+  pinned_nodes?: string[];
+  rule_fix?: string[] | null;
+  pin_hard?: boolean;
   // "shutdown_in_place" opts a workload that DOES have a clean auto-found
   // destination out of migrating at all -- just power it off for the
   // maintenance window and back on here afterward (node.exit_maintenance's
@@ -438,9 +445,14 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
                 from {item.source_node}{item.memory_bytes ? ` · ${formatBytes(item.memory_bytes)}` : ""}
               </span>
             )}
+            {op.operation_type_id === "cluster.rebalance" && item.rule_fix && item.rule_fix.length > 0 && (
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-xs bg-warn/15 text-warn" title={`Balance Load found this guest breaking a rule: ${item.rule_fix.join("; ")}. It is moved to the best host that meets it.`}>
+                fixes a rule
+              </span>
+            )}
             {op.operation_type_id === "cluster.rebalance" && item.pinned_node && (
-              <span className="shrink-0 px-1.5 py-0.5 rounded text-xs bg-accent/15 text-accent" title="Pinned host: a soft pin set on the workload page">
-                {item.pinned_node === item.destination_node ? "moving to its pin" : `pinned to ${item.pinned_node}`}
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-xs bg-accent/15 text-accent" title="Host pin: set on the Affinity Rules page (Pinning) or the workload page">
+                {(item.pinned_nodes ?? [item.pinned_node]).includes(item.destination_node) ? "moving to its pin" : `${item.pin_hard ? "hard-pinned" : "pinned"} to ${item.pinned_node}`}
               </span>
             )}
             {item.transport !== "skip" && item.transport !== "shutdown_in_place" && (item.current_storage || item.destination_storage) && (
@@ -625,7 +637,7 @@ export default function OperationCard({
 
       {op.status === "monitoring" && (
         <div className="mb-3">
-          {op.operation_type_id === "vm.live_migrate" ? (
+          {op.operation_type_id === "vm.live_migrate" || op.operation_type_id === "workload.move_storage" ? (
             <MigrationBars op={op} />
           ) : progress && progress.pct != null ? (
             <>

@@ -514,7 +514,21 @@ def set_workload_placement_profile(
     if payload.storage_preference != "__unset__":
         wl.storage_preference = payload.storage_preference
     if payload.preferred_node_id != "__unset__":
-        wl.preferred_node_id = preferred_node_id
+        # The workload-page pin is a soft single-host pin rule (shown with the others on Affinity Rules > Pinning); the column mirrors it.
+        from pyxie_core.models import PlacementPinRule
+        from pyxie_core.pins import mirror_workload_page_pin
+        existing = db.query(PlacementPinRule).filter(PlacementPinRule.workload_id == wl.id, PlacementPinRule.origin == "workload_page").first()
+        if preferred_node_id is None:
+            if existing is not None:
+                db.delete(existing)
+        elif existing is not None:
+            existing.node_ids = [str(preferred_node_id)]
+            existing.strict = False
+        else:
+            db.add(PlacementPinRule(scope_type="workload", workload_id=wl.id, node_ids=[str(preferred_node_id)], strict=False, origin="workload_page",
+                                    description="Pinned from the workload page", created_by=user.email))
+        db.flush()
+        mirror_workload_page_pin(db, wl)
     db.commit()
     db.refresh(wl)
     write_audit_event(

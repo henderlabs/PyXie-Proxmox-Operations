@@ -8,7 +8,7 @@ export type AutoBalanceView = {
   cluster_id: string;
   cluster_name: string;
   config: {
-    mode: string; level: string; metric: string; node_ids: string[];
+    mode: string; level: string; metric: string; node_ids: string[]; check_every: string; check_at: string;
     windows: { days: number[]; start: string; end: string }[]; paused_until: string | null;
     ack?: { by: string; at: string; aggressive: boolean } | null;
   };
@@ -23,6 +23,8 @@ export type AutoBalanceView = {
   history_ok?: boolean;
   resolved_metric: string;
   pending_operation_id: string | null;
+  next_check_at?: string | null;
+  timezone?: string;
   waiting_operation_id?: string | null;
   history: { operation_id: string; created_at: string; status: string; moves: number; level: string | null; balance_score: number | null; auto_approved?: boolean }[];
 };
@@ -38,6 +40,40 @@ const METRICS = [
   { id: "cpu", label: "CPU" },
   { id: "both", label: "Both (average)" },
 ];
+export const CHECK_EVERY: { id: string; label: string; minutes: number }[] = [
+  { id: "5m", label: "Every 5 minutes", minutes: 5 },
+  { id: "15m", label: "Every 15 minutes", minutes: 15 },
+  { id: "30m", label: "Every 30 minutes", minutes: 30 },
+  { id: "1h", label: "Every hour", minutes: 60 },
+  { id: "2h", label: "Every 2 hours", minutes: 120 },
+  { id: "4h", label: "Every 4 hours", minutes: 240 },
+  { id: "6h", label: "Every 6 hours", minutes: 360 },
+  { id: "8h", label: "Every 8 hours", minutes: 480 },
+  { id: "daily", label: "Once a day", minutes: 1440 },
+];
+
+/** "every 4 hours, from 02:00" / "daily at 03:00" / "every 15 minutes". */
+export function scheduleText(c: { check_every: string; check_at: string }): string {
+  const e = CHECK_EVERY.find((x) => x.id === c.check_every) ?? CHECK_EVERY[0];
+  if (e.id === "daily") return `once a day at ${c.check_at}`;
+  if (e.minutes >= 60) return `${e.label.toLowerCase()}, on the clock from ${c.check_at}`;
+  return e.label.toLowerCase();
+}
+
+/** The times of day a repeating schedule fires, e.g. 02:00 06:00 10:00 ... */
+function slotTimes(c: { check_every: string; check_at: string }): string[] {
+  const e = CHECK_EVERY.find((x) => x.id === c.check_every) ?? CHECK_EVERY[0];
+  if (e.minutes < 60) return [];
+  const [h, m] = c.check_at.split(":").map(Number);
+  const start = h * 60 + m;
+  const out: string[] = [];
+  for (let t = 0; t < 1440; t += e.minutes) {
+    const x = (start + t) % 1440;
+    out.push(`${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`);
+  }
+  return out.sort();
+}
+
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function hours(h: number) {
@@ -120,14 +156,14 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
         </div>
         <p className="text-xs text-muted mt-1.5">
           {auto
-            ? "Auto-approve: when the cluster drifts out of balance, PyXie prepares a plan with ONE move, approves it itself and live-migrates that guest, then re-checks the cluster before considering another."
-            : "Recommend only: when the cluster drifts out of balance, PyXie prepares a Balance Load plan and waits. It never approves or moves anything by itself; you review and approve it here like any other plan."}
+            ? "Auto-approve: when the cluster drifts out of balance, or an affinity rule or host pin is not met, PyXie prepares a plan with ONE move, approves it itself and live-migrates that guest, then re-checks the cluster before considering another."
+            : "Recommend only: when the cluster drifts out of balance, or an affinity rule or host pin is not met, PyXie prepares a Balance Load plan and waits. It never approves or moves anything by itself; you review and approve it here like any other plan."}
         </p>
         {auto && preset && (
           <div className="mt-3 rounded border border-warn/50 bg-warn/10 px-3 py-3 text-sm text-text space-y-2">
             <div className="font-medium text-warn">Before you turn this on: PyXie will move running guests without asking you.</div>
             <ul className="list-disc pl-5 text-xs text-muted space-y-1">
-              <li>It live-migrates <span className="text-text">one guest at a time</span>. After each move finishes it waits at least {hours(preset.cluster_cooldown_hours)}, then plans the next move from fresh numbers. A guest it moved is left alone for {hours(preset.guest_cooldown_hours)}.</li>
+              <li>It live-migrates <span className="text-text">one guest at a time</span>. After each move finishes it waits at least {hours(preset.cluster_cooldown_hours)} (rounded up to whole check intervals, so it lines up with the schedule), then plans the next move from fresh numbers. Moves that only put a guest where an affinity rule or pin says it belongs ignore this cooldown. A guest it moved is left alone for {hours(preset.guest_cooldown_hours)}.</li>
               <li>It only acts when the <span className="text-text">busy-hours score</span> is below {preset.trigger_score}, and only for moves worth {preset.min_benefit}+ points. That score uses each node&apos;s busy level over the last 7 days, not the number right now, so a server that is only busy in business hours is never treated as idle at night. It waits for 24 hours of history on every node.</li>
               <li>A move must narrow the gap between the two hosts by at least 5 points. Moves that would only trade places (a guest from a busy host to a quiet one of the same size) are skipped.</li>
               <li>A guest is never moved back to a host it left in the last 3 days, and a guest that has already moved twice in a week is left alone, so nothing bounces between hosts.</li>
@@ -167,7 +203,7 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
                 className={`text-left rounded border px-3 py-2 ${cfg.level === l.id ? "border-accent bg-accent/10" : "border-border hover:bg-surface2/60"}`}>
                 <div className="text-sm font-medium text-text">{l.label}</div>
                 <div className="text-xs text-muted mt-0.5">
-                  Acts when balance score is below {p.trigger_score}. Only moves worth {p.min_benefit}+ points, {auto ? "one move at a time" : `up to ${p.max_moves} per plan`}, at most one plan every {hours(p.cluster_cooldown_hours)}; a moved guest is left alone for {hours(p.guest_cooldown_hours)}.
+                  Acts when balance score is below {p.trigger_score}. Only moves worth {p.min_benefit}+ points, {auto ? "one move at a time" : `up to ${p.max_moves} per plan`}, at most one balancing plan every {hours(p.cluster_cooldown_hours)} (rounded up to whole check intervals; affinity and pin fixes are exempt); a moved guest is left alone for {hours(p.guest_cooldown_hours)}.
                 </div>
               </button>
             );
@@ -206,6 +242,29 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
       </div>
 
       <div>
+        <div className="text-xs text-muted mb-1.5">How often to check</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className={sel} disabled={!isAdmin} value={cfg.check_every} onChange={(e) => setCfg({ ...cfg, check_every: e.target.value })}>
+            {CHECK_EVERY.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+          {cfg.check_every !== "5m" && cfg.check_every !== "15m" && cfg.check_every !== "30m" && (
+            <label className="flex items-center gap-2 text-sm text-muted">
+              {cfg.check_every === "daily" ? "at" : "counting from"}
+              <input type="time" className={sel} value={cfg.check_at} disabled={!isAdmin} onChange={(e) => setCfg({ ...cfg, check_at: e.target.value || "00:00" })} />
+            </label>
+          )}
+        </div>
+        <p className="text-xs text-muted mt-1.5">
+          {cfg.check_every === "daily"
+            ? `One check a day, at ${cfg.check_at}.`
+            : cfg.check_every === "5m" || cfg.check_every === "15m" || cfg.check_every === "30m"
+            ? `Checks on the clock: ${cfg.check_every === "5m" ? ":00, :05, :10 ..." : cfg.check_every === "15m" ? ":00, :15, :30, :45" : ":00 and :30"} of every hour.`
+            : `Checks at ${slotTimes(cfg).join(", ")} every day.`}
+          {" "}Times are the server&apos;s timezone{view.timezone ? ` (${view.timezone})` : ""}. A check looks at the cluster and, if it is out of balance, prepares a plan; it can only prepare one inside the time windows below. Each check is recorded in the history.
+        </p>
+      </div>
+
+      <div>
         <div className="text-xs text-muted mb-1.5">When it may prepare plans</div>
         {cfg.windows.length === 0 && <p className="text-sm text-muted mb-1.5">Any time.</p>}
         <div className="space-y-2">
@@ -232,7 +291,7 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
 
       <div className="flex flex-wrap items-center gap-3">
         {isAdmin && (
-          <button disabled={busy || !dirty || !ackReady} onClick={() => call(`/api/auto-balance/${view.cluster_id}`, "PUT", { mode: cfg.mode, level: cfg.level, metric: cfg.metric, node_ids: cfg.node_ids, windows: cfg.windows, acknowledged: needsAck && ackOk, acknowledged_aggressive: needsAck && ackAggressive })}
+          <button disabled={busy || !dirty || !ackReady} onClick={() => call(`/api/auto-balance/${view.cluster_id}`, "PUT", { mode: cfg.mode, check_every: cfg.check_every, check_at: cfg.check_at, level: cfg.level, metric: cfg.metric, node_ids: cfg.node_ids, windows: cfg.windows, acknowledged: needsAck && ackOk, acknowledged_aggressive: needsAck && ackAggressive })}
             className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50">
             {busy ? "Saving…" : "Save automatic balancing"}
           </button>
@@ -262,25 +321,13 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
             {view.state.last_result === "skipped" && view.state.last_reason ? `: nothing to do (${view.state.last_reason}).` : ""}
             {view.state.last_result === "plan_created" ? `: prepared a plan with ${view.state.moves} move(s).${view.state.last_reason ? ` ${view.state.last_reason}.` : ""}` : ""}
             {view.state.last_result === "plan_auto_approved" ? `: approved and started ${view.state.moves} move. It re-checks after the move finishes.` : ""}
+            {" "}<a href="#balance-history" className="text-accent hover:underline">See the full history</a>
           </div>
           {view.state.last_result === "stopped" && <div className="text-bad mt-1">Auto-approve stopped: {view.state.last_reason}. This cluster is back to Recommend only.</div>}
           {view.pending_operation_id && <div className="text-warn mt-1">A plan from automatic balancing is waiting for your approval below.</div>}
         </div>
       )}
 
-      {view.history.length > 0 && (
-        <div>
-          <div className="text-xs text-muted mb-1.5">Recent automatic plans</div>
-          <ul className="text-sm divide-y divide-border">
-            {view.history.map((h) => (
-              <li key={h.operation_id} className="flex items-center justify-between py-1.5">
-                <span className="text-text">{ago(h.created_at)} · {h.moves} move(s){h.level ? ` · ${h.level}` : ""}{h.balance_score !== null ? ` · score ${h.balance_score}` : ""}</span>
-                <span className="text-xs text-muted">{h.auto_approved ? "auto-approved · " : ""}{h.status.replace(/_/g, " ")}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   );
 }
@@ -291,7 +338,7 @@ export default function AutoBalanceCard({ clusters }: { clusters: AutoBalanceVie
     <Card>
       <CardTitle>Automatic balancing</CardTitle>
       <p className="text-sm text-muted mb-4">
-        Let PyXie watch the cluster and prepare a Balance Load plan when it drifts out of balance. Everything it prepares goes through the same checks as a plan you start yourself: affinity rules, memory headroom, CPU compatibility, HA, maintenance mode, and the global write switch.
+        Let PyXie watch the cluster and prepare a Balance Load plan when it drifts out of balance. Every check also reviews the affinity rules and host pins (Affinity & Pinning) against where guests are now: when one is not met, the check plans the move that fixes it even if the cluster is balanced. Everything it prepares goes through the same checks as a plan you start yourself: affinity rules, memory headroom, CPU compatibility, HA, maintenance mode, and the global write switch.
       </p>
       <div className="space-y-6 divide-y divide-border">
         {clusters.map((c) => <Cluster key={c.cluster_id} initial={c} />)}

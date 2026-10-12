@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from pyxie_core.audit import write_audit_event
 from pyxie_core.discovery import build_pve_client
-from pyxie_core.models import Cluster, Node, PlacementAffinityRule, PveTarget
+from pyxie_core.models import Cluster, Node, PlacementAffinityRule, PlacementPinRule, PveTarget, Workload
+from pyxie_core.pins import mirror_workload_page_pin
 from pyxie_core.placement import get_node_note, get_node_tier, suggest_performance_tier
 
 from ..auth_deps import get_current_user, require_admin
@@ -158,3 +159,120 @@ def delete_affinity_rule(rule_id: uuid.UUID, user=Depends(get_current_user), db:
     db.commit()
     write_audit_event(db, event_category="settings", event_type="placement.affinity_rule.deleted", actor=user.email, actor_type="user")
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------- host pinning (Affinity Rules page, right column)
+
+def _serialize_pin(r: PlacementPinRule) -> dict:
+    return {
+        "id": str(r.id), "scope_type": r.scope_type, "workload_id": str(r.workload_id) if r.workload_id else None, "tag": r.tag,
+        "node_ids": [str(n) for n in (r.node_ids or [])], "strict": r.strict, "origin": r.origin, "description": r.description,
+        "color": r.color, "created_by": r.created_by, "created_at": r.created_at.isoformat(),
+    }
+
+
+@router.get("/pin-rules")
+def list_pin_rules(db: Session = Depends(get_db)):
+    return [_serialize_pin(r) for r in db.query(PlacementPinRule).order_by(PlacementPinRule.created_at.desc()).all()]
+
+
+class PinRuleIn(BaseModel):
+    scope_type: str  # workload | tag_group
+    workload_id: uuid.UUID | None = None
+    tag: str | None = None
+    node_ids: list[uuid.UUID]
+    strict: bool = False
+    description: str | None = None
+    color: str | None = None
+
+
+def _validate_pin(db: Session, p: PinRuleIn) -> list[str]:
+    if p.scope_type not in ("workload", "tag_group"):
+        raise HTTPException(400, "scope_type must be workload or tag_group")
+    if p.scope_type == "workload":
+        wl = db.query(Workload).filter(Workload.id == p.workload_id).one_or_none() if p.workload_id else None
+        if wl is None:
+            raise HTTPException(400, "pick the guest to pin")
+    elif not (p.tag or "").strip():
+        raise HTTPException(400, "a tag pin needs a tag")
+    ids = list(dict.fromkeys(str(n) for n in p.node_ids))
+    if not ids:
+        raise HTTPException(400, "pick at least one host")
+    nodes = db.query(Node).filter(Node.id.in_(ids), Node.is_missing.is_(False)).all()
+    if len(nodes) != len(ids):
+        raise HTTPException(400, "unknown host in the list")
+    if p.scope_type == "workload" and any(n.cluster_id != wl.cluster_id for n in nodes):
+        raise HTTPException(400, "hosts must be in the guest's own cluster")
+    if p.color and not re.fullmatch(r"#[0-9a-fA-F]{6}", p.color):
+        raise HTTPException(400, "color must look like #rrggbb")
+    return ids
+
+
+def _apply_pin(rule: PlacementPinRule, p: PinRuleIn, ids: list[str]) -> None:
+    rule.scope_type = p.scope_type
+    rule.workload_id = p.workload_id if p.scope_type == "workload" else None
+    rule.tag = (p.tag or "").strip() if p.scope_type == "tag_group" else None
+    rule.node_ids = ids
+    rule.strict = p.strict
+    rule.description = p.description
+    rule.color = p.color.lower() if p.color else None
+    # The single-host soft pin of one guest is what the workload page shows; anything richer is a rule of its own.
+    simple = p.scope_type == "workload" and len(ids) == 1 and not p.strict
+    if rule.origin == "workload_page" and not simple:
+        rule.origin = "rule"
+
+
+def _mirror(db: Session, workload_id) -> None:
+    if workload_id is None:
+        return
+    wl = db.query(Workload).filter(Workload.id == workload_id).one_or_none()
+    if wl is not None:
+        mirror_workload_page_pin(db, wl)
+
+
+@router.post("/pin-rules", dependencies=[Depends(require_admin)])
+def create_pin_rule(payload: PinRuleIn, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    ids = _validate_pin(db, payload)
+    rule = PlacementPinRule(origin="rule", created_by=user.email)
+    _apply_pin(rule, payload, ids)
+    db.add(rule)
+    db.flush()
+    _mirror(db, rule.workload_id)
+    db.commit()
+    db.refresh(rule)
+    write_audit_event(db, event_category="settings", event_type="placement.pin_rule.created", actor=user.email, actor_type="user",
+                      metadata={"scope_type": rule.scope_type, "strict": rule.strict, "hosts": len(ids)})
+    return _serialize_pin(rule)
+
+
+@router.put("/pin-rules/{rule_id}", dependencies=[Depends(require_admin)])
+def update_pin_rule(rule_id: uuid.UUID, payload: PinRuleIn, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    rule = db.query(PlacementPinRule).filter(PlacementPinRule.id == rule_id).one_or_none()
+    if rule is None:
+        raise HTTPException(404, "pin rule not found")
+    ids = _validate_pin(db, payload)
+    before, old_workload = _serialize_pin(rule), rule.workload_id
+    _apply_pin(rule, payload, ids)
+    db.flush()
+    _mirror(db, old_workload)
+    _mirror(db, rule.workload_id)
+    db.commit()
+    db.refresh(rule)
+    write_audit_event(db, event_category="settings", event_type="placement.pin_rule.updated", actor=user.email, actor_type="user",
+                      state_before=before, state_after=_serialize_pin(rule), metadata={"rule_id": str(rule.id)})
+    return _serialize_pin(rule)
+
+
+@router.delete("/pin-rules/{rule_id}", dependencies=[Depends(require_admin)])
+def delete_pin_rule(rule_id: uuid.UUID, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    rule = db.query(PlacementPinRule).filter(PlacementPinRule.id == rule_id).one_or_none()
+    if rule is None:
+        raise HTTPException(404, "pin rule not found")
+    wl_id = rule.workload_id
+    db.delete(rule)
+    db.flush()
+    _mirror(db, wl_id)
+    db.commit()
+    write_audit_event(db, event_category="settings", event_type="placement.pin_rule.deleted", actor=user.email, actor_type="user")
+    return {"status": "deleted"}
+

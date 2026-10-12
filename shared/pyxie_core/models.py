@@ -1164,3 +1164,51 @@ class FeedbackSubmission(Base):
     channel = Column(String, nullable=False)  # github | email | copied
     submitted_by = Column(String, nullable=True)
     diagnostics_included = Column(Boolean, nullable=False, default=False)
+
+
+class BalanceCheck(Base):
+    """One Balance Load check -- every automatic evaluation and every manual preview -- so there is a history of what was
+    looked at and decided, not only of the moves that resulted. Repeats of the same outcome (the cluster is balanced, again)
+    are folded into one row (repeat_count, last_checked_at) so a 5-minute cycle does not bury the history."""
+
+    __tablename__ = "balance_checks"
+
+    id = uuid_pk()
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id"), nullable=False)
+    first_checked_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    last_checked_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    repeat_count = Column(Integer, nullable=False, default=1)
+    trigger = Column(String, nullable=False)  # automatic | manual
+    actor = Column(String, nullable=True)
+    mode = Column(String, nullable=True)
+    level = Column(String, nullable=True)
+    result = Column(String, nullable=False)  # balanced | skipped | plan_created | plan_auto_approved | no_moves | stopped | error
+    reason = Column(Text, nullable=True)
+    reason_key = Column(String, nullable=True)
+    balance_score = Column(Integer, nullable=True)
+    trigger_score = Column(Integer, nullable=True)
+    moves = Column(Integer, nullable=False, default=0)
+    operation_id = Column(UUID(as_uuid=True), nullable=True)
+    details = Column(JSONB, nullable=True)
+
+
+class PlacementPinRule(Base):
+    """Host pinning: a guest (scope "workload") or every guest carrying a tag (scope "tag_group") pinned to one or more hosts.
+    Soft (strict=False): those hosts are preferred -- Balance Load leaves a guest that is on one alone and placement favors them,
+    but maintenance may move it. Hard (strict=True): only those hosts are allowed, maintenance included.
+    origin "workload_page" marks the single-host soft pin set from the workload page (mirrored in workloads.preferred_node_id)."""
+
+    __tablename__ = "placement_pin_rules"
+
+    id = uuid_pk()
+    scope_type = Column(String, nullable=False)
+    workload_id = Column(UUID(as_uuid=True), ForeignKey("workloads.id", ondelete="CASCADE"), nullable=True)
+    tag = Column(String, nullable=True)
+    node_ids = Column(JSONB, nullable=False)
+    strict = Column(Boolean, nullable=False, default=False)
+    origin = Column(String, nullable=False, default="rule")
+    description = Column(Text, nullable=True)
+    color = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)

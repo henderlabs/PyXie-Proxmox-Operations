@@ -11,6 +11,7 @@ import { colorForPct } from "@/components/Gauges";
 import { notifyOperationsChanged, onOperationsChanged } from "@/lib/operationsBus";
 import { useMe } from "@/lib/useMe";
 import { isInFlight, isTerminal } from "@/lib/operationStatus";
+import { onPinnedHost, type PinRule } from "@/lib/pins";
 
 /** Balance Load on its own page: pick which nodes to take guests off (none = the whole cluster), preview the plan,
  *  approve it. Same dry-run/approve path as every other batch migration; nothing moves until Approve. */
@@ -30,7 +31,7 @@ function agoText(iso?: string | null) {
   return m < 1 ? "just now" : m < 90 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
 
-export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, pendingOperationId, autoSummary }: { nodes: Node[]; workloads: Workload[]; initialNodeId?: string; pendingOperationId?: string; autoSummary?: { mode: string; level: string; trigger: number } }) {
+export default function BalanceLoadWorkspace({ nodes, workloads, pins = [], initialNodeId, pendingOperationId, autoSummary }: { nodes: Node[]; workloads: Workload[]; pins?: PinRule[]; initialNodeId?: string; pendingOperationId?: string; autoSummary?: { mode: string; level: string; trigger: number } }) {
   const [selected, setSelected] = useState<string[]>(initialNodeId ? [initialNodeId] : []);
   const [ops, setOps] = useState<Operation[]>([]);
   const [busy, setBusy] = useState(false);
@@ -141,8 +142,8 @@ export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, 
   const b = computeBalance(nodes);
   const avg = b ? b.memAvg : null;
   const guests = (id: string) => workloads.filter((w) => w.node_id === id && w.status === "running").length;
-  const pinnedHere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && w.preferred_node_id === id).length;
-  const lockedElsewhere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && w.preferred_node_id !== id && w.do_not_move).length;
+  const pinnedHere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && onPinnedHost(w, pins)).length;
+  const lockedElsewhere = (id: string) => workloads.filter((w) => w.type === "vm" && w.node_id === id && w.status === "running" && !onPinnedHost(w, pins) && w.do_not_move).length;
   const heavy = live.filter((n) => loadOf(n, avg).label === "Heavy");
   const selectable = live.filter((n) => n.status === "online" && !n.maintenance_mode);
   const previewed = ops.length > 0;
@@ -223,12 +224,9 @@ export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, 
       </div>
 
       <Card>
-        <CardTitle>How it works</CardTitle>
+        <CardTitle>Preview Balance Load</CardTitle>
         <p className="text-sm text-muted mb-3">
-          Balance Load scores every running VM against every eligible node and proposes moves that make memory use more even.
-          Each move is checked against affinity rules, memory headroom, CPU compatibility, HA and maintenance mode, then
-          checked again at the moment it runs. Guests pinned to the host they are on, or marked Do not move, are left alone.
-          Nothing moves until you approve, and you can change any destination or set a line to &ldquo;Don&apos;t move&rdquo;.
+          Look at the cluster now, review the affinity rules and host pins (<a href="/operations/affinity-rules" className="text-accent hover:underline">Affinity &amp; Pinning</a>), and propose the moves that make memory use more even or put a guest where a rule says it belongs. Nothing moves until you approve the plan, and every preview is recorded in the <a href="#balance-history" className="text-accent hover:underline">history</a> below.
         </p>
         {isAdmin && (
           <button
@@ -243,6 +241,16 @@ export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, 
           </button>
         )}
         {waitingPlan && <p className="text-xs text-muted mt-2">A plan is already waiting for approval below. A new preview discards it (nothing has moved) and re-reads the cluster.</p>}
+        <details className="mt-3">
+          <summary className="text-xs text-accent cursor-pointer">How it works</summary>
+          <p className="text-sm text-muted mt-2">
+            Balance Load first reviews the affinity rules and host pins against where every guest is now, then scores every running VM against every eligible node and proposes moves that make memory use more even. The rules come first: a guest that breaks one is moved to the best host that meets it, whatever the balance gain, before any load balancing is considered, and its plan line is marked as fixing a rule. The balancing moves are then worked out from where those fixes leave the guests.
+            Each move is checked against affinity rules, memory headroom, CPU compatibility, HA and maintenance mode, then
+            checked again at the moment it runs. Guests pinned to the host they are on, or marked Do not move, are left alone.
+            A guest on shared storage stays on it; a guest on a host&apos;s own storage goes to the destination host&apos;s preferred storage.
+            You can change any destination or set a line to &ldquo;Don&apos;t move&rdquo;.
+          </p>
+        </details>
       </Card>
 
       {error && <div className="text-sm text-bad">{error}</div>}

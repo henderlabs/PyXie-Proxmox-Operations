@@ -16,6 +16,8 @@ SAFETY_RULES = [
     ("SAFE-CRED-001", "Credential handling", "Credentials used for any maintenance action must be scoped, encrypted at rest, and never logged in plaintext.", "credential"),
     ("SAFE-BREAKGLASS-001", "Break-glass path", "An emergency override path must be identifiable and separately audited before any automated execution exists.", "execution"),
     ("SAFE-AUDIT-001", "Full audit trail", "Every maintenance action must be captured in the full audit envelope, including plan lineage via plan_id/correlation_id.", "audit"),
+    ("SAFE-STORAGE-002", "Target storage must hold the disks", "A storage change needs a target that is reachable from the VM's host, accepts VM disks, is active and has room for every disk it is asked to take.", "storage"),
+    ("SAFE-GUEST-AGENT-001", "Guest agent must answer before a shutdown", "A guest with the QEMU guest agent switched on but not answering cannot be shut down gracefully; an operation that needs a clean shutdown is blocked until the agent works, is switched off, or the guest is stopped.", "execution"),
     ("SAFE-PROTECTION-001", "Backup job must cover something", "A PBS backup job's membership change must not leave it with zero guests selected and not in all-guests mode.", "protection"),
     ("SAFE-PROTECTION-002", "No membership drift since dry-run", "A backup job's live membership must still match what was previewed at dry-run time before an approved change is applied.", "protection"),
 ]

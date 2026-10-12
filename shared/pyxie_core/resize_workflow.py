@@ -36,6 +36,39 @@ class ResizeWorkflowError(Exception):
     pass
 
 
+def agent_enabled(config: dict) -> bool:
+    """Is the QEMU guest agent option on in the VM's Proxmox config? (`agent: 1`, or `agent: enabled=1,fstrim_cloned_disks=1`.)"""
+    value = str((config or {}).get("agent") or "").strip().lower()
+    return value.startswith("1") or "enabled=1" in value
+
+
+def agent_not_running(error: Exception) -> bool:
+    """Does this error from the agent call mean the agent is enabled in Proxmox but not answering inside the guest?"""
+    text = str(error).lower()
+    return any(k in text for k in ("not running", "guest-ping", "timeout", "timed out", "got timeout"))
+
+
+def check_guest_agent(db, target, node, workload) -> dict:
+    """Pre-check for a resize that has to shut a running guest down: when the guest agent is enabled but silent, Proxmox waits on
+    it, the graceful shutdown times out after minutes and the resize fails halfway (seen on a Windows Server guest whose agent
+    service was not running). Returns {"state": "disabled" | "ok" | "not_responding" | "unknown", "detail": str}. Read-only; never raises."""
+    try:
+        client, _cred = build_pve_client(db, target)
+        with client:
+            config = client.qemu_config(node.name, workload.vmid)
+            if not agent_enabled(config):
+                return {"state": "disabled", "detail": "the guest agent option is off, so Proxmox shuts the guest down with the ACPI power button"}
+            try:
+                client.qemu_agent_interfaces(node.name, workload.vmid)
+            except Exception as exc:  # noqa: BLE001
+                if agent_not_running(exc):
+                    return {"state": "not_responding", "detail": str(exc)[:200]}
+                return {"state": "unknown", "detail": str(exc)[:200]}
+        return {"state": "ok", "detail": "the guest agent answered"}
+    except Exception as exc:  # noqa: BLE001
+        return {"state": "unknown", "detail": str(exc)[:200]}
+
+
 def _load_context(db, workload: Workload):
     node = db.query(Node).filter(Node.id == workload.node_id).one()
     cluster = db.query(Cluster).filter(Cluster.id == workload.cluster_id).one()
@@ -83,7 +116,20 @@ def dry_run_resize(db, workload: Workload, *, new_cores: int, new_memory_mb: int
         reasons.append(f"HA state: {workload.ha_state} -- PVE's HA manager may restart this guest during the power-off window")
         blocking_rules.append("SAFE-HA-001")
 
+    guest_agent = None
+    if was_running and workload.type == "vm":
+        guest_agent = check_guest_agent(db, target, node, workload)
+        if guest_agent["state"] == "not_responding":
+            reasons.append(
+                "the QEMU guest agent is switched on for this VM in Proxmox but is not answering inside the guest, so the graceful shutdown this "
+                "resize needs would wait for it and time out (the resize would fail after a few minutes, with nothing changed). Fix it first: "
+                "start the \"QEMU Guest Agent\" service in the guest (install it from the virtio-win ISO if it is missing), or switch the Guest "
+                "Agent option off for this VM in Proxmox, or shut the VM down yourself and run this again."
+            )
+            blocking_rules.append("SAFE-GUEST-AGENT-001")
+
     dry_run_result = {
+        "guest_agent": guest_agent,
         "vmid": workload.vmid, "workload_name": workload.name, "node": node.name,
         "current_cores": workload.cpu_cores, "new_cores": new_cores,
         "current_memory_bytes": workload.memory_bytes, "new_memory_bytes": new_memory_mb * 1024 * 1024,

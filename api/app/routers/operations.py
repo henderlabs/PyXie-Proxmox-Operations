@@ -322,6 +322,7 @@ _JOB_TIMEOUT_BY_TYPE = {
     "workload.start": 300,
     "workload.force_stop": 300,
     "workload.reboot": 600,
+    "workload.move_storage": 21600,  # 6h: one Proxmox disk move per disk, each with its own size-based limit
     "workload.resize": 600,  # shutdown + config PUT + start, generous margin over each's own wait_for_task timeout
     "host.reboot": 1800,
     "host.update": 3900,  # comfortably above host_maintenance_client's 3600s apply() timeout
@@ -346,6 +347,9 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "workload.resize":
         from pyxie_core.resize_workflow import approve as approve_resize
         return approve_resize(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.move_storage":
+        from pyxie_core.storage_move_workflow import approve as approve_storage_move
+        return approve_storage_move(db, op, approved_by=actor)
     if op.operation_type_id == "host.reboot":
         from pyxie_core.reboot_workflow import approve as approve_reboot
         return approve_reboot(db, op, approved_by=actor)
@@ -798,6 +802,39 @@ class BalanceRequest(BaseModel):
     replace: bool = False
 
 
+def _record_manual_balance_check(db: Session, op: Operation, actor: str, node_ids) -> None:
+    """A manual Balance Load preview goes into the same check history as the automatic checks. Never raises."""
+    try:
+        from pyxie_core.balance_config import balance_score
+        from pyxie_core.balance_history import record_check
+        res = op.dry_run_result or {}
+        plan = [m for m in (res.get("migrate_plan") or []) if m.get("transport") != "skip"]
+        q = db.query(Node).filter(Node.is_missing.is_(False))
+        scoped = q.filter(Node.id.in_(node_ids)).all() if node_ids else []
+        cluster_ids = {n.cluster_id for n in scoped} or {c.id for c in db.query(Cluster).filter(Cluster.is_missing.is_(False)).all()}
+        for cid in cluster_ids:
+            nodes = q.filter(Node.cluster_id == cid).all()
+            score = balance_score(nodes)
+            record_check(
+                db, cid, trigger="manual", actor=actor, result="plan_created" if plan else "no_moves",
+                reason=None if plan else ((res.get("reasons") or [None])[-1]),
+                balance_score=None if score is None else round(score), moves=len(plan), operation_id=op.id,
+                details={
+                    "rules": res.get("rules_review"),
+                    "scope": "selected nodes" if node_ids else "whole cluster",
+                    "plan": [{"name": m.get("name"), "from": m.get("source_node"), "to": m.get("destination_node"), "storage": m.get("current_storage"), "rule_fix": m.get("rule_fix")} for m in plan],
+                    "refusals": {
+                        "blocked_total": res.get("blocked_moves_total", 0),
+                        "blocked": [{"name": b.get("name"), "from": b.get("source_node"), "to": b.get("blocked_node"), "why": (b.get("blocking_reasons") or [""])[0][:160], "gain": b.get("improvement")}
+                                    for b in (res.get("blocked_moves") or [])[:5]],
+                        "left_alone_total": res.get("left_alone_total", 0),
+                    },
+                },
+            )
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
+
 @router.post("/cluster-rebalance/dry-run", dependencies=[Depends(require_admin)])
 def create_balance_dry_run(payload: BalanceRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
     """"Balance Load" as one reviewable/editable plan -- see
@@ -833,6 +870,7 @@ def create_balance_dry_run(payload: BalanceRequest, user=Depends(get_current_use
     if existing is not None:
         return _serialize(existing)
     op = dry_run_balance(db, actor=user.email, node_ids=payload.node_ids)
+    _record_manual_balance_check(db, op, user.email, payload.node_ids)
     return _serialize(op)
 
 
@@ -871,6 +909,24 @@ class ResizeRequest(BaseModel):
     workload_id: uuid.UUID
     new_cores: int
     new_memory_mb: int
+
+
+class StorageMoveRequest(BaseModel):
+    workload_id: uuid.UUID
+    target_storage: str
+
+
+@router.post("/workload-storage-moves/dry-run", dependencies=[Depends(require_admin)])
+def create_storage_move_dry_run(payload: StorageMoveRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.storage_move_workflow import StorageMoveError, dry_run_storage_move
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_storage_move(db, workload, target_storage=payload.target_storage, actor=user.email)
+    except StorageMoveError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
 
 
 @router.post("/workload-resizes/dry-run", dependencies=[Depends(require_admin)])

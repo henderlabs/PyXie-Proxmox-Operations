@@ -1,7 +1,7 @@
 """Settings and status for automatic load balancing (phase 1: recommend only). See docs/auto-balance-design.md."""
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -13,7 +13,8 @@ from pyxie_core.auto_balance import AUTOMATIC_ACTOR, LIVE_STATUSES
 from pyxie_core.balance_config import (
     PRESETS, ConfigError, balance_score, get_config, get_state, resolve_metric, save_config, save_state, smoothed_loads, smoothed_view, utcnow,
 )
-from pyxie_core.models import AppSettings, Cluster, Node, Operation, Workload
+from pyxie_core.pins import compute_pin_info, load_pin_rules
+from pyxie_core.models import AppSettings, BalanceCheck, Cluster, Node, Operation, Workload
 
 from ..auth_deps import get_current_user, require_admin
 from ..deps import get_db
@@ -23,11 +24,34 @@ router = APIRouter(prefix="/api/auto-balance", tags=["auto-balance"], dependenci
 
 def _locked_guests(db: Session, cluster: Cluster) -> dict:
     """Running VMs automatic balancing will never touch: marked Do not move, or sitting on the host they are pinned to."""
+    pin_rules = load_pin_rules(db)
     vms = db.query(Workload).filter(Workload.cluster_id == cluster.id, Workload.is_missing.is_(False), Workload.status == "running", Workload.type == "vm").all()
     return {
         "do_not_move": sum(1 for w in vms if w.do_not_move),
-        "pinned": sum(1 for w in vms if not w.do_not_move and w.preferred_node_id is not None and w.preferred_node_id == w.node_id),
+        "pinned": sum(1 for w in vms if not w.do_not_move and compute_pin_info(pin_rules, w).on_pin(w.node_id)),
     }
+
+
+def _next_check_iso(db: Session, cfg: dict, state: dict) -> str | None:
+    """When the next scheduled automatic check is due (None when automatic balancing is off)."""
+    if cfg["mode"] == "off":
+        return None
+    from zoneinfo import ZoneInfo
+    from pyxie_core.balance_config import check_due, next_slot, latest_slot
+    now = utcnow()
+    try:
+        local_now = now.astimezone(ZoneInfo(db.query(AppSettings.timezone).filter(AppSettings.id == 1).scalar() or "UTC"))
+    except Exception:  # noqa: BLE001
+        local_now = now
+    try:
+        last = datetime.fromisoformat(state["last_checked_at"]) if state.get("last_checked_at") else None
+    except ValueError:
+        last = None
+    if last is not None and last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    if check_due(local_now, last, cfg["check_every"], cfg["check_at"]):
+        return now.isoformat()  # owed now: runs on the next worker pass
+    return next_slot(local_now, cfg["check_every"], cfg["check_at"]).astimezone(timezone.utc).isoformat()
 
 
 def _cluster_view(db: Session, cluster: Cluster) -> dict:
@@ -64,6 +88,8 @@ def _cluster_view(db: Session, cluster: Cluster) -> dict:
         "writes_enabled": bool(db.query(AppSettings.pve_mutations_enabled).filter(AppSettings.id == 1).scalar()),
         "locked_guests": _locked_guests(db, cluster),
         "waiting_operation_id": str(waiting[0].id) if waiting else None,
+        "next_check_at": _next_check_iso(db, cfg, get_state(db, cluster.id)),
+        "timezone": db.query(AppSettings.timezone).filter(AppSettings.id == 1).scalar() or "UTC",
         "history": [
             {"operation_id": str(o.id), "created_at": o.created_at.isoformat(), "status": "dismissed" if o.dismissed else o.status,
              "moves": len((o.dry_run_result or {}).get("migrate_plan", [])), "level": (o.context or {}).get("level"), "auto_approved": bool((o.context or {}).get("auto_approved")),
@@ -73,6 +99,43 @@ def _cluster_view(db: Session, cluster: Cluster) -> dict:
     }
 
 
+@router.get("/history")
+def balance_history(limit: int = 100, db: Session = Depends(get_db)):
+    """Everything Balance Load did, newest first: each check (automatic cycles and manual previews, repeats folded into one
+    line with a count) and each move that resulted."""
+    limit = max(1, min(limit, 300))
+    names = {c.id: c.name for c in db.query(Cluster).all()}
+    items = []
+    for c in db.query(BalanceCheck).order_by(BalanceCheck.last_checked_at.desc()).limit(limit).all():
+        items.append({
+            "kind": "check", "id": str(c.id), "at": c.last_checked_at.isoformat(), "first_at": c.first_checked_at.isoformat(),
+            "repeat_count": c.repeat_count or 1, "cluster": names.get(c.cluster_id), "trigger": c.trigger, "actor": c.actor, "mode": c.mode, "level": c.level,
+            "result": c.result, "reason": c.reason, "balance_score": c.balance_score, "trigger_score": c.trigger_score, "moves": c.moves,
+            "operation_id": str(c.operation_id) if c.operation_id else None, "details": c.details,
+        })
+    parents = {o.id: o for o in db.query(Operation).filter(Operation.operation_type_id == "cluster.rebalance").order_by(Operation.created_at.desc()).limit(200).all()}
+    moves = (
+        db.query(Operation).filter(Operation.operation_type_id == "vm.live_migrate", Operation.parent_operation_id.in_(list(parents) or [None]))
+        .order_by(Operation.created_at.desc()).limit(limit).all()
+    )
+    for o in moves:
+        r = o.dry_run_result or {}
+        ctx = o.context or {}
+        parent = parents.get(o.parent_operation_id)
+        pctx = (parent.context if parent else None) or {}
+        items.append({
+            "kind": "move", "id": str(o.id), "at": (o.completed_at or o.started_at or o.created_at).isoformat(),
+            "started_at": o.started_at.isoformat() if o.started_at else None, "status": o.status,
+            "workload": r.get("workload_name") or ctx.get("vmid"), "vmid": r.get("vmid") or ctx.get("vmid"),
+            "from": r.get("source_node"), "to": r.get("target_node"), "storage": ctx.get("target_storage_name"),
+            "duration_seconds": int((o.completed_at - o.started_at).total_seconds()) if o.completed_at and o.started_at else None,
+            "automatic": bool(pctx.get("automatic")), "by": (parent.created_by if parent else o.created_by), "error": (o.error or "")[:300] or None,
+            "cluster": names.get(o.cluster_id), "parent_operation_id": str(o.parent_operation_id) if o.parent_operation_id else None,
+        })
+    items.sort(key=lambda i: i["at"], reverse=True)
+    return {"items": items[:limit]}
+
+
 @router.get("")
 def list_auto_balance(db: Session = Depends(get_db)):
     return [_cluster_view(db, c) for c in db.query(Cluster).filter(Cluster.is_missing.is_(False)).order_by(Cluster.name).all()]
@@ -80,6 +143,8 @@ def list_auto_balance(db: Session = Depends(get_db)):
 
 class AutoBalanceUpdate(BaseModel):
     mode: str = "off"
+    check_every: str = "5m"
+    check_at: str = "00:00"
     level: str = "moderate"
     metric: str = "most_limited"
     node_ids: list[str] = []

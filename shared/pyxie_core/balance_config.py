@@ -17,6 +17,11 @@ STATE_KEY = "balance.auto_state"
 MODES = ("off", "recommend", "auto_approve")
 METRICS = ("most_limited", "memory", "cpu", "both")
 
+# How often automatic balancing looks at the cluster, in minutes. Every step divides a day, so the slots repeat identically each day.
+CHECK_EVERY = {"5m": 5, "15m": 15, "30m": 30, "1h": 60, "2h": 120, "4h": 240, "6h": 360, "8h": 480, "daily": 1440}
+DEFAULT_CHECK_EVERY = "5m"
+DEFAULT_CHECK_AT = "00:00"
+
 # One preset per aggressiveness level. Every number errs toward doing nothing.
 PRESETS: dict[str, dict] = {
     "conservative": {"trigger_score": 60, "min_benefit": 25.0, "max_moves": 2, "cluster_cooldown_hours": 6.0, "guest_cooldown_hours": 168.0},
@@ -28,6 +33,8 @@ DEFAULT_CONFIG = {
     "mode": "off", "level": "moderate", "metric": "most_limited",
     "node_ids": [],  # empty = every node in the cluster
     "windows": [],  # empty = any time; else [{"days": [0..6, Mon=0], "start": "HH:MM", "end": "HH:MM"}]
+    "check_every": DEFAULT_CHECK_EVERY,  # one of CHECK_EVERY
+    "check_at": DEFAULT_CHECK_AT,  # HH:MM in the server's timezone: the time of the daily check, or the time the repeating slots are counted from
     "paused_until": None,  # ISO timestamp
     "ack": None,  # who confirmed auto-approve, when, and (for Aggressive) the second confirmation; only kept while mode is auto_approve
 }
@@ -50,6 +57,8 @@ def get_config(db: Session, cluster_id) -> dict:
         cfg["metric"] = DEFAULT_CONFIG["metric"]
     if cfg["mode"] not in MODES:
         cfg["mode"] = "off"
+    if cfg["check_every"] not in CHECK_EVERY:
+        cfg["check_every"] = DEFAULT_CHECK_EVERY
     return cfg
 
 
@@ -65,6 +74,14 @@ def validate_config(cfg: dict) -> dict:
     if cfg.get("metric", "most_limited") not in METRICS:
         raise ConfigError("metric must be most_limited, memory, cpu or both")
     out["metric"] = cfg.get("metric", "most_limited")
+    if cfg.get("check_every", DEFAULT_CHECK_EVERY) not in CHECK_EVERY:
+        raise ConfigError("check_every must be one of " + ", ".join(CHECK_EVERY))
+    out["check_every"] = cfg.get("check_every", DEFAULT_CHECK_EVERY)
+    try:
+        datetime.strptime(cfg.get("check_at") or DEFAULT_CHECK_AT, "%H:%M")
+    except ValueError:
+        raise ConfigError("check_at must look like 02:00")
+    out["check_at"] = cfg.get("check_at") or DEFAULT_CHECK_AT
     ids = cfg.get("node_ids") or []
     if not isinstance(ids, list):
         raise ConfigError("node_ids must be a list")
@@ -251,6 +268,42 @@ def balance_score(nodes) -> float | None:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def latest_slot(local_now: datetime, every: str, at: str) -> datetime:
+    """The most recent scheduled check time at or before local_now. Slots are `at` plus whole steps of the interval, every day
+    (daily: just `at`). `at` is HH:MM in the same timezone as local_now."""
+    step = CHECK_EVERY.get(every, CHECK_EVERY[DEFAULT_CHECK_EVERY])
+    hh, mm = (int(x) for x in (at or DEFAULT_CHECK_AT).split(":"))
+    base = local_now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if base > local_now:
+        base -= timedelta(days=1)
+    elapsed = int((local_now - base).total_seconds() // 60)
+    return base + timedelta(minutes=(elapsed // step) * step)
+
+
+def next_slot(local_now: datetime, every: str, at: str) -> datetime:
+    step = CHECK_EVERY.get(every, CHECK_EVERY[DEFAULT_CHECK_EVERY])
+    return latest_slot(local_now, every, at) + timedelta(minutes=step)
+
+
+def check_due(local_now: datetime, last_checked: datetime | None, every: str, at: str) -> bool:
+    """Is a scheduled check owed? Yes when none has run since the latest slot (and always when there has never been one)."""
+    if last_checked is None:
+        return True
+    return last_checked < latest_slot(local_now, every, at)
+
+
+def cooldown_satisfied(local_now: datetime, last_run: datetime | None, cooldown_hours: float, every: str, at: str) -> bool:
+    """Has the cluster cooldown passed, counted in check slots so it lines up with the schedule? The cooldown is rounded UP to whole
+    slots (never shorter than the level's number), and measured from the slot the last plan belongs to, so jitter in when a check
+    ran inside its slot can never cost an extra slot. A cooldown shorter than the check interval is simply the next slot."""
+    if last_run is None:
+        return True
+    step = CHECK_EVERY.get(every, CHECK_EVERY[DEFAULT_CHECK_EVERY])
+    required = max(1, math.ceil(cooldown_hours * 60 / step - 1e-9))
+    passed = (latest_slot(local_now, every, at) - latest_slot(last_run.astimezone(local_now.tzinfo), every, at)) / timedelta(minutes=step)
+    return round(passed) >= required
 
 
 def hours_ago(ts: str | None, now: datetime) -> float | None:

@@ -350,8 +350,37 @@ def evaluate_findings(db: Session) -> dict:
     current.extend(_wrapper_findings(db))
     current.extend(_stale_inventory_findings(db))
     current.extend(_edge_findings(db))
+    current.extend(_node_metric_findings(db))
 
     return _reconcile(db, current)
+
+
+def _node_metric_findings(db: Session) -> list[dict]:
+    """An online node whose CPU or memory reads exactly 0% (or is missing) is not reporting properly: see node_sanity."""
+    from .node_sanity import node_problem
+
+    out: list[dict] = []
+    for n in db.query(Node).filter(Node.is_missing.is_(False)).all():
+        problem = node_problem(db, n)
+        if problem is None:
+            continue
+        out.append(
+            {
+                "dedupe_key": f"node.metrics_suspect:{n.id}",
+                "object_type": "node",
+                "object_id": n.id,
+                "category": "node",
+                "severity": "warning",
+                "title": f"Node {n.name} is {problem}",
+                "evidence": {
+                    "node": n.name, "cpu_pct": n.cpu_usage_pct, "mem_pct": n.mem_usage_pct,
+                    "fix": "A running Proxmox host always uses some memory and a little CPU, so this means PyXie is not getting real numbers for it. "
+                           "Check the node in Proxmox (is pvestatd running: systemctl status pvestatd?) and that the cluster still sees it. "
+                           "Balance Load will not plan moves while a node reads like this.",
+                },
+            }
+        )
+    return out
 
 
 def _edge_findings(db: Session) -> list[dict]:

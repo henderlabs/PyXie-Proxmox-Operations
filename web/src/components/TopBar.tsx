@@ -44,6 +44,30 @@ function useUpdateInfo(enabled: boolean, pathname: string): UpdateInfo | null {
   return info;
 }
 
+/** The current date and time in the viewer's own time zone, as two segments of the top bar's first row. Rendered after mount (the
+ * server has no idea of the viewer's zone, so rendering it there would mismatch), and refreshed every second. */
+function Clock() {
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const iv = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+  if (!now) return <span className="flex items-center px-3 w-[190px]" aria-hidden />;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const title = `${now.toLocaleString([], { dateStyle: "full", timeStyle: "long" })}\nYour browser's time zone (${zone}). Times in PyXie are shown in it.`;
+  return (
+    <>
+      <span className="flex items-center px-3 text-muted tabular-nums whitespace-nowrap" title={title}>
+        {now.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}
+      </span>
+      <span className="flex items-center px-3 text-text tabular-nums whitespace-nowrap w-[84px] justify-center" title={title}>
+        {now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}
+      </span>
+    </>
+  );
+}
+
 /** Top right of every page, on the same row as the page title: an update pill when one is waiting,
  * then one capsule holding which PyXie this is, who is signed in (with Sign out) and the theme switch.
  * Floats over the page (no row of its own), so nothing is pushed down when the update pill appears. */
@@ -81,13 +105,17 @@ export default function TopBar({ instance }: { instance: string }) {
           Update to v{info.latest}
         </Link>
       ) : null}
-      <div className="flex items-stretch h-8 rounded-lg border border-border bg-surface divide-x divide-border overflow-hidden shadow-sm">
+      <div className="flex flex-col rounded-lg border border-border bg-surface divide-y divide-border overflow-hidden shadow-sm">
+       <div className="flex items-stretch h-7 divide-x divide-border justify-end">
         <span className="flex items-center px-3 font-semibold tracking-wide text-text" title="Which PyXie this is">
           {instance}
         </span>
+        <Clock />
+       </div>
+       <div className="flex items-stretch h-7 divide-x divide-border justify-end">
         {me ? (
           <>
-            <Link href="/profile" className="flex items-center gap-1.5 px-3 text-muted hover:text-text" title={`${me.email} — edit profile`}>
+            <Link href="/profile" className="flex flex-1 items-center justify-start gap-1.5 px-3 text-muted hover:text-text" title={`${me.email} — edit profile`}>
               <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-accent/15 text-accent text-[10px] font-semibold uppercase">{name.charAt(0)}</span>
               {name}
             </Link>
@@ -101,6 +129,7 @@ export default function TopBar({ instance }: { instance: string }) {
         <div className="flex items-center px-1.5">
           <ThemeToggle bare />
         </div>
+       </div>
       </div>
     </div>
   );

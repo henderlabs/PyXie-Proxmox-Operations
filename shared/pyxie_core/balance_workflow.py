@@ -18,6 +18,8 @@ since acquire_lock() already treats a lock held by an ancestor operation
 as the same actor, not contention.
 """
 
+import uuid
+
 from sqlalchemy.orm import Session
 
 from .locks import LockContention, acquire_lock, release_locks_for_operation
@@ -45,6 +47,7 @@ from .placement import (
     recommend_destinations,
     recommend_storage_for_candidate,
 )
+from .pins import compute_pin_info, load_pin_rules, node_names
 from .recommendations import _placement_recommendations
 
 
@@ -94,14 +97,36 @@ def projected_memory_rows(nodes: list[dict], migrate_plan: list[dict]) -> list[d
     return out
 
 
+def summarize_refusals(blocked_moves: list[dict], left_alone: list[dict]) -> dict:
+    """What a check looked at and did not move, in a form small enough to keep in the check history."""
+    reasons: dict[str, int] = {}
+    for x in left_alone:
+        reasons[x.get("reason") or "left alone"] = reasons.get(x.get("reason") or "left alone", 0) + 1
+    top = sorted(blocked_moves, key=lambda b: -(b.get("improvement") or 0))[:5]
+    return {
+        "blocked_total": len(blocked_moves),
+        "blocked": [
+            {"name": b.get("name"), "from": b.get("source_node"), "to": b.get("blocked_node"), "why": (b.get("blocking_reasons") or [""])[0][:160],
+             "gain": b.get("improvement")} for b in top
+        ],
+        "left_alone_total": len(left_alone),
+        "left_alone": [{"reason": r, "count": c} for r, c in sorted(reasons.items(), key=lambda kv: -kv[1])[:6]],
+    }
+
+
 def dry_run_balance(
     db: Session, *, actor: str, node_ids: list | None = None, cluster_id=None, extra_context: dict | None = None,
     min_improvement: float | None = None, max_moves: int | None = None, skip_workload_ids: set | None = None,
     only_if_moves: bool = False, skip_reasons: dict | None = None, avoid_nodes: dict | None = None, load_pct_override: dict | None = None,
+    info_out: dict | None = None, only_workload_ids: set | None = None, rules_review=None,
 ) -> Operation | None:
     """The plan is built first and the operation created after, so an automatic run that finds nothing
     (only_if_moves) leaves no empty operation behind."""
     source_node_ids = set(node_ids) if node_ids else None
+    if rules_review is None and only_workload_ids is None:
+        # A Balance Load run always reviews the affinity rules and pins too: a rule that is not met is a reason to move a guest.
+        from .rule_review import review_rules
+        rules_review = review_rules(db, cluster_id)
     blocked_moves: list[dict] = []
     left_alone: list[dict] = []
     recs = _placement_recommendations(
@@ -109,18 +134,24 @@ def dry_run_balance(
         skip_reasons=skip_reasons, avoid_nodes=avoid_nodes, load_pct_override=load_pct_override,
         cluster_ids={cluster_id} if cluster_id else None, min_improvement=min_improvement,
         max_moves=max_moves, skip_workload_ids=skip_workload_ids,
+        only_workload_ids=only_workload_ids, fix_workload_ids={uuid.UUID(k) for k in rules_review.violators} if rules_review else None,
     )
 
     migrate_plan = []
+    pin_rules = load_pin_rules(db)
     for r in recs:
         wl = db.query(Workload).filter(Workload.id == r["object_id"]).one_or_none()
         if wl is None or wl.is_missing:
             continue
         ev = r["evidence"]
+        pin = compute_pin_info(pin_rules, wl)
+        pin_names = node_names(db, pin.soft_nodes)
         migrate_plan.append({
             "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
             "memory_bytes": wl.memory_bytes,
-            "pinned_node": wl.preferred_node.name if wl.preferred_node_id and wl.preferred_node else None,
+            "pinned_node": " / ".join(pin_names) if pin_names else None,
+            "pinned_nodes": pin_names, "pin_hard": pin.hard_nodes is not None,
+            "rule_fix": (rules_review.violators.get(str(wl.id)) if rules_review else None) if ev.get("rule_fix") else None,
             "source_node_id": str(wl.node_id), "source_node": ev["current_node"],
             "improvement": ev.get("improvement"),
             "destination_node_id": ev["suggested_node_id"], "destination_node": ev["suggested_node"],
@@ -137,6 +168,8 @@ def dry_run_balance(
             "transport": "live",
         })
 
+    if info_out is not None:
+        info_out.update(summarize_refusals(blocked_moves, left_alone))
     if only_if_moves and not migrate_plan:
         return None
     op = create_operation(
@@ -153,9 +186,11 @@ def dry_run_balance(
          if any(b.get("kind") == "no_gain" for b in blocked_moves) else
          "nothing scores meaningfully better elsewhere right now -- already balanced."]
     )
+    if rules_review is not None:
+        reasons.insert(0, rules_review.sentence() + (" Moves that fix a rule are marked on their line." if any(m.get("rule_fix") for m in migrate_plan) else ""))
     dry_run_result = {
         "node": None, "reasons": reasons, "eligible": True, "blocking_safety_rules": [],
-        "migrate_plan": migrate_plan,
+        "migrate_plan": migrate_plan, "rules_review": rules_review.summary() if rules_review else None,
         "blocked_moves": sorted(blocked_moves, key=lambda b: -b["improvement"])[:MAX_BLOCKED_SHOWN],
         "blocked_moves_total": len(blocked_moves),
         "left_alone": sorted(left_alone, key=lambda x: -(x.get("memory_bytes") or 0))[:MAX_BLOCKED_SHOWN * 2],
