@@ -98,7 +98,8 @@ function queuedItemsFor(op: Operation, allOps: Operation[]): QueuedItem[] {
 // How long a finished task stays in "Recent" before it falls off the panel
 // on its own -- still fully findable via Audit Log / the operations API,
 // just no longer cluttering the everyday view.
-const RECENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const RECENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const RECENT_LIMIT = 100; // the list scrolls: this is history you can read back, not just a glance
 
 // The standalone Migrations page retired 2026-09-11 -- live migrations
 // (Balance Load, the Workloads "Move" action, or anything else) now show
@@ -397,6 +398,96 @@ function Section({
   );
 }
 
+/** A Balance Load check (automatic or manual): system activity that leaves no operation behind when it finds nothing to do. */
+type CheckItem = {
+  id: string; at: string; first_at: string; repeat_count: number; cluster: string | null; trigger: "automatic" | "manual"; actor: string | null;
+  mode: string | null; result: string; reason: string | null; moves: number; balance_score: number | null; trigger_score: number | null;
+  details: { rules?: { affinity_rules: number; pin_rules: number; issues: string[] } } | null;
+};
+const CHECK_BADGE: Record<string, { label: string; cls: string }> = {
+  balanced: { label: "Balanced", cls: "bg-good/15 text-good" },
+  skipped: { label: "Skipped", cls: "bg-muted/15 text-muted" },
+  no_moves: { label: "No move", cls: "bg-accent/15 text-accent" },
+  plan_created: { label: "Plan ready", cls: "bg-warn/15 text-warn" },
+  plan_auto_approved: { label: "Auto-approved", cls: "bg-warn/15 text-warn" },
+  stopped: { label: "Stopped", cls: "bg-bad/15 text-bad" },
+  error: { label: "Error", cls: "bg-bad/15 text-bad" },
+};
+
+function checkSummary(c: CheckItem): string {
+  const rules = c.details?.rules;
+  const rulesText = rules ? (rules.issues.length === 0 ? "rules all met" : `${rules.issues.length} rule${rules.issues.length === 1 ? "" : "s"} not met`) : "";
+  switch (c.result) {
+    case "balanced": return `Cluster balanced${c.balance_score != null ? ` (score ${c.balance_score})` : ""}${rulesText ? `; ${rulesText}` : ""}`;
+    case "plan_created": return `Prepared a plan with ${c.moves} move${c.moves === 1 ? "" : "s"}${rulesText ? `; ${rulesText}` : ""}`;
+    case "plan_auto_approved": return `Approved and started ${c.moves} move${c.moves === 1 ? "" : "s"} on its own`;
+    case "no_moves": return c.reason ? c.reason.slice(0, 110) : "No move would improve things";
+    default: return (c.reason || c.result).slice(0, 110);
+  }
+}
+
+function CheckTaskRow({ c }: { c: CheckItem }) {
+  const b = CHECK_BADGE[c.result] ?? { label: c.result, cls: "bg-muted/15 text-muted" };
+  return (
+    <a href="/operations/balance#balance-history" className="block px-3 py-2 hover:bg-surface2/60 border-b border-border/60" title={new Date(c.at).toLocaleString()}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-text truncate">Balance Load check</span>
+        <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-semibold ${b.cls}`}>{b.label}</span>
+      </div>
+      <div className="text-[11px] text-muted mt-0.5 line-clamp-2">{c.cluster ? `${c.cluster}: ` : ""}{checkSummary(c)}</div>
+      <div className="flex items-center justify-between gap-2 mt-0.5">
+        <span className="text-[11px] text-muted truncate">
+          {c.trigger === "automatic" ? `automatic${c.mode === "auto_approve" ? " (auto-approve)" : ""}` : `by ${c.actor ?? "a person"}`}
+          {c.repeat_count > 1 ? ` · ×${c.repeat_count}` : ""}
+        </span>
+        <span className="text-[11px] text-muted shrink-0">{relativeTime(c.at)}</span>
+      </div>
+    </a>
+  );
+}
+
+/** Recent: finished tasks and Balance Load checks, newest first, in a scrolling list (tasks started by another task are nested under it). */
+function RecentSection({ ops, checks, onApproved, isAdmin }: { ops: Operation[]; checks: CheckItem[]; onApproved: () => void; isAdmin: boolean }) {
+  const ids = new Set(ops.map((o) => o.id));
+  const roots = ops.filter((o) => !o.parent_operation_id || !ids.has(o.parent_operation_id));
+  const childrenOf = new Map<string, Operation[]>();
+  for (const o of ops) {
+    if (o.parent_operation_id && ids.has(o.parent_operation_id)) childrenOf.set(o.parent_operation_id, [...(childrenOf.get(o.parent_operation_id) || []), o]);
+  }
+  const feed = [
+    ...roots.map((op) => ({ at: new Date(op.completed_at || op.updated_at).getTime(), op, check: null as CheckItem | null })),
+    ...checks.map((c) => ({ at: new Date(c.at).getTime(), op: null as Operation | null, check: c })),
+  ].sort((a, b) => b.at - a.at).slice(0, RECENT_LIMIT);
+  return (
+    <div className="mb-3 mt-5 pt-4 border-t border-border">
+      <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-proxmox flex items-center justify-between">
+        <span className="flex items-center gap-1.5">{SECTION_ICONS["Recent"]}Recent</span>
+        {feed.length > 0 && <span>{feed.length}</span>}
+      </div>
+      {feed.length === 0 ? (
+        <div className="px-3 py-2 text-xs text-muted italic">No recent activity.</div>
+      ) : (
+        <div className="max-h-[48vh] overflow-y-auto overscroll-contain">
+          {feed.map((f) =>
+            f.check ? (
+              <CheckTaskRow key={`c-${f.check.id}`} c={f.check} />
+            ) : (
+              <div key={f.op!.id}>
+                <TaskRow op={f.op!} onApproved={onApproved} isAdmin={isAdmin} />
+                {(childrenOf.get(f.op!.id) || []).length > 0 && (
+                  <div className="ml-3 border-l-2 border-proxmox/40">
+                    {(childrenOf.get(f.op!.id) || []).map((k) => <TaskRow key={k.id} op={k} onApproved={onApproved} isAdmin={isAdmin} />)}
+                  </div>
+                )}
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function TaskPanel({
   open,
   setOpen,
@@ -413,6 +504,7 @@ export default function TaskPanel({
 }) {
   const pathname = usePathname();
   const [operations, setOperations] = useState<Operation[]>([]);
+  const [checks, setChecks] = useState<CheckItem[]>([]);
   const me = useMe();
   const isAdmin = me?.is_admin === true;
 
@@ -420,6 +512,10 @@ export default function TaskPanel({
     fetch("/api/operations?limit=100")
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => Array.isArray(data) && setOperations(data))
+      .catch(() => {});
+    fetch("/api/auto-balance/history?limit=60")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && Array.isArray(d.items) && setChecks(d.items.filter((i: { kind: string }) => i.kind === "check")))
       .catch(() => {});
   }
 
@@ -451,7 +547,7 @@ export default function TaskPanel({
     .filter((o) => TERMINAL_STATUSES.has(o.status) && !o.dismissed)
     .filter((o) => new Date(o.completed_at || o.updated_at).getTime() >= recentCutoff)
     .sort((a, b) => new Date(b.completed_at || b.updated_at).getTime() - new Date(a.completed_at || a.updated_at).getTime())
-    .slice(0, 5);
+    .slice(0, RECENT_LIMIT);
 
   const queuedByParentId: Record<string, QueuedItem[]> = {};
   let queuedCount = 0;
@@ -545,12 +641,10 @@ export default function TaskPanel({
             />
           </div>
           <div className="mt-auto">
-            <Section
-              title="Recent"
+            <RecentSection
               ops={recent}
-              emptyText="No recent activity."
+              checks={checks.filter((c) => new Date(c.at).getTime() >= recentCutoff)}
               onApproved={refresh}
-              divider
               isAdmin={isAdmin}
             />
           </div>
