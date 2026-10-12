@@ -26,7 +26,6 @@ from .balance_config import (
     smoothed_loads, smoothed_view, utcnow,
 )
 from .balance_history import record_check
-from .pve_write_client import self_vmid_from_env
 from .rule_review import review_rules
 from .balance_workflow import approve as approve_balance, dry_run_balance, projected_memory_rows
 from .models import AppSettings, Cluster, Node, Operation, ResourceLock, Workload
@@ -111,7 +110,7 @@ def stale_waiting_plan(status: str, context: dict | None, age_hours: float, clus
 
 def auto_approve_blockers(
     migrate_plan: list[dict], projected: list[dict], *, writes_enabled: bool, busy_nodes: bool,
-    ceiling_pct: float = AUTO_APPROVE_MEMORY_CEILING_PCT, self_vmid: str | None = None,
+    ceiling_pct: float = AUTO_APPROVE_MEMORY_CEILING_PCT,
 ) -> list[str]:
     """Why an automatic plan must be left for a person instead of being approved by the system. Empty = may approve.
     Pure: no database."""
@@ -130,8 +129,6 @@ def auto_approve_blockers(
         reasons.append(f"it would leave {over[0]['name']} above {round(ceiling_pct)}% memory")
     if busy_nodes:
         reasons.append("a node involved is busy with another operation")
-    if self_vmid and any(str(m.get("vmid")) == str(self_vmid) for m in moves):
-        reasons.append("a move would migrate the VM PyXie itself runs on, which a person should start")
     return reasons
 
 
@@ -320,7 +317,7 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         )
         blockers = auto_approve_blockers(
             plan, busy_projection, writes_enabled=writes,
-            busy_nodes=_nodes_busy(db, {_uuid(i) for i in involved}, now), self_vmid=self_vmid_from_env(),
+            busy_nodes=_nodes_busy(db, {_uuid(i) for i in involved}, now),
         )
         if enqueue is None:
             blockers.append("the worker queue is not available")

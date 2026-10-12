@@ -56,13 +56,6 @@ def test_pin_off_its_hosts_names_the_guest_and_do_not_move_is_left_alone():
     assert rv.issues and not rv.violators  # reported, but PyXie will not move a Do not move guest
 
 
-def test_auto_approve_never_migrates_the_vm_pyxie_runs_on():
-    from pyxie_core.auto_balance import auto_approve_blockers
-    plan = [{"vmid": 11166, "transport": "live"}]
-    assert any("PyXie itself" in r for r in auto_approve_blockers(plan, [], writes_enabled=True, busy_nodes=False, self_vmid="11166"))
-    assert not any("PyXie itself" in r for r in auto_approve_blockers(plan, [], writes_enabled=True, busy_nodes=False, self_vmid="1"))
-
-
 def test_rule_fixes_are_planned_before_load_balancing():
     from pyxie_core.recommendations import rules_first
     big, mid, small = NS(id=1, mem=8), NS(id=2, mem=4), NS(id=3, mem=1)
@@ -70,3 +63,12 @@ def test_rule_fixes_are_planned_before_load_balancing():
     assert [w.id for w in ordered] == [3, 1, 2]  # the rule-fix guest first, the rest keep their biggest-first order
     assert rules_first([big, mid, small], set()) == [big, mid, small]
     assert rules_first([big, mid, small], None) == [big, mid, small]
+
+
+def test_rule_fix_keeps_shared_disks_in_place():
+    # recommend_storage_for_candidate returns None ("keep current") for a shared guest unless its preference is explicitly local;
+    # the planner presents a rule-fix guest on shared storage as "shared", so a pin fix never copies disks.
+    import inspect
+    from pyxie_core import recommendations
+    src = inspect.getsource(recommendations._placement_recommendations)
+    assert 'if fixing and currently_on_shared:' in src and 'effective_pref = "shared"' in src

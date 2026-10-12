@@ -486,6 +486,9 @@ def _placement_recommendations(
                 except Exception:
                     currently_on_shared = False
                     current_storage = None
+                if fixing and currently_on_shared:
+                    # A rule fix moves the guest, not its disks: a guest on shared storage stays on it, whatever its storage preference says.
+                    effective_pref = "shared"
                 storage_rec = recommend_storage_for_candidate(
                     db, best.node_id, currently_on_shared, storage_preference=effective_pref
                 )
