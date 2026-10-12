@@ -61,3 +61,12 @@ def test_auto_approve_never_migrates_the_vm_pyxie_runs_on():
     plan = [{"vmid": 11166, "transport": "live"}]
     assert any("PyXie itself" in r for r in auto_approve_blockers(plan, [], writes_enabled=True, busy_nodes=False, self_vmid="11166"))
     assert not any("PyXie itself" in r for r in auto_approve_blockers(plan, [], writes_enabled=True, busy_nodes=False, self_vmid="1"))
+
+
+def test_rule_fixes_are_planned_before_load_balancing():
+    from pyxie_core.recommendations import rules_first
+    big, mid, small = NS(id=1, mem=8), NS(id=2, mem=4), NS(id=3, mem=1)
+    ordered = rules_first([big, mid, small], {3})
+    assert [w.id for w in ordered] == [3, 1, 2]  # the rule-fix guest first, the rest keep their biggest-first order
+    assert rules_first([big, mid, small], set()) == [big, mid, small]
+    assert rules_first([big, mid, small], None) == [big, mid, small]

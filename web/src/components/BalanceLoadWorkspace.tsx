@@ -244,7 +244,7 @@ export default function BalanceLoadWorkspace({ nodes, workloads, pins = [], init
         <details className="mt-3">
           <summary className="text-xs text-accent cursor-pointer">How it works</summary>
           <p className="text-sm text-muted mt-2">
-            Balance Load first reviews the affinity rules and host pins against where every guest is now, then scores every running VM against every eligible node and proposes moves that make memory use more even. A guest that breaks a rule is moved to the best host that meets it, whatever the balance gain, and its plan line is marked as fixing a rule.
+            Balance Load first reviews the affinity rules and host pins against where every guest is now, then scores every running VM against every eligible node and proposes moves that make memory use more even. The rules come first: a guest that breaks one is moved to the best host that meets it, whatever the balance gain, before any load balancing is considered, and its plan line is marked as fixing a rule. The balancing moves are then worked out from where those fixes leave the guests.
             Each move is checked against affinity rules, memory headroom, CPU compatibility, HA and maintenance mode, then
             checked again at the moment it runs. Guests pinned to the host they are on, or marked Do not move, are left alone.
             A guest on shared storage stays on it; a guest on a host&apos;s own storage goes to the destination host&apos;s preferred storage.

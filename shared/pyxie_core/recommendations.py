@@ -251,6 +251,14 @@ def _rightsizing_recommendations(assessments: list[dict], capacity_reports: list
     return recs
 
 
+def rules_first(workloads: list, fix_ids) -> list:
+    """Guests that break an affinity rule or a pin come first (each group keeps its order, biggest first), so the rule fixes are planned
+    before any load balancing and the balancing pass then works from the loads those fixes leave behind."""
+    if not fix_ids:
+        return workloads
+    return sorted(workloads, key=lambda w: w.id not in fix_ids)  # stable: False (rule-fix guests) sorts before True
+
+
 def left_alone_reason(wl, pin_rules=None) -> str | None:
     """Why Balance Load never considers this guest: marked Do not move, or sitting on one of the hosts it is pinned to (Affinity Rules >
     Pinning, or the workload page). Balancing will not move a guest away from a pin; a soft pin still lets Maintenance move it, a hard pin does not."""
@@ -341,6 +349,9 @@ def _placement_recommendations(
                 .order_by(Workload.memory_bytes.desc().nullslast())  # biggest movers first -- they matter most to real balance
                 .all()
             )
+            # Phase 1 is the affinity rules and pins (guests that break one are planned first, using the move slots first), phase 2 the
+            # load balancing, which starts from where phase 1 leaves the guests.
+            workloads = rules_first(workloads, fix_workload_ids)
             for wl in workloads:
                 if max_moves is not None and len(recs) - cluster_recs_start >= max_moves:
                     break
