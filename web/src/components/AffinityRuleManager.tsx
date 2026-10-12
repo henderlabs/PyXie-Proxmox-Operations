@@ -19,7 +19,7 @@ type Rule = {
   created_by: string | null;
 };
 
-const EMPTY_FORM = { ruleType: "keep_apart", scopeType: "tag_group", workloadA: "", workloadB: "", tag: "", strict: true, description: "", color: "" };
+const EMPTY_FORM = { ruleType: "keep_apart", scopeType: "workload_pair", workloadA: "", workloadB: "", tag: "", strict: true, description: "", color: "" };
 
 export type AffinityRule = Rule;
 
@@ -139,15 +139,13 @@ export default function AffinityRuleManager({ rules, setRules, workloads, nodes 
             </select>
           </div>
           <div>
-            <label className="block text-xs text-muted mb-1">Scope</label>
-            <select
-              className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm"
-              value={form.scopeType}
-              onChange={(e) => setForm((f) => ({ ...f, scopeType: e.target.value }))}
-            >
-              <option value="tag_group">tag group</option>
-              <option value="workload_pair">workload pair</option>
-            </select>
+            <label className="block text-xs text-muted mb-1">Applies to</label>
+            <div className="inline-flex rounded border border-border overflow-hidden text-sm">
+              {([["workload_pair", "Two guests"], ["tag_group", "Every guest with a tag"]] as const).map(([id, label]) => (
+                <button key={id} type="button" onClick={() => setForm((f) => ({ ...f, scopeType: id }))}
+                  className={`px-3 py-1.5 ${form.scopeType === id ? "bg-accent/15 text-text" : "bg-surface2 text-muted hover:text-text"}`}>{label}</button>
+              ))}
+            </div>
           </div>
           {form.scopeType === "tag_group" ? (
             <div>
