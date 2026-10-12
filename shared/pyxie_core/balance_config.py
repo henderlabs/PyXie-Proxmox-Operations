@@ -294,6 +294,18 @@ def check_due(local_now: datetime, last_checked: datetime | None, every: str, at
     return last_checked < latest_slot(local_now, every, at)
 
 
+def cooldown_satisfied(local_now: datetime, last_run: datetime | None, cooldown_hours: float, every: str, at: str) -> bool:
+    """Has the cluster cooldown passed, counted in check slots so it lines up with the schedule? The cooldown is rounded UP to whole
+    slots (never shorter than the level's number), and measured from the slot the last plan belongs to, so jitter in when a check
+    ran inside its slot can never cost an extra slot. A cooldown shorter than the check interval is simply the next slot."""
+    if last_run is None:
+        return True
+    step = CHECK_EVERY.get(every, CHECK_EVERY[DEFAULT_CHECK_EVERY])
+    required = max(1, math.ceil(cooldown_hours * 60 / step - 1e-9))
+    passed = (latest_slot(local_now, every, at) - latest_slot(last_run.astimezone(local_now.tzinfo), every, at)) / timedelta(minutes=step)
+    return round(passed) >= required
+
+
 def hours_ago(ts: str | None, now: datetime) -> float | None:
     if not ts:
         return None

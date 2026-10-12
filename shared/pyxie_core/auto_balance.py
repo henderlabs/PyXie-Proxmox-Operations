@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, aliased
 
 from .audit import write_audit_event
 from .balance_config import (
-    MIN_HISTORY_HOURS, PRESETS, balance_score, check_due, get_config, get_state, hours_ago, in_window, resolve_metric, save_config, save_state,
+    MIN_HISTORY_HOURS, PRESETS, balance_score, check_due, cooldown_satisfied, get_config, get_state, hours_ago, in_window, resolve_metric, save_config, save_state,
     smoothed_loads, smoothed_view, utcnow,
 )
 from .balance_history import record_check
@@ -125,7 +125,10 @@ def auto_approve_blockers(
         reasons.append("a move is not a live migration")
     if any(m.get("destination_storage_id") for m in moves):
         reasons.append("a move also changes storage")
-    over = [p for p in projected if (p.get("after_pct") or 0) > ceiling_pct]
+    # Moves that only put guests where an affinity rule or pin says they belong are not held back by the memory ceiling: the rule is the
+    # operator's own instruction, and the planner already refuses any destination without real headroom.
+    all_rule_fixes = bool(moves) and all(m.get("rule_fix") for m in moves)
+    over = [] if all_rule_fixes else [p for p in projected if (p.get("after_pct") or 0) > ceiling_pct]
     if over:
         reasons.append(f"it would leave {over[0]['name']} above {round(ceiling_pct)}% memory")
     if busy_nodes:
@@ -235,14 +238,25 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         return _skip(db, cluster, state, now, "cluster is not quorate")
 
     # The cooldown runs from when the last auto-approved move FINISHED, so the next one always sees settled numbers.
+    # Only plans with a BALANCING move start the cooldown: a plan that just puts guests where an affinity rule or pin says they belong
+    # does not, and a pending rule fix is never held back by the cooldown (it then plans only the rule fixes).
     last = state.get("last_run_at")
-    if auto and state.get("auto_approved") and state.get("operation_id"):
-        prev = db.query(Operation).filter(Operation.id == state["operation_id"]).one_or_none()
-        if prev is not None and prev.completed_at is not None:
+    bop = state.get("balance_op_id")
+    if auto and bop:
+        prev = db.query(Operation).filter(Operation.id == bop).one_or_none()
+        if prev is not None and (prev.context or {}).get("auto_approved") and prev.completed_at is not None:
             last = prev.completed_at.isoformat()
-    since_run = hours_ago(last, now)
-    if since_run is not None and since_run < preset["cluster_cooldown_hours"]:
-        return _skip(db, cluster, state, now, "cooling down after the last automatic plan")
+    try:
+        last_dt = datetime.fromisoformat(last) if last else None
+    except ValueError:
+        last_dt = None
+    if last_dt is not None and last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    cooling = not cooldown_satisfied(local_now, last_dt, preset["cluster_cooldown_hours"], cfg["check_every"], cfg["check_at"])
+    if cooling:
+        pre = review_rules(db, cluster.id)
+        if not pre.violators:
+            return _skip(db, cluster, state, now, f"cooling down after the last automatic plan. {pre.sentence()}", details={"rules": pre.summary()})
 
     for op in _live_rebalance_ops(db):
         automatic = bool((op.context or {}).get("automatic"))
@@ -275,7 +289,7 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
     # Every check also reviews the affinity rules and host pins against where guests are now. A rule that is not met is a reason to
     # plan a move even when the cluster itself is balanced (then only the guests that rule names are considered).
     review = review_rules(db, cluster.id)
-    balanced = score >= preset["trigger_score"]
+    balanced = score >= preset["trigger_score"] or cooling  # while cooling down only rule fixes are planned, as when the cluster is balanced
     if balanced and review.ok:
         return _skip(
             db, cluster, state, now, f"balanced enough ({basis} {round(score)}, acts below {preset['trigger_score']}). {review.sentence()}",
@@ -286,6 +300,10 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
     node_ids = {n.id for n in nodes if str(n.id) in set(cfg["node_ids"])} or None
     skip_ids = _recently_moved(db, cluster.id, preset["guest_cooldown_hours"], now)
     skip_reasons = {wid: "recent" for wid in skip_ids}
+    for wid in list(skip_ids):  # the per-guest cooldown does not apply to a guest that has to move to meet a rule
+        if str(wid) in review.violators:
+            skip_ids.discard(wid)
+            skip_reasons.pop(wid, None)
     settled, avoid = flapping_guests(_move_history(db, cluster.id, now), now)
     for wid in settled:
         skip_ids.add(wid)
@@ -337,8 +355,10 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
             enqueue(op)
             approved = True
 
+    has_balance_move = any(not m.get("rule_fix") for m in plan)
     save_state(db, cluster.id, {
-        "last_run_at": now.isoformat(), "last_checked_at": now.isoformat(),
+        **({"balance_op_id": str(op.id)} if has_balance_move else {"balance_op_id": state.get("balance_op_id")}),
+        "last_run_at": now.isoformat() if has_balance_move else state.get("last_run_at"), "last_checked_at": now.isoformat(),
         "last_result": "plan_auto_approved" if approved else "plan_created",
         "last_reason": f"left for your approval: {left_for_review}" if left_for_review else None,
         "operation_id": str(op.id), "moves": moves, "balance_score": round(score), "metric": metric, "auto_approved": approved,

@@ -55,3 +55,28 @@ def test_every_choice_divides_a_day_and_validation_rejects_the_rest():
     for bad in ({"check_every": "7m"}, {"check_every": "daily", "check_at": "25:00"}, {"check_every": "daily", "check_at": "3am"}):
         with pytest.raises(ConfigError):
             validate_config({"mode": "off", **bad})
+
+
+def test_cooldown_is_counted_in_check_slots():
+    from pyxie_core.balance_config import cooldown_satisfied
+    # moderate = 2 h; five-minute checks: 24 slots, regardless of when inside its slot the last plan was made
+    last = t(10, 0).replace(second=40)
+    assert not cooldown_satisfied(t(11, 55), last, 2.0, "5m", "00:00")
+    assert cooldown_satisfied(t(12, 0), last, 2.0, "5m", "00:00")  # exactly 2 h of slots later, not one slot late
+    assert not cooldown_satisfied(t(11, 59), t(10, 0, ), 2.0, "5m", "00:00")
+    # hourly checks: 2 slots; a cooldown shorter than the interval is simply the next slot
+    assert not cooldown_satisfied(t(11, 0), t(10, 0), 2.0, "1h", "00:00") and cooldown_satisfied(t(12, 0), t(10, 0), 2.0, "1h", "00:00")
+    assert cooldown_satisfied(t(14, 0), t(10, 0), 2.0, "4h", "02:00") and not cooldown_satisfied(t(10, 30), t(10, 0), 2.0, "4h", "02:00")
+    # six hours on a 4-hour schedule rounds UP to two slots (8 h): never shorter than the level's number
+    assert not cooldown_satisfied(t(10, 0), t(6, 0), 6.0, "4h", "02:00") and cooldown_satisfied(t(14, 0), t(6, 0), 6.0, "4h", "02:00")
+    assert cooldown_satisfied(t(10, 0), None, 6.0, "1h", "00:00")
+
+
+def test_rule_fixes_skip_the_memory_ceiling_but_balancing_moves_do_not():
+    from pyxie_core.auto_balance import auto_approve_blockers
+    over = [{"name": "pve-a", "after_pct": 95}]
+    fix = [{"vmid": 1, "transport": "live", "rule_fix": ["pin to pve-a"]}]
+    bal = [{"vmid": 2, "transport": "live", "rule_fix": None}]
+    assert auto_approve_blockers(fix, over, writes_enabled=True, busy_nodes=False) == []
+    assert any("above" in r for r in auto_approve_blockers(bal, over, writes_enabled=True, busy_nodes=False))
+    assert any("above" in r for r in auto_approve_blockers(fix + bal, over, writes_enabled=True, busy_nodes=False))

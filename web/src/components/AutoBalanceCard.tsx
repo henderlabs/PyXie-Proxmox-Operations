@@ -163,7 +163,7 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
           <div className="mt-3 rounded border border-warn/50 bg-warn/10 px-3 py-3 text-sm text-text space-y-2">
             <div className="font-medium text-warn">Before you turn this on: PyXie will move running guests without asking you.</div>
             <ul className="list-disc pl-5 text-xs text-muted space-y-1">
-              <li>It live-migrates <span className="text-text">one guest at a time</span>. After each move finishes it waits at least {hours(preset.cluster_cooldown_hours)}, then plans the next move from fresh numbers. A guest it moved is left alone for {hours(preset.guest_cooldown_hours)}.</li>
+              <li>It live-migrates <span className="text-text">one guest at a time</span>. After each move finishes it waits at least {hours(preset.cluster_cooldown_hours)} (rounded up to whole check intervals, so it lines up with the schedule), then plans the next move from fresh numbers. Moves that only put a guest where an affinity rule or pin says it belongs ignore this cooldown. A guest it moved is left alone for {hours(preset.guest_cooldown_hours)}.</li>
               <li>It only acts when the <span className="text-text">busy-hours score</span> is below {preset.trigger_score}, and only for moves worth {preset.min_benefit}+ points. That score uses each node&apos;s busy level over the last 7 days, not the number right now, so a server that is only busy in business hours is never treated as idle at night. It waits for 24 hours of history on every node.</li>
               <li>A move must narrow the gap between the two hosts by at least 5 points. Moves that would only trade places (a guest from a busy host to a quiet one of the same size) are skipped.</li>
               <li>A guest is never moved back to a host it left in the last 3 days, and a guest that has already moved twice in a week is left alone, so nothing bounces between hosts.</li>
@@ -203,7 +203,7 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
                 className={`text-left rounded border px-3 py-2 ${cfg.level === l.id ? "border-accent bg-accent/10" : "border-border hover:bg-surface2/60"}`}>
                 <div className="text-sm font-medium text-text">{l.label}</div>
                 <div className="text-xs text-muted mt-0.5">
-                  Acts when balance score is below {p.trigger_score}. Only moves worth {p.min_benefit}+ points, {auto ? "one move at a time" : `up to ${p.max_moves} per plan`}, at most one plan every {hours(p.cluster_cooldown_hours)}; a moved guest is left alone for {hours(p.guest_cooldown_hours)}.
+                  Acts when balance score is below {p.trigger_score}. Only moves worth {p.min_benefit}+ points, {auto ? "one move at a time" : `up to ${p.max_moves} per plan`}, at most one balancing plan every {hours(p.cluster_cooldown_hours)} (rounded up to whole check intervals; affinity and pin fixes are exempt); a moved guest is left alone for {hours(p.guest_cooldown_hours)}.
                 </div>
               </button>
             );
