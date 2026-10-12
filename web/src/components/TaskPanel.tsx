@@ -128,7 +128,7 @@ function subjectFor(op: Operation): string {
   if (op.operation_type_id === "vm.live_migrate") {
     return r?.workload_name || (r?.vmid ? `vmid ${r.vmid}` : r?.node || "?");
   }
-  if (["workload.shutdown", "workload.start", "workload.force_stop", "workload.resize", "workload.network_vlan_change"].includes(op.operation_type_id)) {
+  if (["workload.shutdown", "workload.start", "workload.force_stop", "workload.resize", "workload.network_vlan_change", "workload.move_storage"].includes(op.operation_type_id)) {
     return r?.workload_name || (r?.vmid ? `vmid ${r.vmid}` : r?.node || "?");
   }
   if (op.operation_type_id === "cluster.rebalance") {
@@ -282,7 +282,7 @@ function TaskRow({ op, onApproved, isAdmin }: { op: Operation; onApproved: () =>
       {op.approver && op.approver !== op.initiated_by && (
         <div className="text-[11px] text-muted truncate mt-0.5">approved by {op.approver}</div>
       )}
-      {inFlight && op.operation_type_id === "vm.live_migrate" ? <MigrationBars op={op} /> : inFlight && <ProgressBar pct={op.progress?.pct ?? null} />}
+      {inFlight && (op.operation_type_id === "vm.live_migrate" || op.operation_type_id === "workload.move_storage") ? <MigrationBars op={op} /> : inFlight && <ProgressBar pct={op.progress?.pct ?? null} />}
       {op.status === "failed" && op.error && <div className="text-[11px] text-bad mt-1">{op.error}</div>}
       {op.status === "awaiting_approval" && isAdmin && (
         <div className="mt-1.5 flex items-center gap-2">

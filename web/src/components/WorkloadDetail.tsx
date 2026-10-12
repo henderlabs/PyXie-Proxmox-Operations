@@ -10,6 +10,7 @@ import { Meter } from "@/components/Gauges";
 import MetricChart from "@/components/MetricChart";
 import WorkloadLifecycleButtons from "@/components/WorkloadLifecycleButtons";
 import MigrateWorkloadAction from "@/components/MigrateWorkloadAction";
+import ChangeStorageAction from "@/components/ChangeStorageAction";
 import ConsoleViewer, { useConsoleInfo } from "@/components/ConsoleViewer";
 import { DoNotMoveToggle, PreferredHostSelect, ProfileSelect, StoragePreferenceSelect } from "@/components/ProfileSelect";
 import { formatBytes, formatUptime, formatRelativeTime } from "@/lib/format";
@@ -472,7 +473,10 @@ export default function WorkloadDetail({
             disabledReason={w.is_missing ? "Not currently visible to PVE" : "Guest lifecycle actions are only implemented for VMs, not containers"}
           />
           {!lxc && !w.is_missing && (
-            <MigrateWorkloadAction workloadId={w.id} workloadName={name} clusterId={w.cluster_id} currentNodeId={w.node_id} nodes={nodes} storage={storage} />
+            <>
+              <MigrateWorkloadAction workloadId={w.id} workloadName={name} clusterId={w.cluster_id} currentNodeId={w.node_id} nodes={nodes} storage={storage} />
+              <ChangeStorageAction workloadId={w.id} workloadName={name} nodeId={w.node_id} clusterId={w.cluster_id} nodes={nodes} storage={storage} />
+            </>
           )}
           <Link href={`/operations/maintenance?workload=${w.id}`} className="px-2.5 py-1 rounded border border-border text-sm text-muted hover:text-text">
             Maintenance

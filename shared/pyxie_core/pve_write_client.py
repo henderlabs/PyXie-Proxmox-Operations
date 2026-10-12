@@ -183,7 +183,7 @@ def parse_migration_progress(log_lines: list[dict]) -> Optional[dict]:
 #   "mirror-scsi0: transferred 10.5 GiB of 100.0 GiB (10.48%) in 1m"            (one line per drive, repeated)
 #   "mirror-scsi0: transferred 100.0 GiB of 100.0 GiB (100.00%) in 9m 19s, ready"
 #   "migration active, transferred 94.8 MiB of 10.0 GiB VM-state, 106.6 MiB/s"
-_MIRROR_RE = re.compile(r"^(mirror-\S+?): transferred ([\d.]+) ([KMGT]?i?B) of ([\d.]+) ([KMGT]?i?B) \(([\d.]+)%\) in ((?:\d+h )?(?:\d+m )?\d+s|\d+m)")
+_MIRROR_RE = re.compile(r"^((?:mirror|drive)-\S+?): transferred ([\d.]+) ([KMGT]?i?B) of ([\d.]+) ([KMGT]?i?B) \(([\d.]+)%\) in ((?:\d+h )?(?:\d+m )?\d+s|\d+m)")
 
 
 def _elapsed_seconds(text: str) -> int:
@@ -404,6 +404,13 @@ class PveMaintenanceClient:
             "POST", f"/nodes/{node}/qemu/{vmid}/status/reboot",
             data={"timeout": timeout},
         )
+
+    def move_disk(self, node: str, vmid: int, disk: str, storage: str, *, delete_source: bool = True) -> str:
+        """POST /nodes/{node}/qemu/{vmid}/move_disk -> UPID. Copies one disk to `storage` while the guest keeps running; with
+        delete_source the old copy is removed by Proxmox only after the copy finished successfully."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("move a disk"))
+        return self._request("POST", f"/nodes/{node}/qemu/{vmid}/move_disk", data={"disk": disk, "storage": storage, "delete": 1 if delete_source else 0})
 
     def start_vm(self, node: str, vmid: int) -> str:
         """POST /nodes/{node}/qemu/{vmid}/status/start."""

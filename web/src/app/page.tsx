@@ -5,6 +5,8 @@ import { Card, CardTitle, PageHeader } from "@/components/Card";
 import StatusBadge from "@/components/StatusBadge";
 import RebootBanner from "@/components/RebootBanner";
 import QuickStartBanner from "@/components/QuickStartBanner";
+import AutoBalanceBanner from "@/components/AutoBalanceBanner";
+import type { AutoBalanceView } from "@/components/AutoBalanceCard";
 import DashboardNodesList from "@/components/DashboardNodesList";
 import { HalfGauge } from "@/components/HalfGauge";
 import { BalanceGauge, NodeBalanceStrip } from "@/components/ClusterBalance";
@@ -17,12 +19,13 @@ export default async function DashboardPage() {
   // (1-3+ seconds each, measured 2026-09-12), blocking the entire
   // Dashboard on it. Isolated into its own client component instead, same
   // fix already applied to Nodes/Maintenance.
-  const [summary, findings, activity, recommendations, protectionResults] = await Promise.all([
+  const [summary, findings, activity, recommendations, protectionResults, autoBalance] = await Promise.all([
     apiFetch<DashboardSummary>("/api/dashboard/summary"),
     apiFetch<Finding[]>("/api/findings?active=true"),
     apiFetch<AuditEvent[]>("/api/audit-events?limit=8"),
     apiFetch<Recommendation[]>("/api/recommendations"),
     apiFetch<ProtectionResultRow[]>("/api/protection/results"),
+    apiFetch<AutoBalanceView[]>("/api/auto-balance").catch(() => [] as AutoBalanceView[]),
   ]);
 
   const wrapperFindings = findings.filter((f) => f.category === "host_wrapper" && f.triage !== "dismissed");
@@ -82,6 +85,7 @@ export default async function DashboardPage() {
             </div>
           </Card>
         )}
+        <AutoBalanceBanner clusters={autoBalance} />
         <RebootBanner nodes={summary.nodes_detail.map((n) => ({ id: n.id, name: n.name }))} />
       </div>
 

@@ -149,6 +149,9 @@ def execute_operation_job(operation_id: str):
         elif op.operation_type_id == "workload.resize":
             from pyxie_core.resize_workflow import execute_resize
             result = execute_resize(db, operation_id)
+        elif op.operation_type_id == "workload.move_storage":
+            from pyxie_core.storage_move_workflow import execute_storage_move
+            result = execute_storage_move(db, operation_id)
         elif op.operation_type_id == "host.reboot":
             from pyxie_core.reboot_workflow import execute_reboot
             result = execute_reboot(db, operation_id)
@@ -202,6 +205,7 @@ def resume_inflight_operations():
         "workload.start": 300,
         "workload.force_stop": 300,
         "workload.reboot": 600,
+        "workload.move_storage": 21600,
         "host.reboot": 1800,
         "host.update": 3900,
         "maintenance.run": 21600,

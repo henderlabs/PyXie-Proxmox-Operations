@@ -322,6 +322,7 @@ _JOB_TIMEOUT_BY_TYPE = {
     "workload.start": 300,
     "workload.force_stop": 300,
     "workload.reboot": 600,
+    "workload.move_storage": 21600,  # 6h: one Proxmox disk move per disk, each with its own size-based limit
     "workload.resize": 600,  # shutdown + config PUT + start, generous margin over each's own wait_for_task timeout
     "host.reboot": 1800,
     "host.update": 3900,  # comfortably above host_maintenance_client's 3600s apply() timeout
@@ -346,6 +347,9 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "workload.resize":
         from pyxie_core.resize_workflow import approve as approve_resize
         return approve_resize(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.move_storage":
+        from pyxie_core.storage_move_workflow import approve as approve_storage_move
+        return approve_storage_move(db, op, approved_by=actor)
     if op.operation_type_id == "host.reboot":
         from pyxie_core.reboot_workflow import approve as approve_reboot
         return approve_reboot(db, op, approved_by=actor)
@@ -905,6 +909,24 @@ class ResizeRequest(BaseModel):
     workload_id: uuid.UUID
     new_cores: int
     new_memory_mb: int
+
+
+class StorageMoveRequest(BaseModel):
+    workload_id: uuid.UUID
+    target_storage: str
+
+
+@router.post("/workload-storage-moves/dry-run", dependencies=[Depends(require_admin)])
+def create_storage_move_dry_run(payload: StorageMoveRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.storage_move_workflow import StorageMoveError, dry_run_storage_move
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_storage_move(db, workload, target_storage=payload.target_storage, actor=user.email)
+    except StorageMoveError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
 
 
 @router.post("/workload-resizes/dry-run", dependencies=[Depends(require_admin)])

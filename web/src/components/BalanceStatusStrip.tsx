@@ -3,13 +3,13 @@
 import { Card } from "@/components/Card";
 import { scheduleText, type AutoBalanceView } from "@/components/AutoBalanceCard";
 
-function ago(iso?: string) {
+export function ago(iso?: string) {
   if (!iso) return "not yet";
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
   return m < 1 ? "just now" : m < 90 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
 
-function lastCheck(v: AutoBalanceView): string {
+export function lastCheck(v: AutoBalanceView): string {
   const s = v.state;
   if (!s.last_checked_at) return "no check has run yet";
   const when = ago(s.last_checked_at);

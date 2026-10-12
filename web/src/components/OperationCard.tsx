@@ -104,6 +104,7 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "node.exit_maintenance": "Exit Maintenance Mode",
   "cluster.rebalance": "Balance Load",
   "workload.network_vlan_change": "Network VLAN Change",
+  "workload.move_storage": "Change Storage",
 };
 
 /** Bulk Migrate is a cluster.rebalance whose plan was built from ticked VMs
@@ -116,6 +117,9 @@ export function operationTypeLabel(op: { operation_type_id: string; context?: Re
 
 function operationSummary(op: Operation): string {
   const r = op.dry_run_result;
+  if (op.operation_type_id === "workload.move_storage") {
+    return `${r?.workload_name || `vmid ${r?.vmid}`} — disks → ${r?.target_storage}`;
+  }
   if (op.operation_type_id === "vm.live_migrate") {
     const storagePart = r?.target_storage
       ? ` · storage → ${r.target_storage}`
@@ -633,7 +637,7 @@ export default function OperationCard({
 
       {op.status === "monitoring" && (
         <div className="mb-3">
-          {op.operation_type_id === "vm.live_migrate" ? (
+          {op.operation_type_id === "vm.live_migrate" || op.operation_type_id === "workload.move_storage" ? (
             <MigrationBars op={op} />
           ) : progress && progress.pct != null ? (
             <>
