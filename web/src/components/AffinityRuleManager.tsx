@@ -118,7 +118,10 @@ export default function AffinityRuleManager({ rules, setRules, workloads, nodes 
   }
 
   return (
-    <>
+    <div className="space-y-4">
+      <p className="text-sm text-muted">
+        <span className="text-text">Affinity rules</span> control which guests share a node. A <span className="text-text">keep apart</span> rule stops guests from sharing a node (for example two domain controllers, so one host failing can&apos;t take both). A <span className="text-text">keep together</span> rule keeps guests on one node (for example an app and its cache). A <span className="text-text">hard</span> rule is a block; a soft one is only a scoring preference. Rules can name two guests or every guest with a tag.
+      </p>
       {isAdmin && (
       <div ref={formRef}>
       <Card className="mb-4">
@@ -294,6 +297,6 @@ export default function AffinityRuleManager({ rules, setRules, workloads, nodes 
           </div>
         )}
       </Card>
-    </>
+    </div>
   );
 }

@@ -13,10 +13,6 @@ export default function AffinityPinWorkspace({ initialRules, initialPins, worklo
   const [pins, setPins] = useState(initialPins);
   return (
     <>
-      <p className="text-sm text-muted mb-4 max-w-4xl">
-        <span className="text-text">Affinity rules</span> stop guests from sharing a node (<span className="text-text">keep apart</span>, for example two domain controllers) or keep them on one node (<span className="text-text">keep together</span>, for example an app and its cache).{" "}
-        <span className="text-text">Pins</span> tie a guest to the hosts it belongs on. Below: where every guest sits today, then the rules on the left and the pins on the right, each with its current status.
-      </p>
       <AffinityPlacement rules={rules} pins={pins} workloads={workloads} nodes={nodes} />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
         <div className="min-w-0">
