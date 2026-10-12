@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardTitle } from "@/components/Card";
 
-type NodeSnap = { name: string; status: string; maintenance: boolean; mem_pct: number | null; cpu_pct: number | null };
+type NodeSnap = { name: string; status: string; maintenance: boolean; mem_pct: number | null; cpu_pct: number | null; problem?: string | null };
 type Refusals = {
   blocked_total?: number; blocked?: { name: string; from: string; to: string; why: string; gain?: number | null }[];
   left_alone_total?: number; left_alone?: { reason: string; count: number }[];
@@ -69,7 +69,7 @@ function summary(c: Check): string {
 function CheckRow({ c }: { c: Check }) {
   const r = RESULT[c.result] ?? { label: c.result, cls: "bg-muted/15 text-muted" };
   const d = c.details;
-  const hasDetail = !!(d && ((d.rules && d.rules.issues.length) || (d.nodes && d.nodes.length) || (d.plan && d.plan.length) || d.refusals?.blocked_total || d.refusals?.left_alone_total));
+  const hasDetail = !!(d && (d.rules || (d.nodes && d.nodes.length) || (d.nodes && d.nodes.length) || (d.plan && d.plan.length) || d.refusals?.blocked_total || d.refusals?.left_alone_total));
   return (
     <li className="py-2.5">
       <div className="flex items-start gap-3">
@@ -85,20 +85,27 @@ function CheckRow({ c }: { c: Check }) {
             <details className="mt-1.5">
               <summary className="text-xs text-accent cursor-pointer">What it looked at</summary>
               <div className="mt-1.5 space-y-2 text-xs text-muted">
-                {d?.rules && d.rules.issues.length > 0 && (
-                  <div><span className="text-text">Rules not met: </span>{d.rules.issues.join("; ")}</div>
+                {d?.rules && (
+                  <div>
+                    <span className="text-text">Affinity rules and pins: </span>
+                    {d.rules.affinity_rules} affinity rule{d.rules.affinity_rules === 1 ? "" : "s"} and {d.rules.pin_rules} pin{d.rules.pin_rules === 1 ? "" : "s"} reviewed
+                    {d.rules.issues.length === 0 ? ": all met." : `: ${d.rules.issues.length} not met (${d.rules.issues.join("; ")}).`}
+                  </div>
                 )}
                 {d?.nodes && d.nodes.length > 0 && (
                   <table className="text-xs">
                     <thead><tr className="text-left"><th className="pr-4 font-medium">Node</th><th className="pr-4 font-medium">Memory</th><th className="pr-4 font-medium">CPU</th><th className="font-medium">State</th></tr></thead>
                     <tbody>
                       {d.nodes.map((n) => (
-                        <tr key={n.name}><td className="pr-4 text-text">{n.name}</td><td className="pr-4 tabular-nums">{n.mem_pct ?? "—"}%</td><td className="pr-4 tabular-nums">{n.cpu_pct ?? "—"}%</td>
-                          <td>{n.maintenance ? "maintenance" : n.status}</td></tr>
+                        <tr key={n.name} className={n.problem ? "text-warn" : ""}><td className="pr-4 text-text">{n.name}</td><td className="pr-4 tabular-nums">{n.mem_pct ?? "—"}%</td><td className="pr-4 tabular-nums">{n.cpu_pct ?? "—"}%</td>
+                          <td>{n.maintenance ? "maintenance" : n.status}{n.problem ? " ⚠" : ""}</td></tr>
                       ))}
                     </tbody>
                   </table>
                 )}
+                {d?.nodes?.filter((n) => n.problem).map((n) => (
+                  <div key={`p-${n.name}`} className="text-warn">⚠ {n.name} is {n.problem}: PyXie may not be receiving real numbers for it. Check the node in Proxmox. Balance Load will not plan moves until it reads normally.</div>
+                ))}
                 {d?.plan && d.plan.length > 0 && (
                   <div><span className="text-text">Planned: </span>{d.plan.map((m) => `${m.name} ${m.from} → ${m.to}${m.storage ? ` (disks on ${m.storage})` : ""}${m.rule_fix?.length ? ` [fixes ${m.rule_fix.join(", ")}]` : ""}`).join("; ")}</div>
                 )}

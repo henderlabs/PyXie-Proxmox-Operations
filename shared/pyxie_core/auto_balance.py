@@ -26,6 +26,7 @@ from .balance_config import (
     smoothed_loads, smoothed_view, utcnow,
 )
 from .balance_history import record_check
+from .node_sanity import suspect_nodes
 from .rule_review import review_rules
 from .balance_workflow import approve as approve_balance, dry_run_balance, projected_memory_rows
 from .models import AppSettings, Cluster, Node, Operation, ResourceLock, Workload
@@ -255,6 +256,12 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         return _skip(db, cluster, state, now, "a Balance Load plan is already waiting or running")
 
     nodes = db.query(Node).filter(Node.cluster_id == cluster.id, Node.is_missing.is_(False)).all()
+    suspects = suspect_nodes(db, [n for n in nodes if n.status == "online" and not n.maintenance_mode])
+    if suspects:
+        return _skip(
+            db, cluster, state, now,
+            "not checked: " + "; ".join(f"{s['name']} is {s['problem']}" for s in suspects[:2]) + ". Check the node before balancing on its numbers",
+        )
     # Judge by each node's busy level over the last week, not by right now, so a server that is only busy in business
     # hours never looks idle at night. Without enough history auto-approve waits; recommend falls back to live numbers.
     loads, enough = smoothed_loads(db, nodes, now)

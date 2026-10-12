@@ -10,6 +10,7 @@ from datetime import timedelta
 from sqlalchemy.orm import Session
 
 from .models import BalanceCheck, Node
+from .node_sanity import node_problem
 from .balance_config import utcnow
 
 log = logging.getLogger(__name__)
@@ -28,7 +29,8 @@ def node_snapshot(db: Session, cluster_id) -> list[dict]:
     for n in db.query(Node).filter(Node.cluster_id == cluster_id, Node.is_missing.is_(False)).order_by(Node.name).all():
         out.append({
             "name": n.name, "status": n.status, "maintenance": bool(n.maintenance_mode),
-            "mem_pct": None if n.mem_usage_pct is None else round(n.mem_usage_pct), "cpu_pct": None if n.cpu_usage_pct is None else round(n.cpu_usage_pct),
+            "mem_pct": None if n.mem_usage_pct is None else round(n.mem_usage_pct, 1), "cpu_pct": None if n.cpu_usage_pct is None else round(n.cpu_usage_pct, 1),
+            "problem": node_problem(db, n),
         })
     return out
 
@@ -50,6 +52,9 @@ def record_check(
             if last is not None and last.reason_key == key and last.mode == mode and last.level == level:
                 merged = last
         snapshot = {**(details or {})}
+        if "rules" not in snapshot:
+            from .rule_review import review_rules  # every check records what the affinity rules and pins looked like, whatever it decided
+            snapshot["rules"] = review_rules(db, cluster_id).summary()
         if "nodes" not in snapshot:
             snapshot["nodes"] = node_snapshot(db, cluster_id)
         if merged is not None:
