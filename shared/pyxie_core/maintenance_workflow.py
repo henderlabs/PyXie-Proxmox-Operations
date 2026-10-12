@@ -37,7 +37,7 @@ from .migration_workflow import (
     dry_run_migration,
     execute_migration,
 )
-from .models import Cluster, Node, Operation, PveTarget, Workload, now_utc
+from .models import Cluster, Node, Operation, PveTarget, Storage, Workload, now_utc
 from .labels import child_reason, vm_label
 from .operations_engine import (
     TERMINAL_STATUSES,
@@ -437,7 +437,6 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
                     completed_migrations.append(item["workload_id"])
                     save_progress()
                     continue
-                from .models import Storage
                 destination_storage = db.query(Storage).filter(Storage.id == item["destination_storage_id"]).one_or_none() if item.get("destination_storage_id") else None
                 try:
                     child = dry_run_migration(
@@ -550,7 +549,6 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
                 if destination_node is None:
                     release_locks_for_operation(db, op.id)
                     return fail_operation(db, op, error=f"destination node for stopped {vm_label(item)} disappeared from inventory")
-                from .models import Storage
                 destination_storage = db.query(Storage).filter(Storage.id == item["destination_storage_id"]).one_or_none() if item.get("destination_storage_id") else None
 
                 existing_child = (
