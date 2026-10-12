@@ -133,12 +133,9 @@ export default function AffinityPlacement({ rules, workloads, nodes, pins = [] }
   const pinBroken = new Set<string>();
   const pinUnmet = new Set<string>();
   for (const x of pinInfo) if (x.problem) for (const m of x.members.filter((m) => !x.pin.node_ids.includes(m.node_id))) (x.pin.strict ? pinBroken : pinUnmet).add(m.id);
-  const pinViolations = pinInfo.filter((x) => x.problem);
 
   const live = workloads.filter((w) => !(w as Workload & { is_missing?: boolean }).is_missing);
   const others = live.filter((w) => !rulesOf.has(w.id) && !pinsOfGuest.has(w.id));
-  const violations = info.filter((x) => x.problem);
-  const anyHard = violations.some((x) => x.rule.strict) || pinViolations.some((x) => x.pin.strict);
 
   function chip(w: Workload) {
     const rs = rulesOf.get(w.id) || [];
@@ -165,21 +162,6 @@ export default function AffinityPlacement({ rules, workloads, nodes, pins = [] }
   return (
     <Card className="mb-4">
       <CardTitle>Where the guests sit now</CardTitle>
-      {(violations.length > 0 || pinViolations.length > 0) && (
-        <div className={`mb-3 rounded border px-3 py-2 text-sm ${anyHard ? "border-bad/40 bg-bad/10 text-bad" : "border-warn/40 bg-warn/10 text-warn"}`}>
-          {violations.map((x) => (
-            <div key={x.rule.id}>
-              {ruleSentence(x.rule, byId)}, but {x.problem}.
-            </div>
-          ))}
-          {pinViolations.map((x) => (
-            <div key={x.pin.id}>
-              {pinSentence(x.pin, byId, nodes)}, but {x.problem}{x.pin.strict ? "" : " (a soft pin: maintenance or a manual move can leave a guest elsewhere)"}.
-            </div>
-          ))}
-          <div className="text-xs text-muted mt-1">PyXie never moves a guest on its own to fix this. Rules are checked on every new move.</div>
-        </div>
-      )}
       <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(Math.max(sortedNodes.length, 1), 4)}, minmax(0, 1fr))` }}>
         {sortedNodes.map((n) => {
           const here = live.filter((w) => w.node_id === n.id);
@@ -213,7 +195,7 @@ export default function AffinityPlacement({ rules, workloads, nodes, pins = [] }
         </button>
       )}
       <p className="text-xs text-muted mt-3">
-        Each solid colored chip belongs to the affinity rule with the same color swatch (left, below). A chip with a dashed outline and a pin mark is pinned to host(s): the small dashed squares in a host&apos;s header are the pins that name it, and each matches the swatch of its pin (right, below). A square dot on a chip means more than one pin; grey guests have no rule; a small dot means a guest is in more than one rule; a red <span className="text-bad">!</span> means its rule is broken right now (an amber <span className="text-warn">!</span> means a soft preference is not met). Click a guest to open it. Migrations, evacuations and Balance Load check these rules first, and again against live state when each move runs.
+        Each solid colored chip belongs to the affinity rule with the same color swatch (left, below). A chip with a dashed outline and a pin mark is pinned to host(s): the small dashed squares in a host&apos;s header are the pins that name it, and each matches the swatch of its pin (right, below). A square dot on a chip means more than one pin; grey guests have no rule; a small dot means a guest is in more than one rule; a red <span className="text-bad">!</span> means its rule is broken right now (an amber <span className="text-warn">!</span> means a soft preference is not met). Click a guest to open it. Balance Load reviews these rules and pins first on every run and plans the moves that fix any that are not met; migrations and evacuations check them too, and again against live state when each move runs.
       </p>
     </Card>
   );

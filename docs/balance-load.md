@@ -27,7 +27,7 @@ than the node it came from. The refused list says why (for example "it would lea
 
 Operations > **Affinity & Pinning**: keep-apart and keep-together rules for guest pairs or for every guest carrying a tag, with the current status of each
 (Holding, Broken, Not met, Nothing to check). Guests are shown as coloured pills that link to the guest; a **hard** rule that is broken is red, a **soft**
-preference that is not met is amber. PyXie never moves a guest by itself to fix a rule; it checks the rules on every new move.
+preference that is not met is amber. Balance Load reviews the rules on every run and plans the moves that fix any that are not met, before it balances load (a person approves the plan unless automatic approval is on); the rules are also checked on every new move.
 
 ## Pinned host and Do not move
 
@@ -95,7 +95,7 @@ The Affinity Rules page is now **Affinity & Pinning**: *Where the guests sit now
 
 A **pin** ties one guest, or every guest carrying a tag, to **one or more hosts**:
 - **Soft pin (default).** Those hosts are preferred. Balance Load and automatic balancing leave a guest that is on one of them alone, and placement adds a strong bonus for each of them when it picks a host (a guest pinned to st-pve101 or st-pve103 is happy on either). Maintenance and evacuation may still move it, so a soft pin never blocks a maintenance run.
-- **Hard pin.** Only those hosts are allowed, maintenance included: every other host is refused as a destination ("hard pin: this guest may only run on ..."), so a maintenance plan that cannot honor it says so instead of moving the guest. Several hard pins on one guest combine to the hosts they all allow. A guest already outside a hard pin is shown as broken; PyXie never moves a guest on its own to fix it.
+- **Hard pin.** Only those hosts are allowed, maintenance included: every other host is refused as a destination ("hard pin: this guest may only run on ..."), so a maintenance plan that cannot honor it says so instead of moving the guest. Several hard pins on one guest combine to the hosts they all allow. A guest already outside a hard pin is shown as broken; Balance Load plans the move that puts it back (see "Rules are reviewed first" below).
 
 In *Where the guests sit now* a pinned guest has a **dashed outline and a pin mark** in its pin's color (affinity members keep their solid fill), and each host box shows small dashed squares for the pins that name it. Pins have their own color set, deliberately different from the affinity colors; pick a swatch or any color when creating or editing a pin. Status per pin: Holding, Elsewhere (a soft pin whose guest is not on a pinned host), Broken (a hard pin), or Nothing to check.
 
