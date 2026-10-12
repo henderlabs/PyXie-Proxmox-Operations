@@ -18,8 +18,11 @@ def test_normal_and_very_low_readings_are_fine():
     assert live_problem(node(0.4, 13.2)) is None  # a quiet host can read well under 1%; only an exact 0 is suspicious
 
 
-def test_exact_zero_or_missing_on_an_online_node_is_flagged():
-    assert "CPU reads exactly 0%" in live_problem(node(0.0, 13.2))
+def test_a_single_zero_cpu_reading_is_a_proxmox_glitch_not_a_problem():
+    assert live_problem(node(0.0, 13.2)) is None  # persistence is judged from the stored history (node_problem), not one live poll
+
+
+def test_exact_zero_memory_or_missing_on_an_online_node_is_flagged():
     assert "memory reads exactly 0%" in live_problem(node(5.0, 0.0))
     assert "no CPU or memory reading" in live_problem(node(None, 13.2))
     assert "no CPU or memory reading" in live_problem(node(5.0, None))

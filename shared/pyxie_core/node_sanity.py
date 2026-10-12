@@ -18,8 +18,9 @@ def live_problem(node) -> str | None:
         return "online but reporting no CPU or memory reading"
     if float(node.mem_usage_pct) == 0.0:
         return "online but its memory reads exactly 0%"
-    if float(node.cpu_usage_pct) == 0.0:
-        return "online but its CPU reads exactly 0%"
+    # An exact 0% CPU in a single live reading is NOT proof: Proxmox's status report occasionally returns 0 for a busy host for one poll
+    # (seen live: st-pve104 flickering 0 -> 5 while its per-minute history stayed at 4-6%). Discovery ignores such a reading; only
+    # a zero that persists in the stored history (node_problem below) counts.
     return None
 
 
