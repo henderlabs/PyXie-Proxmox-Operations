@@ -109,7 +109,7 @@ export default function AffinityRuleManager({ rules, setRules, workloads, nodes 
   async function deleteRule(id: string) {
     setConfirmDeleteId(null);
     const res = await fetch(`/api/placement/affinity-rules/${id}`, { method: "DELETE" });
-    if (!res.ok) {
+    if (!res.ok && res.status !== 404) {  // 404: already gone (deleted elsewhere since this page loaded)
       setError("Could not delete the rule. Nothing was changed.");
       return;
     }

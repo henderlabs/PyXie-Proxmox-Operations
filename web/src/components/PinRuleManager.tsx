@@ -16,6 +16,7 @@ export default function PinRuleManager({ pins, setPins, workloads, nodes }: { pi
   const [form, setForm] = useState(EMPTY);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const formRef = useRef<HTMLDivElement>(null);
   const me = useMe();
@@ -64,7 +65,13 @@ export default function PinRuleManager({ pins, setPins, workloads, nodes }: { pi
   async function remove(id: string) {
     setConfirmDeleteId(null);
     const res = await fetch(`/api/placement/pin-rules/${id}`, { method: "DELETE" });
-    if (!res.ok) { setError("Could not delete the pin. Nothing was changed."); return; }
+    // 404: it is already gone (deleted elsewhere since this page loaded), so the list should just drop it.
+    if (!res.ok && res.status !== 404) {
+      const data = await res.json().catch(() => ({}));
+      setListError(data.error || "Could not delete the pin. Nothing was changed.");
+      return;
+    }
+    setListError(null);
     setPins((ps) => ps.filter((p) => p.id !== id));
     if (editingId === id) cancelEdit();
   }
@@ -154,6 +161,7 @@ export default function PinRuleManager({ pins, setPins, workloads, nodes }: { pi
 
       <Card>
         <CardTitle>Active Pins</CardTitle>
+        {listError && <div className="text-sm text-bad mb-2">{listError}</div>}
         {pins.length === 0 ? (
           <EmptyState message="No pins yet." />
         ) : (
