@@ -156,8 +156,8 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
         </div>
         <p className="text-xs text-muted mt-1.5">
           {auto
-            ? "Auto-approve: when the cluster drifts out of balance, PyXie prepares a plan with ONE move, approves it itself and live-migrates that guest, then re-checks the cluster before considering another."
-            : "Recommend only: when the cluster drifts out of balance, PyXie prepares a Balance Load plan and waits. It never approves or moves anything by itself; you review and approve it here like any other plan."}
+            ? "Auto-approve: when the cluster drifts out of balance, or an affinity rule or host pin is not met, PyXie prepares a plan with ONE move, approves it itself and live-migrates that guest, then re-checks the cluster before considering another."
+            : "Recommend only: when the cluster drifts out of balance, or an affinity rule or host pin is not met, PyXie prepares a Balance Load plan and waits. It never approves or moves anything by itself; you review and approve it here like any other plan."}
         </p>
         {auto && preset && (
           <div className="mt-3 rounded border border-warn/50 bg-warn/10 px-3 py-3 text-sm text-text space-y-2">
@@ -338,7 +338,7 @@ export default function AutoBalanceCard({ clusters }: { clusters: AutoBalanceVie
     <Card>
       <CardTitle>Automatic balancing</CardTitle>
       <p className="text-sm text-muted mb-4">
-        Let PyXie watch the cluster and prepare a Balance Load plan when it drifts out of balance. Everything it prepares goes through the same checks as a plan you start yourself: affinity rules, memory headroom, CPU compatibility, HA, maintenance mode, and the global write switch.
+        Let PyXie watch the cluster and prepare a Balance Load plan when it drifts out of balance. Every check also reviews the affinity rules and host pins (Affinity & Pinning) against where guests are now: when one is not met, the check plans the move that fixes it even if the cluster is balanced. Everything it prepares goes through the same checks as a plan you start yourself: affinity rules, memory headroom, CPU compatibility, HA, maintenance mode, and the global write switch.
       </p>
       <div className="space-y-6 divide-y divide-border">
         {clusters.map((c) => <Cluster key={c.cluster_id} initial={c} />)}

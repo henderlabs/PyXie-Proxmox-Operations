@@ -813,11 +813,12 @@ def _record_manual_balance_check(db: Session, op: Operation, actor: str, node_id
             score = balance_score(nodes)
             record_check(
                 db, cid, trigger="manual", actor=actor, result="plan_created" if plan else "no_moves",
-                reason=None if plan else ((res.get("reasons") or [None])[0]),
+                reason=None if plan else ((res.get("reasons") or [None])[-1]),
                 balance_score=None if score is None else round(score), moves=len(plan), operation_id=op.id,
                 details={
+                    "rules": res.get("rules_review"),
                     "scope": "selected nodes" if node_ids else "whole cluster",
-                    "plan": [{"name": m.get("name"), "from": m.get("source_node"), "to": m.get("destination_node"), "storage": m.get("current_storage")} for m in plan],
+                    "plan": [{"name": m.get("name"), "from": m.get("source_node"), "to": m.get("destination_node"), "storage": m.get("current_storage"), "rule_fix": m.get("rule_fix")} for m in plan],
                     "refusals": {
                         "blocked_total": res.get("blocked_moves_total", 0),
                         "blocked": [{"name": b.get("name"), "from": b.get("source_node"), "to": b.get("blocked_node"), "why": (b.get("blocking_reasons") or [""])[0][:160], "gain": b.get("improvement")}

@@ -64,6 +64,11 @@ def node_names(db: Session, ids) -> list[str]:
     return sorted(by_id.get(str(i), "an unknown host") for i in ids)
 
 
+def pin_rule_hosts_text(host_ids, node_names: dict) -> str:
+    names = sorted(node_names.get(str(h), "an unknown host") for h in host_ids)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1] if names else "no host"
+
+
 def mirror_workload_page_pin(db: Session, workload) -> None:
     """workloads.preferred_node_id mirrors the workload-page pin rule (single host, soft) so the workload page and reports keep working."""
     rule = (

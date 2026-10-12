@@ -13,6 +13,7 @@ Same planner, same hard blocks, same Safety Contract as Balance Load: the approv
 """
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,8 @@ from .balance_config import (
     smoothed_loads, smoothed_view, utcnow,
 )
 from .balance_history import record_check
+from .pve_write_client import self_vmid_from_env
+from .rule_review import review_rules
 from .balance_workflow import approve as approve_balance, dry_run_balance, projected_memory_rows
 from .models import AppSettings, Cluster, Node, Operation, ResourceLock, Workload
 from .notifications import dispatch_event
@@ -108,7 +111,7 @@ def stale_waiting_plan(status: str, context: dict | None, age_hours: float, clus
 
 def auto_approve_blockers(
     migrate_plan: list[dict], projected: list[dict], *, writes_enabled: bool, busy_nodes: bool,
-    ceiling_pct: float = AUTO_APPROVE_MEMORY_CEILING_PCT,
+    ceiling_pct: float = AUTO_APPROVE_MEMORY_CEILING_PCT, self_vmid: str | None = None,
 ) -> list[str]:
     """Why an automatic plan must be left for a person instead of being approved by the system. Empty = may approve.
     Pure: no database."""
@@ -127,6 +130,8 @@ def auto_approve_blockers(
         reasons.append(f"it would leave {over[0]['name']} above {round(ceiling_pct)}% memory")
     if busy_nodes:
         reasons.append("a node involved is busy with another operation")
+    if self_vmid and any(str(m.get("vmid")) == str(self_vmid) for m in moves):
+        reasons.append("a move would migrate the VM PyXie itself runs on, which a person should start")
     return reasons
 
 
@@ -148,7 +153,7 @@ def _skip(db: Session, cluster: Cluster, state: dict, now, reason: str, details:
     state = {**state, "last_checked_at": now.isoformat(), "last_result": "skipped", "last_reason": reason, **extra}
     save_state(db, cluster.id, state)
     cfg = get_config(db, cluster.id)
-    result = "balanced" if reason.startswith("balanced enough") else "no_moves" if reason.startswith("no move is worth") else "skipped"
+    result = "balanced" if reason.startswith("balanced enough") else "no_moves" if reason.startswith("no move") else "skipped"
     record_check(
         db, cluster.id, trigger="automatic", result=result, reason=reason, actor=AUTOMATIC_ACTOR, mode=cfg.get("mode"), level=cfg.get("level"),
         balance_score=extra.get("balance_score"), trigger_score=PRESETS.get(cfg.get("level"), {}).get("trigger_score"), details=details, now=now,
@@ -263,8 +268,15 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
     if score is None:
         return _skip(db, cluster, state, now, "not enough nodes with live data")
     basis = "busy-hours score" if enough else "score"
-    if score >= preset["trigger_score"]:
-        return _skip(db, cluster, state, now, f"balanced enough ({basis} {round(score)}, acts below {preset['trigger_score']})", balance_score=round(score))
+    # Every check also reviews the affinity rules and host pins against where guests are now. A rule that is not met is a reason to
+    # plan a move even when the cluster itself is balanced (then only the guests that rule names are considered).
+    review = review_rules(db, cluster.id)
+    balanced = score >= preset["trigger_score"]
+    if balanced and review.ok:
+        return _skip(
+            db, cluster, state, now, f"balanced enough ({basis} {round(score)}, acts below {preset['trigger_score']}). {review.sentence()}",
+            details={"rules": review.summary()}, balance_score=round(score),
+        )
 
     metric = resolve_metric(cfg["metric"], nodes)
     node_ids = {n.id for n in nodes if str(n.id) in set(cfg["node_ids"])} or None
@@ -286,11 +298,14 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
             "min_benefit": preset["min_benefit"], "max_moves": max_moves, "auto_mode": cfg["mode"],
         },
         min_improvement=preset["min_benefit"], max_moves=max_moves, skip_workload_ids=skip_ids, only_if_moves=True,
-        skip_reasons=skip_reasons, avoid_nodes=avoid,
+        skip_reasons=skip_reasons, avoid_nodes=avoid, rules_review=review,
+        only_workload_ids={uuid.UUID(k) for k in review.violators} if balanced else None,
         load_pct_override={n.id: n.mem_usage_pct for n in scored} if enough else None,
     )
     if op is None:
-        return _skip(db, cluster, state, now, "no move is worth making at this level", details={"refusals": refusals, "metric": metric}, balance_score=round(score))
+        why = (f"no move can fix the rules that are not met ({'; '.join(review.issues[:2])})" if balanced
+               else "no move is worth making at this level" + ("" if review.ok else f". {review.sentence()}"))
+        return _skip(db, cluster, state, now, why, details={"refusals": refusals, "metric": metric, "rules": review.summary()}, balance_score=round(score))
 
     plan = (op.dry_run_result or {}).get("migrate_plan", [])
     moves = len(plan)
@@ -305,7 +320,7 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         )
         blockers = auto_approve_blockers(
             plan, busy_projection, writes_enabled=writes,
-            busy_nodes=_nodes_busy(db, {_uuid(i) for i in involved}, now),
+            busy_nodes=_nodes_busy(db, {_uuid(i) for i in involved}, now), self_vmid=self_vmid_from_env(),
         )
         if enqueue is None:
             blockers.append("the worker queue is not available")
@@ -329,7 +344,9 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         db, cluster.id, trigger="automatic", result="plan_auto_approved" if approved else "plan_created",
         reason=f"left for your approval: {left_for_review}" if left_for_review else None, actor=AUTOMATIC_ACTOR, mode=cfg["mode"], level=cfg["level"],
         balance_score=round(score), trigger_score=preset["trigger_score"], moves=moves, operation_id=op.id, now=now,
-        details={"metric": metric, "plan": [{"name": m["name"], "from": m["source_node"], "to": m["destination_node"], "storage": m.get("current_storage")} for m in plan], "refusals": refusals},
+        details={"metric": metric, "rules": review.summary(),
+                 "plan": [{"name": m["name"], "from": m["source_node"], "to": m["destination_node"], "storage": m.get("current_storage"), "rule_fix": m.get("rule_fix")} for m in plan],
+                 "refusals": refusals},
     )
     write_audit_event(
         db, event_category="operation", event_type="balance.auto_plan_approved" if approved else "balance.auto_plan_created",

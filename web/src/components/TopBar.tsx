@@ -115,7 +115,7 @@ export default function TopBar({ instance }: { instance: string }) {
        <div className="flex items-stretch h-7 divide-x divide-border justify-end">
         {me ? (
           <>
-            <Link href="/profile" className="flex items-center gap-1.5 px-3 text-muted hover:text-text" title={`${me.email} — edit profile`}>
+            <Link href="/profile" className="flex flex-1 items-center justify-start gap-1.5 px-3 text-muted hover:text-text" title={`${me.email} — edit profile`}>
               <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-accent/15 text-accent text-[10px] font-semibold uppercase">{name.charAt(0)}</span>
               {name}
             </Link>

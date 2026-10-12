@@ -226,7 +226,7 @@ export default function BalanceLoadWorkspace({ nodes, workloads, pins = [], init
       <Card>
         <CardTitle>Preview Balance Load</CardTitle>
         <p className="text-sm text-muted mb-3">
-          Look at the cluster now and propose moves that make memory use more even. Nothing moves until you approve the plan, and every preview is recorded in the <a href="#balance-history" className="text-accent hover:underline">history</a> below.
+          Look at the cluster now, review the affinity rules and host pins (<a href="/operations/affinity-rules" className="text-accent hover:underline">Affinity &amp; Pinning</a>), and propose the moves that make memory use more even or put a guest where a rule says it belongs. Nothing moves until you approve the plan, and every preview is recorded in the <a href="#balance-history" className="text-accent hover:underline">history</a> below.
         </p>
         {isAdmin && (
           <button
@@ -244,7 +244,7 @@ export default function BalanceLoadWorkspace({ nodes, workloads, pins = [], init
         <details className="mt-3">
           <summary className="text-xs text-accent cursor-pointer">How it works</summary>
           <p className="text-sm text-muted mt-2">
-            Balance Load scores every running VM against every eligible node and proposes moves that make memory use more even.
+            Balance Load first reviews the affinity rules and host pins against where every guest is now, then scores every running VM against every eligible node and proposes moves that make memory use more even. A guest that breaks a rule is moved to the best host that meets it, whatever the balance gain, and its plan line is marked as fixing a rule.
             Each move is checked against affinity rules, memory headroom, CPU compatibility, HA and maintenance mode, then
             checked again at the moment it runs. Guests pinned to the host they are on, or marked Do not move, are left alone.
             A guest on shared storage stays on it; a guest on a host&apos;s own storage goes to the destination host&apos;s preferred storage.

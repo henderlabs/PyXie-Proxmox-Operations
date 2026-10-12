@@ -12,7 +12,7 @@ type Check = {
   kind: "check"; id: string; at: string; first_at: string; repeat_count: number; cluster: string | null; trigger: "automatic" | "manual"; actor: string | null;
   mode: string | null; level: string | null; result: string; reason: string | null; balance_score: number | null; trigger_score: number | null; moves: number;
   operation_id: string | null;
-  details: { nodes?: NodeSnap[]; plan?: { name: string; from: string; to: string; storage?: string | null }[]; refusals?: Refusals; scope?: string; metric?: string } | null;
+  details: { rules?: { affinity_rules: number; pin_rules: number; issues: string[]; guests_to_move: number }; nodes?: NodeSnap[]; plan?: { name: string; from: string; to: string; storage?: string | null; rule_fix?: string[] | null }[]; refusals?: Refusals; scope?: string; metric?: string } | null;
 };
 type Move = {
   kind: "move"; id: string; at: string; started_at: string | null; status: string; workload: string | number | null; vmid: number | null; from: string | null; to: string | null;
@@ -43,15 +43,22 @@ const RESULT: Record<string, { label: string; cls: string }> = {
 };
 const MOVE_STATUS: Record<string, string> = { completed: "bg-good/15 text-good", failed: "bg-bad/15 text-bad", blocked: "bg-bad/15 text-bad", cancelled: "bg-muted/15 text-muted" };
 
+function rulesNote(c: Check): string {
+  const r = c.details?.rules;
+  if (!r) return "";
+  const n = `${r.affinity_rules} affinity rule${r.affinity_rules === 1 ? "" : "s"} and ${r.pin_rules} pin${r.pin_rules === 1 ? "" : "s"}`;
+  return r.issues.length === 0 ? ` Also reviewed ${n}: all met.` : ` Also reviewed ${n}: ${r.issues.length} not met.`;
+}
+
 function summary(c: Check): string {
   const sc = c.balance_score != null ? `score ${c.balance_score}${c.trigger_score != null ? `, acts below ${c.trigger_score}` : ""}` : null;
   switch (c.result) {
-    case "balanced": return `The cluster is balanced enough (${sc ?? "no score"}), so nothing was planned.`;
+    case "balanced": return `The cluster is balanced enough (${sc ?? "no score"}), so nothing was planned.${rulesNote(c)}`;
     case "skipped": return `Nothing done: ${c.reason ?? "skipped"}.`;
     case "no_moves": return c.trigger === "manual" && !c.balance_score
       ? c.reason ?? "No move would make memory use more even."
       : `The cluster is out of balance (${sc ?? "no score"}) but no move was worth making at this level${c.details?.refusals?.blocked_total ? `: ${c.details.refusals.blocked_total} candidate move(s) were refused by a safety rule` : ""}.`;
-    case "plan_created": return `Prepared a plan with ${c.moves} move${c.moves === 1 ? "" : "s"}${sc ? ` (${sc})` : ""}${c.reason ? `. ${c.reason}` : ""}.`;
+    case "plan_created": return `Prepared a plan with ${c.moves} move${c.moves === 1 ? "" : "s"}${sc ? ` (${sc})` : ""}${c.reason ? `. ${c.reason}` : ""}.${rulesNote(c)}`;
     case "plan_auto_approved": return `Approved and started ${c.moves} move${c.moves === 1 ? "" : "s"} on its own${sc ? ` (${sc})` : ""}.`;
     case "stopped": return `Automatic approval stopped: ${c.reason ?? ""}`;
     case "error": return `The check could not run: ${c.reason ?? "unknown error"}`;
@@ -62,7 +69,7 @@ function summary(c: Check): string {
 function CheckRow({ c }: { c: Check }) {
   const r = RESULT[c.result] ?? { label: c.result, cls: "bg-muted/15 text-muted" };
   const d = c.details;
-  const hasDetail = !!(d && ((d.nodes && d.nodes.length) || (d.plan && d.plan.length) || d.refusals?.blocked_total || d.refusals?.left_alone_total));
+  const hasDetail = !!(d && ((d.rules && d.rules.issues.length) || (d.nodes && d.nodes.length) || (d.plan && d.plan.length) || d.refusals?.blocked_total || d.refusals?.left_alone_total));
   return (
     <li className="py-2.5">
       <div className="flex items-start gap-3">
@@ -78,6 +85,9 @@ function CheckRow({ c }: { c: Check }) {
             <details className="mt-1.5">
               <summary className="text-xs text-accent cursor-pointer">What it looked at</summary>
               <div className="mt-1.5 space-y-2 text-xs text-muted">
+                {d?.rules && d.rules.issues.length > 0 && (
+                  <div><span className="text-text">Rules not met: </span>{d.rules.issues.join("; ")}</div>
+                )}
                 {d?.nodes && d.nodes.length > 0 && (
                   <table className="text-xs">
                     <thead><tr className="text-left"><th className="pr-4 font-medium">Node</th><th className="pr-4 font-medium">Memory</th><th className="pr-4 font-medium">CPU</th><th className="font-medium">State</th></tr></thead>
@@ -90,7 +100,7 @@ function CheckRow({ c }: { c: Check }) {
                   </table>
                 )}
                 {d?.plan && d.plan.length > 0 && (
-                  <div><span className="text-text">Planned: </span>{d.plan.map((m) => `${m.name} ${m.from} → ${m.to}${m.storage ? ` (disks on ${m.storage})` : ""}`).join("; ")}</div>
+                  <div><span className="text-text">Planned: </span>{d.plan.map((m) => `${m.name} ${m.from} → ${m.to}${m.storage ? ` (disks on ${m.storage})` : ""}${m.rule_fix?.length ? ` [fixes ${m.rule_fix.join(", ")}]` : ""}`).join("; ")}</div>
                 )}
                 {d?.refusals?.blocked && d.refusals.blocked.length > 0 && (
                   <div>
@@ -159,7 +169,7 @@ export default function BalanceHistory() {
     <Card id="balance-history">
       <CardTitle>History</CardTitle>
       <p className="text-sm text-muted mb-3">
-        Every check Balance Load has made and every move that came of it. Automatic balancing checks the cluster on the schedule set under Automatic balancing; when a check
+        Every check Balance Load has made (each one also reviews the affinity rules and host pins) and every move that came of it. Automatic balancing checks the cluster on the schedule set under Automatic balancing; when a check
         gives the same result as the one before, it is folded into one line with a count instead of repeating. Open <em>What it looked at</em> to see the node loads, planned moves and refusals behind a decision. Kept for 90 days.
       </p>
       <div className="flex gap-2 mb-2">
