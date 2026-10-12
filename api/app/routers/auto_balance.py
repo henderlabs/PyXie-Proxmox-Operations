@@ -1,7 +1,7 @@
 """Settings and status for automatic load balancing (phase 1: recommend only). See docs/auto-balance-design.md."""
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -28,6 +28,28 @@ def _locked_guests(db: Session, cluster: Cluster) -> dict:
         "do_not_move": sum(1 for w in vms if w.do_not_move),
         "pinned": sum(1 for w in vms if not w.do_not_move and w.preferred_node_id is not None and w.preferred_node_id == w.node_id),
     }
+
+
+def _next_check_iso(db: Session, cfg: dict, state: dict) -> str | None:
+    """When the next scheduled automatic check is due (None when automatic balancing is off)."""
+    if cfg["mode"] == "off":
+        return None
+    from zoneinfo import ZoneInfo
+    from pyxie_core.balance_config import check_due, next_slot, latest_slot
+    now = utcnow()
+    try:
+        local_now = now.astimezone(ZoneInfo(db.query(AppSettings.timezone).filter(AppSettings.id == 1).scalar() or "UTC"))
+    except Exception:  # noqa: BLE001
+        local_now = now
+    try:
+        last = datetime.fromisoformat(state["last_checked_at"]) if state.get("last_checked_at") else None
+    except ValueError:
+        last = None
+    if last is not None and last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    if check_due(local_now, last, cfg["check_every"], cfg["check_at"]):
+        return now.isoformat()  # owed now: runs on the next worker pass
+    return next_slot(local_now, cfg["check_every"], cfg["check_at"]).astimezone(timezone.utc).isoformat()
 
 
 def _cluster_view(db: Session, cluster: Cluster) -> dict:
@@ -64,7 +86,8 @@ def _cluster_view(db: Session, cluster: Cluster) -> dict:
         "writes_enabled": bool(db.query(AppSettings.pve_mutations_enabled).filter(AppSettings.id == 1).scalar()),
         "locked_guests": _locked_guests(db, cluster),
         "waiting_operation_id": str(waiting[0].id) if waiting else None,
-        "check_interval_seconds": db.query(AppSettings.inventory_refresh_interval_seconds).filter(AppSettings.id == 1).scalar() or 300,
+        "next_check_at": _next_check_iso(db, cfg, get_state(db, cluster.id)),
+        "timezone": db.query(AppSettings.timezone).filter(AppSettings.id == 1).scalar() or "UTC",
         "history": [
             {"operation_id": str(o.id), "created_at": o.created_at.isoformat(), "status": "dismissed" if o.dismissed else o.status,
              "moves": len((o.dry_run_result or {}).get("migrate_plan", [])), "level": (o.context or {}).get("level"), "auto_approved": bool((o.context or {}).get("auto_approved")),
@@ -108,8 +131,7 @@ def balance_history(limit: int = 100, db: Session = Depends(get_db)):
             "cluster": names.get(o.cluster_id), "parent_operation_id": str(o.parent_operation_id) if o.parent_operation_id else None,
         })
     items.sort(key=lambda i: i["at"], reverse=True)
-    interval = db.query(AppSettings.inventory_refresh_interval_seconds).filter(AppSettings.id == 1).scalar() or 300
-    return {"items": items[:limit], "check_interval_seconds": interval}
+    return {"items": items[:limit]}
 
 
 @router.get("")
@@ -119,6 +141,8 @@ def list_auto_balance(db: Session = Depends(get_db)):
 
 class AutoBalanceUpdate(BaseModel):
     mode: str = "off"
+    check_every: str = "5m"
+    check_at: str = "00:00"
     level: str = "moderate"
     metric: str = "most_limited"
     node_ids: list[str] = []

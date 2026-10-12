@@ -13,7 +13,7 @@ Same planner, same hard blocks, same Safety Contract as Balance Load: the approv
 """
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import or_
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, aliased
 
 from .audit import write_audit_event
 from .balance_config import (
-    MIN_HISTORY_HOURS, PRESETS, balance_score, get_config, get_state, hours_ago, in_window, resolve_metric, save_config, save_state,
+    MIN_HISTORY_HOURS, PRESETS, balance_score, check_due, get_config, get_state, hours_ago, in_window, resolve_metric, save_config, save_state,
     smoothed_loads, smoothed_view, utcnow,
 )
 from .balance_history import record_check
@@ -207,15 +207,25 @@ def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -
         if stopped:
             return stopped
 
-    if cfg.get("paused_until"):
-        left = hours_ago(cfg["paused_until"], now)
-        if left is not None and left < 0:
-            return _skip(db, cluster, state, now, "paused")
     tz_name = (db.query(AppSettings.timezone).filter(AppSettings.id == 1).scalar()) or "UTC"
     try:
         local_now = now.astimezone(ZoneInfo(tz_name))
     except Exception:  # noqa: BLE001 -- an unknown timezone name must not stop balancing checks
         local_now = now
+    # The schedule (Automatic balancing > How often to check): between scheduled checks there is nothing to do and nothing is recorded.
+    try:
+        last_checked = datetime.fromisoformat(state["last_checked_at"]) if state.get("last_checked_at") else None
+    except ValueError:
+        last_checked = None
+    if last_checked is not None and last_checked.tzinfo is None:
+        last_checked = last_checked.replace(tzinfo=timezone.utc)
+    if not check_due(local_now, last_checked, cfg["check_every"], cfg["check_at"]):
+        return {"cluster": cluster.name, "result": "not_due"}
+
+    if cfg.get("paused_until"):
+        left = hours_ago(cfg["paused_until"], now)
+        if left is not None and left < 0:
+            return _skip(db, cluster, state, now, "paused")
     if not in_window(cfg["windows"], local_now):
         return _skip(db, cluster, state, now, "outside the allowed time window")
     if cluster.quorate is False:

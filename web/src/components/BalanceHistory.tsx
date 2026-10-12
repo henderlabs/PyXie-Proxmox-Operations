@@ -139,7 +139,6 @@ function MoveRow({ m }: { m: Move }) {
 /** Everything Balance Load did: each check (automatic cycles and manual previews, repeats folded) and each move that followed. */
 export default function BalanceHistory() {
   const [items, setItems] = useState<Item[] | null>(null);
-  const [interval, setIntervalSeconds] = useState(300);
   const [filter, setFilter] = useState<"all" | "checks" | "moves">("all");
   const [shown, setShown] = useState(25);
 
@@ -148,7 +147,7 @@ export default function BalanceHistory() {
     const load = () =>
       fetch("/api/auto-balance/history?limit=200")
         .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (live && d) { setItems(d.items); setIntervalSeconds(d.check_interval_seconds ?? 300); } })
+        .then((d) => { if (live && d) setItems(d.items); })
         .catch(() => {});
     load();
     const t = setInterval(load, 30000);
@@ -160,7 +159,7 @@ export default function BalanceHistory() {
     <Card id="balance-history">
       <CardTitle>History</CardTitle>
       <p className="text-sm text-muted mb-3">
-        Every check Balance Load has made and every move that came of it. Automatic balancing checks the cluster about every {interval < 120 ? "minute" : `${Math.round(interval / 60)} minutes`}; when a check
+        Every check Balance Load has made and every move that came of it. Automatic balancing checks the cluster on the schedule set under Automatic balancing; when a check
         gives the same result as the one before, it is folded into one line with a count instead of repeating. Open <em>What it looked at</em> to see the node loads, planned moves and refusals behind a decision. Kept for 90 days.
       </p>
       <div className="flex gap-2 mb-2">

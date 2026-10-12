@@ -1,7 +1,7 @@
 "use client";
 
 import { Card } from "@/components/Card";
-import type { AutoBalanceView } from "@/components/AutoBalanceCard";
+import { scheduleText, type AutoBalanceView } from "@/components/AutoBalanceCard";
 
 function ago(iso?: string) {
   if (!iso) return "not yet";
@@ -45,7 +45,7 @@ export default function BalanceStatusStrip({ clusters }: { clusters: AutoBalance
               )}
               {mode !== "off" && (
                 <span className="text-muted">
-                  Last check {lastCheck(v)}. Checks about every {(v.check_interval_seconds ?? 300) < 120 ? "minute" : `${Math.round((v.check_interval_seconds ?? 300) / 60)} min`}.
+                  Last check {lastCheck(v)}. Checks {scheduleText(v.config)}{v.next_check_at ? `; next ${new Date(v.next_check_at).getTime() - Date.now() < 90000 ? "any moment" : new Date(v.next_check_at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}` : ""}.
                 </span>
               )}
               {v.waiting_operation_id && <span className="text-warn">A plan is waiting for your approval below.</span>}

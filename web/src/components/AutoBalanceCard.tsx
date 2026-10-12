@@ -8,7 +8,7 @@ export type AutoBalanceView = {
   cluster_id: string;
   cluster_name: string;
   config: {
-    mode: string; level: string; metric: string; node_ids: string[];
+    mode: string; level: string; metric: string; node_ids: string[]; check_every: string; check_at: string;
     windows: { days: number[]; start: string; end: string }[]; paused_until: string | null;
     ack?: { by: string; at: string; aggressive: boolean } | null;
   };
@@ -23,7 +23,8 @@ export type AutoBalanceView = {
   history_ok?: boolean;
   resolved_metric: string;
   pending_operation_id: string | null;
-  check_interval_seconds?: number;
+  next_check_at?: string | null;
+  timezone?: string;
   waiting_operation_id?: string | null;
   history: { operation_id: string; created_at: string; status: string; moves: number; level: string | null; balance_score: number | null; auto_approved?: boolean }[];
 };
@@ -39,6 +40,40 @@ const METRICS = [
   { id: "cpu", label: "CPU" },
   { id: "both", label: "Both (average)" },
 ];
+export const CHECK_EVERY: { id: string; label: string; minutes: number }[] = [
+  { id: "5m", label: "Every 5 minutes", minutes: 5 },
+  { id: "15m", label: "Every 15 minutes", minutes: 15 },
+  { id: "30m", label: "Every 30 minutes", minutes: 30 },
+  { id: "1h", label: "Every hour", minutes: 60 },
+  { id: "2h", label: "Every 2 hours", minutes: 120 },
+  { id: "4h", label: "Every 4 hours", minutes: 240 },
+  { id: "6h", label: "Every 6 hours", minutes: 360 },
+  { id: "8h", label: "Every 8 hours", minutes: 480 },
+  { id: "daily", label: "Once a day", minutes: 1440 },
+];
+
+/** "every 4 hours, from 02:00" / "daily at 03:00" / "every 15 minutes". */
+export function scheduleText(c: { check_every: string; check_at: string }): string {
+  const e = CHECK_EVERY.find((x) => x.id === c.check_every) ?? CHECK_EVERY[0];
+  if (e.id === "daily") return `once a day at ${c.check_at}`;
+  if (e.minutes >= 60) return `${e.label.toLowerCase()}, on the clock from ${c.check_at}`;
+  return e.label.toLowerCase();
+}
+
+/** The times of day a repeating schedule fires, e.g. 02:00 06:00 10:00 ... */
+function slotTimes(c: { check_every: string; check_at: string }): string[] {
+  const e = CHECK_EVERY.find((x) => x.id === c.check_every) ?? CHECK_EVERY[0];
+  if (e.minutes < 60) return [];
+  const [h, m] = c.check_at.split(":").map(Number);
+  const start = h * 60 + m;
+  const out: string[] = [];
+  for (let t = 0; t < 1440; t += e.minutes) {
+    const x = (start + t) % 1440;
+    out.push(`${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`);
+  }
+  return out.sort();
+}
+
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function hours(h: number) {
@@ -207,6 +242,29 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
       </div>
 
       <div>
+        <div className="text-xs text-muted mb-1.5">How often to check</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className={sel} disabled={!isAdmin} value={cfg.check_every} onChange={(e) => setCfg({ ...cfg, check_every: e.target.value })}>
+            {CHECK_EVERY.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+          {cfg.check_every !== "5m" && cfg.check_every !== "15m" && cfg.check_every !== "30m" && (
+            <label className="flex items-center gap-2 text-sm text-muted">
+              {cfg.check_every === "daily" ? "at" : "counting from"}
+              <input type="time" className={sel} value={cfg.check_at} disabled={!isAdmin} onChange={(e) => setCfg({ ...cfg, check_at: e.target.value || "00:00" })} />
+            </label>
+          )}
+        </div>
+        <p className="text-xs text-muted mt-1.5">
+          {cfg.check_every === "daily"
+            ? `One check a day, at ${cfg.check_at}.`
+            : cfg.check_every === "5m" || cfg.check_every === "15m" || cfg.check_every === "30m"
+            ? `Checks on the clock: ${cfg.check_every === "5m" ? ":00, :05, :10 ..." : cfg.check_every === "15m" ? ":00, :15, :30, :45" : ":00 and :30"} of every hour.`
+            : `Checks at ${slotTimes(cfg).join(", ")} every day.`}
+          {" "}Times are the server&apos;s timezone{view.timezone ? ` (${view.timezone})` : ""}. A check looks at the cluster and, if it is out of balance, prepares a plan; it can only prepare one inside the time windows below. Each check is recorded in the history.
+        </p>
+      </div>
+
+      <div>
         <div className="text-xs text-muted mb-1.5">When it may prepare plans</div>
         {cfg.windows.length === 0 && <p className="text-sm text-muted mb-1.5">Any time.</p>}
         <div className="space-y-2">
@@ -233,7 +291,7 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
 
       <div className="flex flex-wrap items-center gap-3">
         {isAdmin && (
-          <button disabled={busy || !dirty || !ackReady} onClick={() => call(`/api/auto-balance/${view.cluster_id}`, "PUT", { mode: cfg.mode, level: cfg.level, metric: cfg.metric, node_ids: cfg.node_ids, windows: cfg.windows, acknowledged: needsAck && ackOk, acknowledged_aggressive: needsAck && ackAggressive })}
+          <button disabled={busy || !dirty || !ackReady} onClick={() => call(`/api/auto-balance/${view.cluster_id}`, "PUT", { mode: cfg.mode, check_every: cfg.check_every, check_at: cfg.check_at, level: cfg.level, metric: cfg.metric, node_ids: cfg.node_ids, windows: cfg.windows, acknowledged: needsAck && ackOk, acknowledged_aggressive: needsAck && ackAggressive })}
             className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50">
             {busy ? "Saving…" : "Save automatic balancing"}
           </button>
