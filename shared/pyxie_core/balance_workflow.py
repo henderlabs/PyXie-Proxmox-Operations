@@ -94,10 +94,28 @@ def projected_memory_rows(nodes: list[dict], migrate_plan: list[dict]) -> list[d
     return out
 
 
+def summarize_refusals(blocked_moves: list[dict], left_alone: list[dict]) -> dict:
+    """What a check looked at and did not move, in a form small enough to keep in the check history."""
+    reasons: dict[str, int] = {}
+    for x in left_alone:
+        reasons[x.get("reason") or "left alone"] = reasons.get(x.get("reason") or "left alone", 0) + 1
+    top = sorted(blocked_moves, key=lambda b: -(b.get("improvement") or 0))[:5]
+    return {
+        "blocked_total": len(blocked_moves),
+        "blocked": [
+            {"name": b.get("name"), "from": b.get("source_node"), "to": b.get("blocked_node"), "why": (b.get("blocking_reasons") or [""])[0][:160],
+             "gain": b.get("improvement")} for b in top
+        ],
+        "left_alone_total": len(left_alone),
+        "left_alone": [{"reason": r, "count": c} for r, c in sorted(reasons.items(), key=lambda kv: -kv[1])[:6]],
+    }
+
+
 def dry_run_balance(
     db: Session, *, actor: str, node_ids: list | None = None, cluster_id=None, extra_context: dict | None = None,
     min_improvement: float | None = None, max_moves: int | None = None, skip_workload_ids: set | None = None,
     only_if_moves: bool = False, skip_reasons: dict | None = None, avoid_nodes: dict | None = None, load_pct_override: dict | None = None,
+    info_out: dict | None = None,
 ) -> Operation | None:
     """The plan is built first and the operation created after, so an automatic run that finds nothing
     (only_if_moves) leaves no empty operation behind."""
@@ -137,6 +155,8 @@ def dry_run_balance(
             "transport": "live",
         })
 
+    if info_out is not None:
+        info_out.update(summarize_refusals(blocked_moves, left_alone))
     if only_if_moves and not migrate_plan:
         return None
     op = create_operation(

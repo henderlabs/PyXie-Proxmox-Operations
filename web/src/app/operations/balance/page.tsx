@@ -3,6 +3,8 @@ import type { Node, Workload } from "@/lib/api";
 import { PageHeader } from "@/components/Card";
 import BalanceLoadWorkspace from "@/components/BalanceLoadWorkspace";
 import AutoBalanceCard, { type AutoBalanceView } from "@/components/AutoBalanceCard";
+import BalanceStatusStrip from "@/components/BalanceStatusStrip";
+import BalanceHistory from "@/components/BalanceHistory";
 import { MigrateIcon } from "@/components/Icons";
 
 export default async function BalanceLoadPage({ searchParams }: { searchParams: { node?: string } }) {
@@ -21,8 +23,10 @@ export default async function BalanceLoadPage({ searchParams }: { searchParams: 
         subtitle="Preview only: nothing moves until you approve. Shows memory per node before and after the plan, and why any move was refused."
         icon={<MigrateIcon className="w-5 h-5" />}
       />
+      <BalanceStatusStrip clusters={auto} />
       <BalanceLoadWorkspace nodes={nodes} workloads={workloads} initialNodeId={searchParams.node} pendingOperationId={pending ?? undefined} autoSummary={autoSummary} />
       <div className="mt-4"><AutoBalanceCard clusters={auto} /></div>
+      <div className="mt-4"><BalanceHistory /></div>
     </div>
   );
 }

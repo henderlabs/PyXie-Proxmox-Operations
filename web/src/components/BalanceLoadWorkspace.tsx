@@ -223,12 +223,9 @@ export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, 
       </div>
 
       <Card>
-        <CardTitle>How it works</CardTitle>
+        <CardTitle>Preview Balance Load</CardTitle>
         <p className="text-sm text-muted mb-3">
-          Balance Load scores every running VM against every eligible node and proposes moves that make memory use more even.
-          Each move is checked against affinity rules, memory headroom, CPU compatibility, HA and maintenance mode, then
-          checked again at the moment it runs. Guests pinned to the host they are on, or marked Do not move, are left alone.
-          Nothing moves until you approve, and you can change any destination or set a line to &ldquo;Don&apos;t move&rdquo;.
+          Look at the cluster now and propose moves that make memory use more even. Nothing moves until you approve the plan, and every preview is recorded in the <a href="#balance-history" className="text-accent hover:underline">history</a> below.
         </p>
         {isAdmin && (
           <button
@@ -243,6 +240,16 @@ export default function BalanceLoadWorkspace({ nodes, workloads, initialNodeId, 
           </button>
         )}
         {waitingPlan && <p className="text-xs text-muted mt-2">A plan is already waiting for approval below. A new preview discards it (nothing has moved) and re-reads the cluster.</p>}
+        <details className="mt-3">
+          <summary className="text-xs text-accent cursor-pointer">How it works</summary>
+          <p className="text-sm text-muted mt-2">
+            Balance Load scores every running VM against every eligible node and proposes moves that make memory use more even.
+            Each move is checked against affinity rules, memory headroom, CPU compatibility, HA and maintenance mode, then
+            checked again at the moment it runs. Guests pinned to the host they are on, or marked Do not move, are left alone.
+            A guest on shared storage stays on it; a guest on a host&apos;s own storage goes to the destination host&apos;s preferred storage.
+            You can change any destination or set a line to &ldquo;Don&apos;t move&rdquo;.
+          </p>
+        </details>
       </Card>
 
       {error && <div className="text-sm text-bad">{error}</div>}

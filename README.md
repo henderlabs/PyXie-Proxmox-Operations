@@ -316,6 +316,9 @@ high 60d+).
   rightsizing, capacity-pressure, and pending-update suggestions, each
   with evidence/benefit/impact/confidence. Lifecycle is partly user-owned
   -- regenerating never reopens something a user dismissed.
+- **Resize pre-check** (`workload.resize`): applying a resize to a running VM shuts it down first, so the preview checks the QEMU guest agent. If the agent
+  option is on in Proxmox but the agent is not answering inside the guest, the resize is blocked (rule `SAFE-GUEST-AGENT-001`) with the fix, instead of
+  failing after the shutdown times out.
 - **Rightsizing** (`shared/pyxie_core/rightsizing.py`): conservative by
   design -- only ever suggests a reduction, never below 30 days of
   observed history for `moderate`/`high` confidence. Assessing all

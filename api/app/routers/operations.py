@@ -798,6 +798,38 @@ class BalanceRequest(BaseModel):
     replace: bool = False
 
 
+def _record_manual_balance_check(db: Session, op: Operation, actor: str, node_ids) -> None:
+    """A manual Balance Load preview goes into the same check history as the automatic checks. Never raises."""
+    try:
+        from pyxie_core.balance_config import balance_score
+        from pyxie_core.balance_history import record_check
+        res = op.dry_run_result or {}
+        plan = [m for m in (res.get("migrate_plan") or []) if m.get("transport") != "skip"]
+        q = db.query(Node).filter(Node.is_missing.is_(False))
+        scoped = q.filter(Node.id.in_(node_ids)).all() if node_ids else []
+        cluster_ids = {n.cluster_id for n in scoped} or {c.id for c in db.query(Cluster).filter(Cluster.is_missing.is_(False)).all()}
+        for cid in cluster_ids:
+            nodes = q.filter(Node.cluster_id == cid).all()
+            score = balance_score(nodes)
+            record_check(
+                db, cid, trigger="manual", actor=actor, result="plan_created" if plan else "no_moves",
+                reason=None if plan else ((res.get("reasons") or [None])[0]),
+                balance_score=None if score is None else round(score), moves=len(plan), operation_id=op.id,
+                details={
+                    "scope": "selected nodes" if node_ids else "whole cluster",
+                    "plan": [{"name": m.get("name"), "from": m.get("source_node"), "to": m.get("destination_node"), "storage": m.get("current_storage")} for m in plan],
+                    "refusals": {
+                        "blocked_total": res.get("blocked_moves_total", 0),
+                        "blocked": [{"name": b.get("name"), "from": b.get("source_node"), "to": b.get("blocked_node"), "why": (b.get("blocking_reasons") or [""])[0][:160], "gain": b.get("improvement")}
+                                    for b in (res.get("blocked_moves") or [])[:5]],
+                        "left_alone_total": res.get("left_alone_total", 0),
+                    },
+                },
+            )
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
+
 @router.post("/cluster-rebalance/dry-run", dependencies=[Depends(require_admin)])
 def create_balance_dry_run(payload: BalanceRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
     """"Balance Load" as one reviewable/editable plan -- see
@@ -833,6 +865,7 @@ def create_balance_dry_run(payload: BalanceRequest, user=Depends(get_current_use
     if existing is not None:
         return _serialize(existing)
     op = dry_run_balance(db, actor=user.email, node_ids=payload.node_ids)
+    _record_manual_balance_check(db, op, user.email, payload.node_ids)
     return _serialize(op)
 
 

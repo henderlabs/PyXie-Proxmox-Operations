@@ -23,6 +23,7 @@ export type AutoBalanceView = {
   history_ok?: boolean;
   resolved_metric: string;
   pending_operation_id: string | null;
+  check_interval_seconds?: number;
   waiting_operation_id?: string | null;
   history: { operation_id: string; created_at: string; status: string; moves: number; level: string | null; balance_score: number | null; auto_approved?: boolean }[];
 };
@@ -262,25 +263,13 @@ function Cluster({ initial }: { initial: AutoBalanceView }) {
             {view.state.last_result === "skipped" && view.state.last_reason ? `: nothing to do (${view.state.last_reason}).` : ""}
             {view.state.last_result === "plan_created" ? `: prepared a plan with ${view.state.moves} move(s).${view.state.last_reason ? ` ${view.state.last_reason}.` : ""}` : ""}
             {view.state.last_result === "plan_auto_approved" ? `: approved and started ${view.state.moves} move. It re-checks after the move finishes.` : ""}
+            {" "}<a href="#balance-history" className="text-accent hover:underline">See the full history</a>
           </div>
           {view.state.last_result === "stopped" && <div className="text-bad mt-1">Auto-approve stopped: {view.state.last_reason}. This cluster is back to Recommend only.</div>}
           {view.pending_operation_id && <div className="text-warn mt-1">A plan from automatic balancing is waiting for your approval below.</div>}
         </div>
       )}
 
-      {view.history.length > 0 && (
-        <div>
-          <div className="text-xs text-muted mb-1.5">Recent automatic plans</div>
-          <ul className="text-sm divide-y divide-border">
-            {view.history.map((h) => (
-              <li key={h.operation_id} className="flex items-center justify-between py-1.5">
-                <span className="text-text">{ago(h.created_at)} · {h.moves} move(s){h.level ? ` · ${h.level}` : ""}{h.balance_score !== null ? ` · score ${h.balance_score}` : ""}</span>
-                <span className="text-xs text-muted">{h.auto_approved ? "auto-approved · " : ""}{h.status.replace(/_/g, " ")}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   );
 }

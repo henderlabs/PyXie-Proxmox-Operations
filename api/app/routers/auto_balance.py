@@ -13,7 +13,7 @@ from pyxie_core.auto_balance import AUTOMATIC_ACTOR, LIVE_STATUSES
 from pyxie_core.balance_config import (
     PRESETS, ConfigError, balance_score, get_config, get_state, resolve_metric, save_config, save_state, smoothed_loads, smoothed_view, utcnow,
 )
-from pyxie_core.models import AppSettings, Cluster, Node, Operation, Workload
+from pyxie_core.models import AppSettings, BalanceCheck, Cluster, Node, Operation, Workload
 
 from ..auth_deps import get_current_user, require_admin
 from ..deps import get_db
@@ -64,6 +64,7 @@ def _cluster_view(db: Session, cluster: Cluster) -> dict:
         "writes_enabled": bool(db.query(AppSettings.pve_mutations_enabled).filter(AppSettings.id == 1).scalar()),
         "locked_guests": _locked_guests(db, cluster),
         "waiting_operation_id": str(waiting[0].id) if waiting else None,
+        "check_interval_seconds": db.query(AppSettings.inventory_refresh_interval_seconds).filter(AppSettings.id == 1).scalar() or 300,
         "history": [
             {"operation_id": str(o.id), "created_at": o.created_at.isoformat(), "status": "dismissed" if o.dismissed else o.status,
              "moves": len((o.dry_run_result or {}).get("migrate_plan", [])), "level": (o.context or {}).get("level"), "auto_approved": bool((o.context or {}).get("auto_approved")),
@@ -71,6 +72,44 @@ def _cluster_view(db: Session, cluster: Cluster) -> dict:
             for o in recent
         ],
     }
+
+
+@router.get("/history")
+def balance_history(limit: int = 100, db: Session = Depends(get_db)):
+    """Everything Balance Load did, newest first: each check (automatic cycles and manual previews, repeats folded into one
+    line with a count) and each move that resulted."""
+    limit = max(1, min(limit, 300))
+    names = {c.id: c.name for c in db.query(Cluster).all()}
+    items = []
+    for c in db.query(BalanceCheck).order_by(BalanceCheck.last_checked_at.desc()).limit(limit).all():
+        items.append({
+            "kind": "check", "id": str(c.id), "at": c.last_checked_at.isoformat(), "first_at": c.first_checked_at.isoformat(),
+            "repeat_count": c.repeat_count or 1, "cluster": names.get(c.cluster_id), "trigger": c.trigger, "actor": c.actor, "mode": c.mode, "level": c.level,
+            "result": c.result, "reason": c.reason, "balance_score": c.balance_score, "trigger_score": c.trigger_score, "moves": c.moves,
+            "operation_id": str(c.operation_id) if c.operation_id else None, "details": c.details,
+        })
+    parents = {o.id: o for o in db.query(Operation).filter(Operation.operation_type_id == "cluster.rebalance").order_by(Operation.created_at.desc()).limit(200).all()}
+    moves = (
+        db.query(Operation).filter(Operation.operation_type_id == "vm.live_migrate", Operation.parent_operation_id.in_(list(parents) or [None]))
+        .order_by(Operation.created_at.desc()).limit(limit).all()
+    )
+    for o in moves:
+        r = o.dry_run_result or {}
+        ctx = o.context or {}
+        parent = parents.get(o.parent_operation_id)
+        pctx = (parent.context if parent else None) or {}
+        items.append({
+            "kind": "move", "id": str(o.id), "at": (o.completed_at or o.started_at or o.created_at).isoformat(),
+            "started_at": o.started_at.isoformat() if o.started_at else None, "status": o.status,
+            "workload": r.get("workload_name") or ctx.get("vmid"), "vmid": r.get("vmid") or ctx.get("vmid"),
+            "from": r.get("source_node"), "to": r.get("target_node"), "storage": ctx.get("target_storage_name"),
+            "duration_seconds": int((o.completed_at - o.started_at).total_seconds()) if o.completed_at and o.started_at else None,
+            "automatic": bool(pctx.get("automatic")), "by": (parent.created_by if parent else o.created_by), "error": (o.error or "")[:300] or None,
+            "cluster": names.get(o.cluster_id), "parent_operation_id": str(o.parent_operation_id) if o.parent_operation_id else None,
+        })
+    items.sort(key=lambda i: i["at"], reverse=True)
+    interval = db.query(AppSettings.inventory_refresh_interval_seconds).filter(AppSettings.id == 1).scalar() or 300
+    return {"items": items[:limit], "check_interval_seconds": interval}
 
 
 @router.get("")

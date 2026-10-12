@@ -77,3 +77,12 @@ The design notes and the reasoning are in [auto-balance-design.md](auto-balance-
 **Storage in the plan.** Each plan line shows where the disks are now and where they will land, e.g. `local-lvm → intel-ssd-103`, or `on nas-ds01 (stays)` for a guest on shared storage. It follows the rules: a guest on shared storage stays put; a guest on local storage goes to the destination host's preferred (pinned) storage, else its local pool with the most free space. Changing the destination host updates it. It is informational: to steer it, set the host's default storage on the Nodes page or the guest's storage preference. (v0.36.6)
 
 **Progress and sub-tasks.** In the Tasks panel a migration shows what it is doing: when its disks are on node-local storage you get two bars, "Disk copy → <storage>" (summed over every disk, with an average rate) and "VM memory (host to host)", and a note of which phase is running; a shared-storage move shows just the memory bar. Tasks started by another task (each migration of a Balance Load, evacuation or maintenance run, plus the steps still queued) are listed indented under their parent. (v0.36.6)
+
+**History.** The page ends with a History card that records everything Balance Load does, not only the moves. Every check is a line: each automatic check
+(about every inventory refresh, 5 minutes by default) and each manual preview, with the outcome (Balanced, Skipped with the reason such as paused, outside the time window,
+cooling down or not enough history, No move worth making, Plan prepared, Auto-approved, Stopped, Error), the balance score against the level's trigger, and who or what ran it.
+A check that gives the same result as the one before is folded into one line with a count ("same result 288 times, from ... to ..."), so the list stays readable.
+Open "What it looked at" for the node loads at that moment, the planned moves, the moves a safety rule refused and the guests left where they were. The moves that
+followed are listed too (guest, from, to, storage, how long it took, who approved it). Filter by Everything, Checks or Moves. Kept for 90 days. A status strip at the top shows
+whether automatic balancing is on, what the last check decided and when the next is due. API: `GET /api/auto-balance/history`. Table: `balance_checks` (migration 0050).
+
