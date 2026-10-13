@@ -1,5 +1,7 @@
 import logging
 import os
+import subprocess
+import sys
 import threading
 import time
 
@@ -124,23 +126,49 @@ def liveness_loop():
         time.sleep(max(5.0, INTERVAL_SECONDS - (time.monotonic() - started)))
 
 
-def main():
-    t = threading.Thread(target=scheduler_loop, daemon=True)
-    t.start()
-    threading.Thread(target=live_memory_loop, daemon=True).start()
-    threading.Thread(target=liveness_loop, daemon=True).start()
+OPS_ROLE_ENV = "PYXIE_WORKER_ROLE"
 
+
+def _supervise_operations_worker():
+    """Runs the operations queue in its own process, restarted if it ever exits. Approved operations (a rebalance, a
+    migration, a reboot) used to wait behind whatever the one worker was doing -- the 5-minute inventory poll, which on a
+    large cluster takes a minute or more (6 minutes right after a restart) -- and while a long operation ran, polling
+    stopped. Separate processes, same container: nothing changes for installs, compose or the updater."""
+    env = dict(os.environ, **{OPS_ROLE_ENV: "operations"})
+    while True:
+        proc = subprocess.Popen([sys.executable, "-m", "worker.main"], env=env)
+        code = proc.wait()
+        log.warning("operations worker exited (code %s); restarting in 5s", code)
+        time.sleep(5)
+
+
+def run_operations_worker():
+    """The operations-only process: resumes anything that was mid-flight when the container last stopped, then
+    works the operations queue and nothing else."""
+    _wait_for_db()
     try:
         from worker.jobs import resume_inflight_operations
         result = resume_inflight_operations()
         log.info("resume_inflight_operations on startup: %s", result)
     except Exception:
         log.exception("resume_inflight_operations failed on startup -- any mid-flight operations "
-                       "will stay in their current status until manually re-enqueued or the next restart")
+                      "will stay in their current status until manually re-enqueued or the next restart")
+    log.info("operations worker listening on: %s", OPERATIONS_QUEUE)
+    Worker([OPERATIONS_QUEUE], connection=conn).work(with_scheduler=False)
 
-    log.info("rq worker listening on: %s, %s, %s", POLLING_QUEUE, ANALYSIS_QUEUE, OPERATIONS_QUEUE)
-    worker = Worker([OPERATIONS_QUEUE, POLLING_QUEUE, ANALYSIS_QUEUE], connection=conn)
-    worker.work(with_scheduler=False)
+
+def main():
+    if os.environ.get(OPS_ROLE_ENV) == "operations":
+        run_operations_worker()
+        return
+
+    threading.Thread(target=scheduler_loop, daemon=True).start()
+    threading.Thread(target=live_memory_loop, daemon=True).start()
+    threading.Thread(target=liveness_loop, daemon=True).start()
+    threading.Thread(target=_supervise_operations_worker, daemon=True).start()
+
+    log.info("rq worker listening on: %s, %s (operations run in their own process)", POLLING_QUEUE, ANALYSIS_QUEUE)
+    Worker([POLLING_QUEUE, ANALYSIS_QUEUE], connection=conn).work(with_scheduler=False)
 
 
 if __name__ == "__main__":
