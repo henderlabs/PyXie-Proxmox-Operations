@@ -4,6 +4,7 @@ import type { AuditEvent, DashboardSummary, Finding, ProtectionResultRow, Recomm
 import { Card, CardTitle, PageHeader } from "@/components/Card";
 import StatusBadge from "@/components/StatusBadge";
 import RebootBanner from "@/components/RebootBanner";
+import AutoRefresh from "@/components/AutoRefresh";
 import QuickStartBanner from "@/components/QuickStartBanner";
 import AutoBalanceBanner from "@/components/AutoBalanceBanner";
 import type { AutoBalanceView } from "@/components/AutoBalanceCard";
@@ -53,6 +54,7 @@ export default async function DashboardPage() {
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="What needs my attention right now?" icon={<DashboardIcon className="w-5 h-5" />} />
+      <AutoRefresh seconds={30} />
       <QuickStartBanner />
 
       <div className="flex flex-wrap gap-3 mb-4 empty:mb-0">
