@@ -1,0 +1,141 @@
+"""3-2-1 backup posture: pure scoring plus a read-only PBS reader.
+
+3-2-1 means: 3 copies of the data (the live guest plus two backups), on 2 kinds
+of storage, with 1 copy offsite. PyXie reads what Proxmox VE and Proxmox
+Backup Server (PBS) already do and scores it; it changes nothing here.
+
+A PBS datastore counts as offsite when it is S3-backed or its name says
+"offsite". A copy only counts when it is recent (backup_max_age_h for local
+datastores, offsite_max_age_h for offsite ones).
+"""
+
+from datetime import datetime, timezone
+from typing import Optional
+
+BACKUP_MAX_AGE_H = 48
+OFFSITE_MAX_AGE_H = 24 * 8
+
+
+def is_offsite(store: dict) -> bool:
+    return store.get("backend") == "s3" or "offsite" in str(store.get("name", "")).lower()
+
+
+def _age_h(ts: Optional[int], now: float) -> Optional[float]:
+    return None if not ts else max(0.0, (now - ts) / 3600)
+
+
+def fmt_age(hours: Optional[float]) -> str:
+    if hours is None:
+        return "never"
+    if hours < 48:
+        return f"{int(hours)}h ago"
+    return f"{int(hours // 24)}d ago"
+
+
+def score_guest(last_by_store: dict, stores: list[dict], covered_by: list[str], now: float,
+                backup_max_age_h: int = BACKUP_MAX_AGE_H, offsite_max_age_h: int = OFFSITE_MAX_AGE_H) -> dict:
+    """last_by_store: {store_name: newest backup unix time or None}. Returns the per-guest scorecard row."""
+    copies = []
+    for st in stores:
+        ts = last_by_store.get(st["name"])
+        age = _age_h(ts, now)
+        limit = offsite_max_age_h if is_offsite(st) else backup_max_age_h
+        copies.append({
+            "store": st["name"], "offsite": is_offsite(st), "backend": st["backend"],
+            "last": ts, "age_h": age, "fresh": age is not None and age <= limit,
+            "age_text": fmt_age(age),
+        })
+    fresh = [c for c in copies if c["fresh"]]
+    n_copies = 1 + len(fresh)
+    media = {"live"} | {c["backend"] for c in fresh}
+    has_offsite = any(c["offsite"] for c in fresh)
+    problems = []
+    if not covered_by:
+        problems.append("No backup job includes it")
+    if not fresh:
+        problems.append("No recent backup")
+    elif not has_offsite:
+        stale_off = [c for c in copies if c["offsite"] and c["last"]]
+        problems.append(f"Offsite copy is {stale_off[0]['age_text']}" if stale_off else "No offsite copy")
+    if n_copies < 3 and fresh:
+        problems.append(f"Only {n_copies} of 3 copies")
+    if len(media) < 2 and fresh:
+        problems.append("Only one kind of storage")
+    ok = n_copies >= 3 and len(media) >= 2 and has_offsite
+    status = "ok" if ok else ("none" if not fresh else "partial")
+    return {"copies": copies, "copy_count": n_copies, "media_count": len(media), "offsite": has_offsite,
+            "status": status, "problems": problems, "covered_by": covered_by}
+
+
+def store_notes(store: dict, prune: list[dict], verify: list[dict], sync_into: list[dict], newest: Optional[int], now: float,
+                offsite_max_age_h: int = OFFSITE_MAX_AGE_H) -> list[dict]:
+    """Warnings about one datastore, as {level, text}."""
+    notes = []
+    name = store["name"]
+    if not prune:
+        notes.append({"level": "warn", "text": "No prune job: old backups are never removed here"})
+    for p in prune:
+        if p.get("last-run-state") not in (None, "OK"):
+            notes.append({"level": "bad", "text": f"Prune job {p['id']} last run: {p.get('last-run-state')}"})
+    if not verify:
+        notes.append({"level": "warn", "text": "No verify job: backups are never checked for corruption"})
+    for v in verify:
+        if v.get("last-run-state") not in (None, "OK"):
+            notes.append({"level": "bad", "text": f"Verify job {v['id']} last run: {v.get('last-run-state')}"})
+    if is_offsite(store):
+        if not sync_into and store.get("backend") != "s3":
+            notes.append({"level": "warn", "text": "No sync job feeds this offsite store"})
+        age = _age_h(newest, now)
+        if age is None:
+            notes.append({"level": "bad", "text": "Offsite store is empty"})
+        elif age > offsite_max_age_h:
+            notes.append({"level": "bad", "text": f"Newest offsite backup is {fmt_age(age)}"
+                          + ("" if sync_into else " and no sync job feeds it")})
+        elif not sync_into:
+            notes.append({"level": "warn", "text": "No sync job feeds this offsite store"})
+    return notes
+
+
+def summarize(rows: list[dict]) -> dict:
+    out = {"ok": 0, "partial": 0, "none": 0}
+    for r in rows:
+        out[r["status"]] += 1
+    out["total"] = len(rows)
+    return out
+
+
+def describe_retention(job: dict) -> str:
+    parts = [f"{k.replace('keep-', '')} {job[k]}" for k in ("keep-last", "keep-hourly", "keep-daily", "keep-weekly", "keep-monthly", "keep-yearly") if job.get(k)]
+    return "keep " + ", ".join(parts) if parts else "keep all"
+
+
+def read_pbs(client) -> dict:
+    """Read-only. Everything the scorecard needs from one PBS: datastores, newest backup per guest per datastore,
+    and the prune, verify and sync jobs with their last run. Missing endpoints (permissions) degrade to empty."""
+    cfg = {d["name"]: d for d in (client._get("/config/datastore") or [])}
+    stores, last = [], {}
+    for d in client.datastores() or []:
+        name = d["store"]
+        c = cfg.get(name, {})
+        backend = d.get("backend-type") or ("s3" if "s3" in str(c.get("backend", "")) else "filesystem")
+        newest, groups_n, snaps = None, 0, 0
+        try:
+            groups = client.groups(name) or []
+        except Exception:
+            groups = []
+        for g in groups:
+            groups_n += 1
+            snaps += int(g.get("backup-count") or 0)
+            ts = g.get("last-backup")
+            if g.get("backup-type") in ("vm", "ct") and ts:
+                key = (g["backup-type"], str(g["backup-id"]))
+                last.setdefault(key, {})[name] = max(ts, last.get(key, {}).get(name, 0))
+                newest = max(newest or 0, ts)
+        stores.append({"name": name, "backend": backend, "path": c.get("path"), "groups": groups_n, "snapshots": snaps, "newest": newest})
+
+    def jobs(path):
+        try:
+            return client._get(path) or []
+        except Exception:
+            return []
+    return {"stores": stores, "last": last, "prune": jobs("/admin/prune"), "verify": jobs("/admin/verify"), "sync": jobs("/admin/sync")}

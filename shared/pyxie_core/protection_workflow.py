@@ -74,6 +74,12 @@ def _all_guests_baseline(job: dict, workloads_by_vmid: dict) -> set[int]:
     return {vmid for vmid, wl in workloads_by_vmid.items() if wl.node and wl.node.name == scope_node}
 
 
+def _tag_list(tags) -> list[str]:
+    if isinstance(tags, str):
+        tags = tags.replace(",", ";").split(";")
+    return sorted({str(t).strip().lower() for t in (tags or []) if str(t).strip()})
+
+
 def list_pbs_backup_jobs(db: Session, cluster: Cluster) -> list[dict]:
     """Read-only: every vzdump job on this cluster whose storage target is
     PBS-backed, with membership cross-referenced against PyXie's own known
@@ -111,7 +117,7 @@ def list_pbs_backup_jobs(db: Session, cluster: Cluster) -> list[dict]:
                 included = vmid in baseline and vmid not in exclude
             else:
                 included = vmid in explicit_vmids
-            members.append({"workload_id": str(wl.id), "vmid": vmid, "name": wl.name, "included": included})
+            members.append({"workload_id": str(wl.id), "vmid": vmid, "name": wl.name, "included": included, "tags": _tag_list(getattr(wl, "tags", None))})
 
         out.append(
             {

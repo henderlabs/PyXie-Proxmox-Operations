@@ -91,6 +91,11 @@ def sync_protection_targets():
     return _run_logged("protection_sync", _job)
 
 
+def stale_previews_job():
+    from pyxie_core.operations_engine import fail_stale_previews
+    return _run_logged("stale_previews", lambda db: {"closed": fail_stale_previews(db)})
+
+
 def evaluate_findings_job():
     return _run_logged("findings_evaluation", lambda db: evaluate_findings(db))
 
@@ -315,6 +320,7 @@ def run_all():
     -> recommendations, in that dependency order, each independently logged
     and each tolerant of the others failing.
     """
+    stale_previews_job()
     discover_all_targets()
     sync_protection_targets()
     evaluate_findings_job()

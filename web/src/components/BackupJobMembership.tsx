@@ -6,7 +6,7 @@ import { notifyOperationsChanged } from "@/lib/operationsBus";
 import { isInFlight } from "@/lib/operationStatus";
 import { useMe } from "@/lib/useMe";
 
-type BackupJobMember = { workload_id: string; vmid: number; name: string | null; included: boolean };
+type BackupJobMember = { workload_id: string; vmid: number; name: string | null; included: boolean; tags?: string[] };
 
 type BackupJob = {
   job_id: string;
@@ -60,6 +60,14 @@ function JobCard({ job }: { job: BackupJob }) {
     for (const v of pendingRemove) included.delete(v);
     return included;
   }, [job.members, pendingAdd, pendingRemove]);
+
+  const allTags = useMemo(() => Array.from(new Set(job.members.flatMap((m) => m.tags ?? []))).sort(), [job.members]);
+
+  function addTagged(tag: string) {
+    if (dryRun || !tag) return;
+    setPendingAdd((s) => new Set([...s, ...job.members.filter((m) => !m.included && (m.tags ?? []).includes(tag)).map((m) => m.vmid)]));
+    setPendingRemove((s) => new Set([...s].filter((v) => !job.members.some((m) => m.vmid === v && (m.tags ?? []).includes(tag)))));
+  }
 
   const hasPendingChanges = pendingAdd.size > 0 || pendingRemove.size > 0;
 
@@ -201,6 +209,17 @@ function JobCard({ job }: { job: BackupJob }) {
       {job.unknown_vmids.length > 0 && (
         <div className="text-xs text-warn mb-2">
           Job also lists VMID(s) {job.unknown_vmids.join(", ")} not known to PyXie's inventory (not shown below).
+        </div>
+      )}
+
+      {isAdmin && !job.all_guests && allTags.length > 0 && (
+        <div className="flex items-center gap-2 mb-2 text-xs text-muted">
+          Add every guest tagged
+          <select disabled={!!dryRun} value="" onChange={(e) => addTagged(e.target.value)} className="bg-surface border border-border rounded px-2 py-1 text-text">
+            <option value="">choose a tag…</option>
+            {allTags.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+          <span>then Preview Changes. This is a one-time add, not a standing rule.</span>
         </div>
       )}
 
