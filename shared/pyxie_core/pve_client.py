@@ -315,9 +315,16 @@ class PveClient:
         """GET /cluster/nextid: the lowest free VM ID Proxmox would hand out."""
         return int(self._get("/cluster/nextid"))
 
-    def storage_content(self, node: str, storage: str, content: str) -> list[dict]:
+    def storage_content(self, node: str, storage: str, content: str, vmid: int | None = None) -> list[dict]:
         """GET /nodes/{node}/storage/{storage}/content?content=iso|images|...: the volumes of that kind ({volid, size, format})."""
-        return self._get(f"/nodes/{node}/storage/{storage}/content", params={"content": content}) or []
+        params = {"content": content}
+        if vmid is not None:
+            params["vmid"] = vmid
+        return self._get(f"/nodes/{node}/storage/{storage}/content", params=params) or []
+
+    def extract_config(self, node: str, volid: str) -> str:
+        """GET /nodes/{node}/vzdump/extractconfig: the guest configuration stored inside a backup (text)."""
+        return self._get(f"/nodes/{node}/vzdump/extractconfig", params={"volume": volid}) or ""
 
     def pools(self) -> list[dict]:
         """GET /pools: the resource pools ({poolid, comment})."""

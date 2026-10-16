@@ -1,8 +1,5 @@
-"""Protection subsystem: generic contract + the PBS adapter (live-tested
-against the lab). Veeam/Commvault are structural-only in this pass -- see
-veeam_client.py / commvault_client.py -- and are marked accordingly via
-Provider.implementation_status / live_validation_status rather than being
-allowed to imply real interoperability.
+"""Protection subsystem: generic contract + the Proxmox Backup Server adapter (live-tested
+against the lab). Other backup products can be added later behind the same contract.
 """
 
 from datetime import datetime, timedelta, timezone

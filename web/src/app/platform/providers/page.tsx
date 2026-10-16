@@ -118,7 +118,7 @@ export default async function ProvidersPage() {
             ))}
           </div>
           <div className="text-xs text-muted mt-2">
-            Reserved for future phases (PBS, Veeam, Commvault, etc). Nothing to set up here yet.
+            Reserved for future phases. Nothing to set up here yet.
           </div>
         </details>
       </Card>

@@ -6,6 +6,7 @@ import StatusBadge from "@/components/StatusBadge";
 import ActionButton from "@/components/ActionButton";
 import PbsTargetForm from "@/components/PbsTargetForm";
 import BackupJobMembership from "@/components/BackupJobMembership";
+import ProtectionGuests from "@/components/ProtectionGuests";
 import { ShieldIcon } from "@/components/Icons";
 
 type Copy = { store: string; offsite: boolean; backend: string; last: number | null; age_text: string; fresh: boolean };
@@ -51,6 +52,13 @@ export default async function ProtectionPage() {
       </div>
 
       <Card className="mb-4">
+        <CardTitle>Guests, gaps first</CardTitle>
+        <div className="text-xs text-muted mb-2">Open a guest to see every restore point it has, on site and offsite, and to restore from one.</div>
+        <ProtectionGuests rows={card.rows} stores={card.stores.map((s) => s.name)} />
+        {gaps.length === 0 && <div className="text-sm text-good mt-2">Every guest meets 3-2-1.</div>}
+      </Card>
+
+      <Card className="mb-4">
         <CardTitle>Where the copies live</CardTitle>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div className="bg-surface2 rounded p-3 text-sm">
@@ -79,33 +87,6 @@ export default async function ProtectionPage() {
         <div className="text-xs text-muted mt-3">A datastore counts as offsite when it is S3-backed or its name says offsite. A copy counts when it is under {card.rules.backup_max_age_h} hours old (an offsite copy may be as old as its job's schedule allows, for example 35 days for a monthly job). Schedules and retention are set in Proxmox and PBS; PyXie shows them and does not change them.</div>
       </Card>
 
-      <Card className="mb-4">
-        <CardTitle>Every guest, gaps first</CardTitle>
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-muted">
-              <th className="py-1 pr-3">Guest</th><th className="pr-3">Result</th>
-              {card.stores.map((s) => <th key={s.name} className="pr-3">{s.name}</th>)}
-              <th className="pr-3">Job</th><th>What is missing</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
-            {card.rows.map((r) => (
-              <tr key={r.workload_id}>
-                <td className="py-1.5 pr-3"><a href={`/infrastructure/workloads/${r.workload_id}`} className="text-text hover:underline">{r.name}</a> <span className="text-xs text-muted">{r.vmid}</span></td>
-                <td className={`pr-3 ${statusColor[r.status]}`}>{statusText[r.status]}</td>
-                {card.stores.map((s) => {
-                  const c = r.copies.find((x) => x.store === s.name);
-                  return <td key={s.name} className={`pr-3 ${c?.fresh ? "text-text" : c?.last ? "text-warn" : "text-muted"}`}>{c?.age_text ?? "never"}</td>;
-                })}
-                <td className="pr-3 text-xs">{r.covered_by.length ? r.covered_by.join(", ") : <span className="text-warn">none</span>}</td>
-                <td className="text-xs text-muted">{r.problems.join("; ") || "Nothing"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {gaps.length === 0 && <div className="text-sm text-good mt-2">Every guest meets 3-2-1.</div>}
-      </Card>
 
       <Card className="mb-4">
         <CardTitle>Backup jobs (set in Proxmox)</CardTitle>
@@ -130,14 +111,14 @@ export default async function ProtectionPage() {
 
       <Card>
         <CardTitle>Backup servers</CardTitle>
-        <div className="text-xs text-muted mb-2">Each Proxmox Backup Server is managed like a host: status and jobs here, package patching on the <Link href="/operations/maintenance#backup-servers" className="text-accent hover:underline">Maintenance page</Link>, and its accounts, tokens and SSH access under <Link href="/platform/credentials" className="text-accent hover:underline">Settings, Credentials</Link>.</div>
+        <div className="text-xs text-muted mb-2">Each Proxmox Backup Server is managed like a host: status and jobs here, package patching on the <Link href="/operations/maintenance" className="text-accent hover:underline">Maintenance page</Link>, and its accounts, tokens and SSH access under <Link href="/platform/credentials" className="text-accent hover:underline">Settings, Credentials</Link>.</div>
         <div className="space-y-3">
           {servers.map((t) => (
             <div key={t.id} className="flex items-center justify-between bg-surface2 rounded p-3">
               <div>
                 <Link href={`/operations/protection/servers/${t.id}`} className="text-sm text-text hover:underline">{t.name}</Link>
                 <div className="text-xs text-muted">{t.hostname}{t.status?.reachable ? ` · PBS ${t.status.version}` : ""}
-                  {t.status?.updates?.count ? <span className="text-warn"> · {t.status.updates.count} update(s) waiting: <Link href="/operations/maintenance#backup-servers" className="underline">patch in Maintenance</Link></span> : null}
+                  {t.status?.updates?.count ? <span className="text-warn"> · {t.status.updates.count} update(s) waiting: <Link href="/operations/maintenance" className="underline">patch in Maintenance</Link></span> : null}
                   {!t.credentials.inventory || !t.credentials.administrative || !t.ssh.host_key_pinned ? <span className="text-warn"> · setup incomplete</span> : null}</div>
               </div>
               <div className="flex items-center gap-3">

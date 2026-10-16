@@ -551,6 +551,36 @@ class PveMaintenanceClient:
             raise MutationsDisabledError(_disabled_message("download a container template"))
         return self._request("POST", f"/nodes/{node}/aplinfo", data={"storage": storage, "template": template})
 
+    def backup_content(self, node: str, storage: str, vmid: Optional[int] = None) -> list[dict]:
+        """GET .../storage/{storage}/content?content=backup (read only). Listing backups needs more than the read-only token holds."""
+        params: dict = {"content": "backup"}
+        if vmid is not None:
+            params["vmid"] = vmid
+        return self._get(f"/nodes/{node}/storage/{storage}/content", params=params) or []
+
+    def extract_config(self, node: str, volid: str) -> str:
+        """GET /nodes/{node}/vzdump/extractconfig (read only): the guest configuration stored inside a backup."""
+        return self._get("/nodes/%s/vzdump/extractconfig" % node, params={"volume": volid}) or ""
+
+    def restore_guest(self, node: str, vmid: int, volid: str, *, storage: Optional[str] = None, force: bool = False, pool: Optional[str] = None) -> str:
+        """POST /nodes/{node}/qemu (or lxc) with the backup as the archive -> UPID. Restores onto vmid: a new guest, or over the
+        existing one with force. New hardware addresses (unique) so a copy never clashes with the original; never started here."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("restore a backup"))
+        data: dict = {"vmid": vmid, "unique": 1, "start": 0}
+        if getattr(self, "guest_kind", "qemu") == "lxc":
+            data.update({"ostemplate": volid, "restore": 1})
+        else:
+            data["archive"] = volid
+        if storage:
+            data["storage"] = storage
+        if force:
+            data["force"] = 1
+        if pool:
+            data["pool"] = pool
+        kind = "lxc" if getattr(self, "guest_kind", "qemu") == "lxc" else "qemu"
+        return self._request("POST", f"/nodes/{node}/{kind}", data=data)
+
     def set_vm_config_keys(self, node: str, vmid: int, keys: dict) -> None:
         """PUT /nodes/{node}/qemu/{vmid}/config with several config keys at once (a CD/DVD drive line, the boot order...). Synchronous."""
         if not _mutations_enabled():

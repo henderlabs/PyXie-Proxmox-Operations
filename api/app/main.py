@@ -29,6 +29,7 @@ from .routers import (
     policies,
     protection,
     pbs,
+    restore,
     providers,
     recommendations,
     node_detail,
@@ -104,6 +105,7 @@ app.include_router(metrics.router)
 app.include_router(policies.router)
 app.include_router(protection.router)
 app.include_router(pbs.router)
+app.include_router(restore.router)
 app.include_router(maintenance.router)
 app.include_router(operations.router)
 app.include_router(placement.router)

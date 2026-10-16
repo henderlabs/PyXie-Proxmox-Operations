@@ -44,7 +44,7 @@ export default function BackupTab({ workloadId, workloadName, canEdit }: { workl
             <tbody>{info.backups.map((b) => <tr key={b.volid} className="border-t border-border"><td className="py-1 pr-3 whitespace-nowrap">{when(b.ctime)}{b.protected ? <span className="text-xs text-muted ml-1">(protected)</span> : null}</td><td className="pr-3">{b.storage}</td><td className="pr-3 whitespace-nowrap">{size(b.size)}</td><td className="pr-3">{b.verified ?? "—"}</td><td className="text-xs text-muted">{b.notes ?? ""}</td></tr>)}</tbody>
           </table>
         )}
-        <p className="text-xs text-muted mt-2">Restoring is done in Proxmox (VM &gt; Backup) or Proxmox Backup Server.</p>
+        <p className="text-xs text-muted mt-2">To restore, open this guest on the <a href="/operations/protection" className="text-accent hover:underline">Protection page</a>: every restore point is listed there with a Restore button (as a new guest or over this one).</p>
       </Card>
     </div>
   );

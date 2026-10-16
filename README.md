@@ -13,7 +13,7 @@ rebalancing, per-workload NIC VLAN reassignment, and PBS backup-job
 membership -- and, since v0.37, creating, changing, cloning and deleting
 VMs and containers, snapshots, tags (with Proxmox's own colors), defaults
 and templates, resource pools, an ISO library and NFS storage setup (see
-[`docs/guest-management.md`](docs/guest-management.md)), and a 3-2-1 backup scorecard ([`docs/protection.md`](docs/protection.md)) and Proxmox Backup Server management: status, jobs and patching ([`docs/adding-a-pbs.md`](docs/adding-a-pbs.md)). See the Safety
+[`docs/guest-management.md`](docs/guest-management.md)), and a 3-2-1 backup scorecard ([`docs/protection.md`](docs/protection.md)) and Proxmox Backup Server management: status, jobs and patching ([`docs/adding-a-pbs.md`](docs/adding-a-pbs.md)), and restoring a VM or container from any restore point ([`docs/restore.md`](docs/restore.md)). See the Safety
 Contract section below for exactly how every one of those is gated.
 
 ## Installation
@@ -405,9 +405,9 @@ What the RAM columns show, and why it can differ from PVE:
 Generic contract (`protection_targets`/`protection_credentials`) +
 normalized `protection_results` (tri-state `protected`: `true`/`false`/
 `unknown`; `unknown` is never treated as safe). PBS is the fully
-live-tested adapter today; Veeam/Commvault are structural-only, explicitly
-marked `live_validation_status=not_tested` so structural support is never
-mistaken for proven interoperability.
+live-tested adapter; PyXie is a Proxmox operations tool, so other backup
+products (Veeam, Commvault) were removed from the build and can be added back
+later behind the same contract.
 
 If a protection provider sync fails, every existing `ProtectionResult` row
 for that provider is degraded to `confidence="stale"` (with the failure
