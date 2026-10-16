@@ -10,6 +10,7 @@ type Check = { check: string; ok: boolean; detail: unknown };
 const input = "bg-surface border border-border rounded px-2 py-1.5 text-sm w-full";
 const btn = "px-3 py-1.5 rounded bg-ink text-on-ink border border-proxmox hover:bg-proxmox/10 disabled:opacity-50 text-xs";
 export const PBS_SLOT_INFO: Record<string, { label: string; user: string; help: string }> = {
+  restore: { label: "Restore (read data)", user: "pyxie-pbs-restore@pbs", help: "Read-only access to backup data. Used only to add a datastore to Proxmox as a backup storage so you can restore from it (for example the offsite copy). It cannot write or delete backups." },
   inventory: { label: "Read-only (inventory)", user: "pyxie-pbs-ro@pbs", help: "Watches the server: status, datastores, tasks, jobs." },
   administrative: { label: "Admin (administrative)", user: "pyxie-pbs-admin@pbs", help: "Creates, changes, deletes and runs sync, prune and verify jobs. Never installs packages." },
 };
@@ -22,7 +23,7 @@ async function call(method: string, path: string, body?: unknown) {
 }
 
 /** One PBS API token (a "slot") on one backup server: view, add, edit, delete, test. Used on the Credentials page and on the backup server's Access tab. */
-export default function PbsTokenSlot({ serverId, slot, token, onChanged }: { serverId: string; slot: "inventory" | "administrative"; token?: PbsToken; onChanged: () => void }) {
+export default function PbsTokenSlot({ serverId, slot, token, onChanged }: { serverId: string; slot: "inventory" | "administrative" | "restore"; token?: PbsToken; onChanged: () => void }) {
   const info = PBS_SLOT_INFO[slot];
   const me = useMe();
   const canEdit = me === undefined || me?.is_admin === true;

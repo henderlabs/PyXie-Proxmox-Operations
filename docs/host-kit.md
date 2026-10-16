@@ -11,10 +11,10 @@ sudo bash pyxie-host-kit.sh              install or upgrade this node (idempoten
 sudo bash pyxie-host-kit.sh --uninstall  remove the identity, wrapper and sudoers entry
 ```
 
-Get it from **Platform > Setup guide > "Script builder: Host wrapper"**. The card generates a short script that downloads the
+Get it from **Settings > Credentials > "Install or remove the host wrapper"**. The card generates a short script that downloads the
 installer from a 30-minute link (`/host-kit/<token>`, no login needed so a node can `curl` it) and checks the SHA-256 PyXie
 shows before running it. The link carries no secret; integrity comes from the checksum, not the network. Links are capped
-at 50 downloads. The card above it, "Script builder: Proxmox accounts", generates the Proxmox-account script (user, roles, tokens, optional console access). **You run the script yourself, as root, on each node: PyXie never installs it.** If your nodes do not trust PyXie's certificate (always true with the default internal CA, `PYXIE_TLS_MODE=internal`), the builder ticks "This node does not trust PyXie's certificate" for you, which adds `curl -k`; the checksum still protects the download. Without it the download fails with `curl: (60) SSL certificate problem`.
+at 50 downloads. The section above it, "Create the Proxmox accounts" (also on Credentials), generates the Proxmox-account script (user, roles, tokens, optional console access). **You run the script yourself, as root, on each node: PyXie never installs it.** If your nodes do not trust PyXie's certificate (always true with the default internal CA, `PYXIE_TLS_MODE=internal`), the builder ticks "This node does not trust PyXie's certificate" for you, which adds `curl -k`; the checksum still protects the download. Without it the download fails with `curl: (60) SSL certificate problem`.
 
 What the wrapper can do is fixed: seven commands behind a forced-command SSH key and an exact sudoers allowlist (tested:
 `bash -i`, `; id`, `$(id)` and extra arguments are all refused).

@@ -18,12 +18,13 @@ Setup has three independent parts, each with its own account so backups are prot
 
 ## Step 1 and 2: the accounts (Setup guide, "Connect a backup server")
 
-Same as for Proxmox VE: tick the tokens you want in **Setup guide > Connect a backup server > a)** (or the server's **Access** tab, step 0), press *Generate the account script*, and paste it into a root shell on the PBS. It is safe to paste and to re-run, and it saves the token secrets to `/root/pyxie-pbs-tokens.txt` (root only).
+Same as for Proxmox VE: tick the tokens you want in **Settings > Credentials > Proxmox Backup Servers > Create the backup server accounts** (or the server's **Access** tab, step 0), press *Generate the account script*, and paste it into a root shell on the PBS. It is safe to paste and to re-run, and it saves the token secrets to `/root/pyxie-pbs-tokens.txt` (root only).
 
 | Account (default name) | Token | Grants (to the user **and** its token) |
 |---|---|---|
 | `pyxie-pbs-ro@pbs` | `inventory` | `Audit` on `/`, `RemoteAudit` on `/remote` |
 | `pyxie-pbs-admin@pbs` | `administrative` | `Audit` on `/`, `DatastoreAdmin` on `/datastore`, `RemoteSyncOperator` on `/remote`, and `Admin` on `/system` (only for Reboot Node and Full Maintenance) |
+| `pyxie-pbs-restore@pbs` (optional) | `restore` | `DatastoreReader` on `/datastore` (only to add a datastore to Proxmox so you can restore from it) |
 
 The `Admin` grant on `/system` is the only way to give PBS's `Sys.PowerManagement` privilege (PBS has no custom roles); it is broader than PyXie needs, so skip it if you do not want PyXie to reboot the server (Test Connection then says so, and Reboot Node and Full Maintenance are refused). A token can never do more than its user, so both must be granted. (Granting only the token leaves it with no permissions and every check returns 403.) The `Audit` role does not include `Remote.Audit`: without `RemoteAudit` on `/remote` PBS hides sync jobs and remotes, and PyXie then shows no sync job for a job that exists.
 
@@ -31,13 +32,13 @@ Then add the server on the Protection or Setup page with the read-only token, an
 
 With only the read-only token PyXie shows: version, uptime, load, memory and system disk, datastore usage with the estimated full date, running and failed tasks (24 hours), pending package updates, and all sync, prune and verify jobs with their last and next run. It raises findings (category "Backup server") when the server is unreachable, a datastore is 85% full or more, tasks failed, or updates are waiting.
 
-The admin token lets PyXie create, change, delete and run sync, prune and verify jobs (**Jobs** tab). Every change follows the Safety Contract: a preview with the exact settings that change, your confirmation, a re-check that the job is unchanged, the write, a read-back from PBS and an audit record. Deleting a job never deletes backups. The token cannot install packages or touch the operating system. The same Platform > Settings write switch that guards Proxmox changes guards these too.
+The admin token lets PyXie create, change, delete and run sync, prune and verify jobs (**Jobs** tab) and manage each datastore (**Datastores** tab): set the garbage collection schedule, run garbage collection now, and verify every backup now. On Protection, a guest's restore points also have **Verify** (re-check one backup against its checksums) and **Protect** (a protected backup is skipped by pruning). Every change follows the Safety Contract: a preview with the exact settings that change, your confirmation, a re-check that the job is unchanged, the write, a read-back from PBS and an audit record. Deleting a job never deletes backups. The token cannot install packages or touch the operating system. The same Platform > Settings write switch that guards Proxmox changes guards these too.
 
 ## Step 3: SSH access (patching)
 
 Neither the PVE nor the PBS API can install updates, only list them, so patching uses the same restricted wrapper (`pyxie-maint`) and pinned SSH host key PyXie uses for Proxmox hosts: fixed commands, no shell.
 
-1. **Setup guide > Connect a backup server > c)** (or the server's Access tab): choose *Install or upgrade the host wrapper* and *Generate the host script* (it generates the SSH key if needed). Paste the script into a root shell on the PBS. It downloads the kit, refuses to run if the checksum differs, installs `sudo` if missing, and installs the `pyxie-hostmaint` user, the wrapper and a sudoers entry.
+1. **Settings > Credentials > the server > Install or remove the host wrapper** (or the server's Access tab): choose *Install or upgrade the host wrapper* and *Generate the host script* (it generates the SSH key if needed). Paste the script into a root shell on the PBS. It downloads the kit, refuses to run if the checksum differs, installs `sudo` if missing, and installs the `pyxie-hostmaint` user, the wrapper and a sudoers entry.
 2. **Settings > Credentials > Proxmox Backup Servers > Connect a Host:** *Read Host Key*, compare the fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the PBS, *Pin it*, then *Check Connection* (read-only: it asks the wrapper for its version and status). The state becomes READY.
 
 Patching and rebooting are on the **Maintenance** page: the backup server is a row in the Nodes card (with a PBS chip, its update count and a *Reboot Required* badge), and the four actions work on it:
@@ -52,3 +53,8 @@ All of them refuse unless the server is idle: no PBS task (backup, sync, prune, 
 ## Offsite freshness
 
 The Protection scorecard uses the schedule of the job that feeds an offsite datastore (its sync job, or its prune job when no sync job is visible) to decide how old that copy may be: 35 days for monthly, 9 for weekly, 48 hours for daily.
+
+
+## Restoring from a datastore Proxmox does not have
+
+Proxmox can only restore from storages it has. A backup that exists only on another datastore of the backup server (typically the offsite one) is listed on Protection as a restore point with **Make restorable…**. This adds that datastore to Proxmox as a read-only backup storage, using the optional `restore` token (`DatastoreReader`, never the admin token). The preview shows what is added; Proxmox keeps the restore token's secret in its cluster storage configuration; remove the storage later in Storage setup, nothing on the backup server changes. Then restore from it like any other restore point.

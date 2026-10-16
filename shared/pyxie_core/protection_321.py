@@ -92,6 +92,9 @@ def store_notes(store: dict, prune: list[dict], verify: list[dict], sync_into: l
             notes.append({"level": "bad", "text": f"Prune job {p['id']} last run: {p.get('last-run-state')}"})
     if not verify:
         notes.append({"level": "warn", "text": "No verify job: backups are never checked for corruption"})
+    if store.get("gc_known") and not store.get("gc_schedule"):
+        notes.append({"level": "warn", "text": "No garbage collection schedule: space from pruned backups is only freed when someone starts garbage collection by hand"
+                      + (" (on S3 storage the unused data keeps costing money)" if store.get("backend") == "s3" else "")})
     for v in verify:
         if v.get("last-run-state") not in (None, "OK"):
             notes.append({"level": "bad", "text": f"Verify job {v['id']} last run: {v.get('last-run-state')}"})
@@ -142,7 +145,7 @@ def read_pbs(client) -> dict:
                 key = (g["backup-type"], str(g["backup-id"]))
                 last.setdefault(key, {})[name] = max(ts, last.get(key, {}).get(name, 0))
                 newest = max(newest or 0, ts)
-        stores.append({"name": name, "backend": backend, "path": c.get("path"), "groups": groups_n, "snapshots": snaps, "newest": newest})
+        stores.append({"name": name, "backend": backend, "gc_schedule": c.get("gc-schedule"), "gc_known": bool(c), "path": c.get("path"), "groups": groups_n, "snapshots": snaps, "newest": newest})
 
     def jobs(path):
         try:

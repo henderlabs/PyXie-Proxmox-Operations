@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import type { Organization, Provider, PveEndpoints, PveTarget, Site } from "@/lib/api";
 import { Card, CardTitle, PageHeader } from "@/components/Card";
@@ -7,10 +8,8 @@ import PveTargetRow from "@/components/PveTargetRow";
 import AddSiteForm from "@/components/AddSiteForm";
 import SiteRow from "@/components/SiteRow";
 import { PlugIcon } from "@/components/Icons";
-import { HostWrapperBuilder, PveAccountsBuilder } from "@/components/HostSetupBuilder";
 import SetupGuide from "@/components/SetupGuide";
 import SetupReference from "@/components/SetupReference";
-import SetupPbs from "@/components/SetupPbs";
 import type { SetupStatus } from "@/components/SetupGuide";
 
 const UNIMPLEMENTED_CATEGORIES = ["protection", "monitoring", "notification", "itsm", "authentication", "hardware"];
@@ -56,17 +55,6 @@ export default async function ProvidersPage() {
         </Card>
       )}
 
-      <div id="builder" />
-      <Card className="mb-4" id="builder-accounts">
-        <CardTitle>Steps 2 and 4 · Script builder: Proxmox accounts</CardTitle>
-        <PveAccountsBuilder />
-      </Card>
-
-      <Card className="mb-4" id="builder-host">
-        <CardTitle>Step 5 · Script builder: Host wrapper (on each node)</CardTitle>
-        <HostWrapperBuilder targets={targets.map((t) => ({ id: t.id, name: t.name }))} tlsMode={setupStatus.tls_mode ?? ""} />
-      </Card>
-
       <Card className="mb-4" id="targets">
         <CardTitle>Step 3 · Connect your cluster (PVE targets)</CardTitle>
         <p className="text-xs text-muted mb-3 normal-case">
@@ -97,9 +85,9 @@ export default async function ProvidersPage() {
         </div>
       </Card>
 
-      <Card className="mb-4" id="pbs">
-        <CardTitle>Optional · Connect a backup server (Proxmox Backup Server)</CardTitle>
-        <SetupPbs sites={sites} tlsMode={setupStatus.tls_mode ?? ""} />
+      <Card className="mb-4">
+        <CardTitle>Accounts, scripts and host access</CardTitle>
+        <p className="text-sm text-muted">The scripts that create the Proxmox and backup server accounts, and install the host wrapper, are on the <Link href="/platform/credentials" className="text-accent hover:underline">Credentials page</Link> next to the tokens and keys they produce.</p>
       </Card>
 
       <Card className="opacity-70 mb-6">

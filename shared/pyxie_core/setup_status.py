@@ -42,9 +42,9 @@ def build_steps(inp: dict) -> list[dict]:
     have_inv = any(t.get("inventory_status") for t in targets)
     add("accounts", "Create the Proxmox accounts", "done" if have_inv else "todo",
         "Read-only account and token created." if have_inv else
-        "PyXie never creates accounts itself. In the Script builder (Proxmox accounts) tick what you need, copy the script to any Proxmox node, run it as root, "
+        "PyXie never creates accounts itself. On the Credentials page, in the 'Create the Proxmox accounts' section, tick what you need, copy the script to any Proxmox node, run it as root, "
         "and keep the token secrets it prints: you then add them to PyXie yourself (a new account does not appear in PyXie on its own).",
-        action={"label": "Open the Script builder", "anchor": "builder-accounts"})
+        action={"label": "Open the account script builder (Credentials)", "href": "/platform/credentials#builder-accounts"})
 
     # 3. cluster
     if not targets:
@@ -103,7 +103,7 @@ def build_steps(inp: dict) -> list[dict]:
         {"key": "script", "label": "Run the host script on every node",
          "state": "done" if wrap_done else ("waiting" if not key_done else "todo"),
          "detail": f"{wrapper_ok} of {n_nodes} nodes have the current wrapper." if key_done else "Needs the key pair first.",
-         "action": None if wrap_done or not key_done else {"kind": "anchor", "anchor": "builder-host", "label": "Open the Host wrapper builder"}},
+         "action": None if wrap_done or not key_done else {"kind": "href", "href": "/platform/credentials#builder-host", "label": "Open the host wrapper builder (Credentials)"}},
         {"key": "pin", "label": "Pin each node's SSH host key (compare the fingerprint)",
          "state": "done" if pin_done else ("waiting" if not key_done else "todo"),
          "detail": f"{pinned} of {n_nodes} nodes pinned." if key_done else "Needs the key pair first.",
@@ -131,11 +131,11 @@ def build_steps(inp: dict) -> list[dict]:
             if got else "Added, but its read token is not saved yet.",
             items=[{"name": x["name"], "ok": bool(x.get("has_inventory")), "detail": ("read ok" if x.get("has_inventory") else "no read token")
                     + (", admin token" if x.get("has_admin") else ", no admin token") + (", patching ready" if x.get("ssh_ready") else ", patching not set up")} for x in pbs],
-            action={"label": "Open the backup server section", "anchor": "pbs"})
+            action={"label": "Open the backup server setup (Credentials)", "href": "/platform/credentials#pbs"})
     else:
         add("pbs", "Connect a backup server (optional)", "optional",
             "Only if you use Proxmox Backup Server: adds the 3-2-1 scorecard, backup job editing and patching. Skip it otherwise.",
-            action={"label": "Open the backup server section", "anchor": "pbs"})
+            action={"label": "Open the backup server setup (Credentials)", "href": "/platform/credentials#pbs"})
 
     # 6. features
     writes, console = bool(st.get("pve_mutations_enabled")), bool(st.get("console_enabled"))

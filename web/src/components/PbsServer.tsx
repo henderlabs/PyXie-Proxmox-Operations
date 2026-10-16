@@ -23,6 +23,7 @@ type Server = {
   credentials: Record<string, PbsToken & { token: string }>;
   ssh: { generated: boolean; status: string | null; host_key_pinned: boolean; fingerprint: string | null; wrapper_version: string | null; expected_wrapper_version: string; wrapper_outdated: boolean };
   jobs: Record<string, Job[]>; stores: string[]; remotes: string[]; error: string | null;
+  datastores?: { name: string; backend: string; gc_schedule: string | null; gc: { last_state: string | null; last_end: number | null; next: number | null; removed_bytes: number | null; pending_bytes: number | null }; used: number | null; total: number | null }[];
 };
 type Check = { check: string; ok: boolean; detail: unknown };
 
@@ -56,7 +57,7 @@ export default function PbsServer({ id }: { id: string }) {
   const canEdit = me === undefined || me?.is_admin === true;
   const [s, setS] = useState<Server | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<"overview" | "jobs" | "patching" | "access">("overview");
+  const [tab, setTab] = useState<"overview" | "datastores" | "jobs" | "patching" | "access">("overview");
   const load = useCallback(() => { call("GET", `servers/${id}`).then((d) => { setS(d); setErr(null); }).catch((e) => setErr(e.message)); }, [id]);
   useEffect(() => { load(); }, [load]);
   async function refresh() { try { await call("POST", `servers/${id}/refresh`); load(); } catch (e) { setErr((e as Error).message); } }
@@ -80,13 +81,14 @@ export default function PbsServer({ id }: { id: string }) {
       {err && <div className="text-bad text-sm">{err}</div>}
       {needsSetup && <div className="text-warn text-xs border border-warn/40 rounded p-2">Setup is not complete: {[!s.credentials.inventory && "read token", !s.credentials.administrative && "write token (needed to change jobs)", !s.ssh.host_key_pinned && "SSH access (needed to patch)"].filter(Boolean).join(", ")}. See Access, or <a href="/platform/credentials" className="underline">Settings, Credentials</a>.</div>}
       <div className="flex gap-1 border-b border-border text-sm">
-        {(["overview", "jobs", "patching", "access"] as const).map((t) => (
+        {(["overview", "datastores", "jobs", "patching", "access"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)} className={`px-3 py-1.5 -mb-px border-b-2 ${tab === t ? "border-proxmox text-text" : "border-transparent text-muted hover:text-text"}`}>
-            {t === "overview" ? "Overview" : t === "jobs" ? "Jobs" : t === "patching" ? `Patching${st?.updates?.count ? ` (${st.updates.count})` : ""}` : "Access"}
+            {t === "overview" ? "Overview" : t === "datastores" ? "Datastores" : t === "jobs" ? "Jobs" : t === "patching" ? `Patching${st?.updates?.count ? ` (${st.updates.count})` : ""}` : "Access"}
           </button>
         ))}
       </div>
       {tab === "overview" && <Overview s={s} />}
+      {tab === "datastores" && <Datastores s={s} canEdit={canEdit} reload={load} />}
       {tab === "jobs" && <Jobs s={s} canEdit={canEdit} reload={load} />}
       {tab === "patching" && <Card><CardTitle>Patching</CardTitle><div className="text-sm">Package updates for backup servers are managed on the <a href="/operations/maintenance#backup-servers" className="text-accent hover:underline">Maintenance page</a>, next to the Proxmox hosts. {s.status?.updates?.count ? <span className="text-warn">{s.status.updates.count} package(s) are waiting on this server.</span> : null}</div></Card>}
       {tab === "access" && <Access s={s} canEdit={canEdit} reload={load} />}
@@ -136,6 +138,51 @@ function Overview({ s }: { s: Server }) {
         {st.tasks_failed_24h == null ? <div className="text-sm text-muted">Not readable with this token.</div> : st.tasks_failed_24h.length === 0 ? <div className="text-sm text-good">No failures.</div> :
           st.tasks_failed_24h.map((t, i) => <div key={i} className="text-sm text-bad">{t.type} <span className="text-muted">{t.id} · {when(t.end)} · {t.status}</span></div>)}
       </Card>
+    </div>
+  );
+}
+
+function Datastores({ s, canEdit, reload }: { s: Server; canEdit: boolean; reload: () => void }) {
+  const [pend, setPend] = useState<Operation | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [sched, setSched] = useState("");
+  const hasAdmin = !!s.credentials.administrative;
+  async function run(store: string, action: string, params: Record<string, unknown>) {
+    setBusy(true); setErr(null);
+    try { const d = await call("POST", `servers/${s.id}/datastores/dry-run`, { store, action, params }); setPend(d); setEditing(null); notifyOperationsChanged(); }
+    catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  }
+  if (pend) return <OpPreview key={pend.id} op={pend} confirmLabel="Confirm" progressText="Working on the backup server" doneText="Done and read back from the backup server (a garbage collection or verify run continues there and can take hours)." onFinished={() => { reload(); notifyOperationsChanged(); }} onClose={() => { setPend(null); reload(); }} />;
+  return (
+    <div className="space-y-4">
+      {!hasAdmin && canEdit && <div className="text-warn text-xs">Datastore settings are read-only until a write token is saved (Access, step 2).</div>}
+      {(s.datastores ?? []).map((d) => (
+        <Card key={d.name}>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div><div className="text-text font-medium">{d.name} <span className="text-xs text-muted font-normal">{d.backend === "s3" ? "S3 object storage" : "disk"}</span></div>
+              <div className="text-xs text-muted">{d.used != null && d.total ? `${gb(d.used)} of ${gb(d.total)} used` : ""}</div></div>
+            {canEdit && hasAdmin && <div className="flex gap-2">
+              <button className={btn} disabled={busy} onClick={() => run(d.name, "gc_run", {})}>Run garbage collection now</button>
+              <button className={btn} disabled={busy} onClick={() => run(d.name, "verify_run", {})}>Verify everything now</button>
+            </div>}
+          </div>
+          <div className="text-sm mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div><div className="text-xs text-muted">Garbage collection schedule</div>
+              {editing === d.name ? (
+                <div className="flex gap-2 mt-1"><input className={input} value={sched} onChange={(e) => setSched(e.target.value)} placeholder="e.g. sat 18:15, daily; empty = never" />
+                  <button className={btn} disabled={busy} onClick={() => run(d.name, "gc_schedule", { schedule: sched })}>Preview</button><button className="text-xs text-muted" onClick={() => setEditing(null)}>cancel</button></div>
+              ) : <div>{d.gc_schedule ?? <span className="text-warn">none: it only runs when started by hand</span>} {canEdit && hasAdmin && <button className="text-xs text-accent hover:underline ml-2" onClick={() => { setEditing(d.name); setSched(d.gc_schedule ?? ""); }}>Edit</button>}</div>}</div>
+            <div><div className="text-xs text-muted">Last garbage collection</div>
+              <div className={d.gc.last_state && d.gc.last_state !== "OK" ? "text-bad" : ""}>{d.gc.last_state ? `${d.gc.last_state}, ${when(d.gc.last_end)}` : "never"}{d.gc.removed_bytes != null ? <span className="text-xs text-muted"> · freed {gb(d.gc.removed_bytes)}</span> : null}</div></div>
+            <div><div className="text-xs text-muted">Next scheduled run</div><div>{when(d.gc.next)}</div></div>
+          </div>
+        </Card>
+      ))}
+      {(s.datastores ?? []).length === 0 && <Card><div className="text-sm text-muted">No datastores are readable with this token.</div></Card>}
+      {err && <div className="text-bad text-xs">{err}</div>}
+      <p className="text-xs text-muted">Garbage collection frees chunks no backup uses; it deletes no backup. Verifying re-reads backups and checks them against their checksums (verify one backup from a guest's restore points on Protection). Prune and verify schedules are on the Jobs tab.</p>
     </div>
   );
 }
@@ -231,7 +278,7 @@ function Jobs({ s, canEdit, reload }: { s: Server; canEdit: boolean; reload: () 
 }
 
 function Access({ s, canEdit, reload }: { s: Server; canEdit: boolean; reload: () => void }) {
-  const tokenCard = (slot: "inventory" | "administrative", title: string, why: string) => (
+  const tokenCard = (slot: "inventory" | "administrative" | "restore", title: string, why: string) => (
     <Card>
       <CardTitle>{title}</CardTitle>
       <p className="text-xs text-muted mb-2">{why}</p>
@@ -243,6 +290,7 @@ function Access({ s, canEdit, reload }: { s: Server; canEdit: boolean; reload: (
       <Card><div className="text-sm text-muted">A backup server is set up like a Proxmox host: a read token so PyXie can see it (step 1), a write token so PyXie can edit its sync, prune and verify jobs (step 2), and SSH access so PyXie can patch it (step 3). Only step 1 is needed to watch it. All saved tokens are also listed under Platform, Credentials. PyXie never creates users or keys on the PBS itself; you run the commands below.</div></Card>
       <Card><CardTitle>Step 0: create the accounts on the backup server</CardTitle><PbsAccountsBuilder /></Card>
       {tokenCard("inventory", "Step 1: read token", "Where the read-only token is saved. Both the user and its token carry the grants (a token can never do more than its user); RemoteAudit on /remote is what lets PyXie see sync jobs, which the Audit role does not include.")}
+      {tokenCard("restore", "Step 4: restore token (optional, to restore from datastores Proxmox does not have yet)", "Read-only access to backup data (DatastoreReader). Used only to add a datastore, such as the offsite copy, to Proxmox as a backup storage so you can restore from it. It cannot write or delete backups.")}
       {tokenCard("administrative", "Step 2: write token (to edit jobs)", "Used only for creating, changing, deleting and running sync, prune and verify jobs, and only after you confirm a preview. It cannot install packages or touch the operating system.")}
       <Card>
         <CardTitle>Step 3: SSH access (to patch)</CardTitle>

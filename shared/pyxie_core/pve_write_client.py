@@ -533,6 +533,17 @@ class PveMaintenanceClient:
             data["nodes"] = ",".join(spec["nodes"])
         self._request("POST", "/storage", data=data)
 
+    def create_pbs_storage(self, spec: dict, password: str) -> None:
+        """POST /storage (type pbs): a Proxmox Backup Server datastore as a backup storage. `password` is the read-only token secret; it is
+        sent once and never kept by PyXie in an operation. Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("add a backup storage"))
+        data = {"storage": spec["id"], "type": "pbs", "server": spec["server"], "datastore": spec["datastore"], "username": spec["username"],
+                "password": password, "fingerprint": spec["fingerprint"], "content": "backup"}
+        if spec.get("port") and int(spec["port"]) != 8007:
+            data["port"] = int(spec["port"])
+        self._request("POST", "/storage", data=data)
+
     def remove_storage(self, storage: str) -> None:
         """DELETE /storage/{storage}: removes the definition only; Proxmox never deletes the files on the share."""
         if not _mutations_enabled():

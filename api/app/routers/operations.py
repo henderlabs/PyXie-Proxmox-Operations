@@ -354,6 +354,8 @@ _JOB_TIMEOUT_BY_TYPE = {
     "host.reboot": 1800,
     "pbs.update": 3900,
     "pbs.reboot": 1800,
+    "pbs.datastore_change": 300,
+    "pbs.storage_add": 300,
     "workload.restore": 41000,  # up to 10 h for the restore task plus configuring and starting
     "pbs.maintenance": 7200,
     "pbs.job_change": 300,
@@ -433,6 +435,12 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "host.reboot":
         from pyxie_core.reboot_workflow import approve as approve_reboot
         return approve_reboot(db, op, approved_by=actor)
+    if op.operation_type_id == "pbs.storage_add":
+        from pyxie_core.pbs_storage_workflow import approve as approve_pbs_store
+        return approve_pbs_store(db, op, approved_by=actor)
+    if op.operation_type_id == "pbs.datastore_change":
+        from pyxie_core.pbs_datastore_workflow import approve as approve_pbs_ds
+        return approve_pbs_ds(db, op, approved_by=actor)
     if op.operation_type_id == "workload.restore":
         from pyxie_core.restore_workflow import approve as approve_restore
         return approve_restore(db, op, approved_by=actor)

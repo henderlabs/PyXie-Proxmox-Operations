@@ -134,7 +134,7 @@ export default function SetupReference() {
       </div></details>
 
       <details className="border border-border rounded-lg p-3 mb-2"><summary className="cursor-pointer text-sm font-medium text-text">Putting the host kit on a node</summary><div className="mt-2">
-        <p className="text-xs text-muted mb-2">The Script builder (Host wrapper, on the Setup guide page) writes the script and shows the exact commands with your node address filled in. The three ways, in short:</p>
+        <p className="text-xs text-muted mb-2">The host wrapper script builder (on the Credentials page) writes the script and shows the exact commands with your node address filled in. The three ways, in short:</p>
         <ol className="list-decimal pl-5 text-sm text-text space-y-1.5">
           <li><span className="font-medium">Paste on the node (simplest).</span> <span className="text-muted text-xs">Log in to the node as root, paste the generated script into a file with <code>nano</code>, run it with <code>bash</code>. It downloads one installer from a 30-minute link and refuses to run unless the checksum matches.</span></li>
           <li><span className="font-medium">Copy the installer file.</span> <span className="text-muted text-xs">Download <code>pyxie-host-kit.sh</code>, <code>scp</code> it to the node, compare <code>sha256sum</code> with the checksum PyXie shows, run <code>bash pyxie-host-kit.sh</code>. Nothing to unzip.</span></li>

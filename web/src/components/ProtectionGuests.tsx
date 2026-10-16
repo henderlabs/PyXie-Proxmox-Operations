@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { Table } from "@/components/Table";
 import RestorePoints from "@/components/RestorePoints";
+import GuestJobs from "@/components/GuestJobs";
+import type { BackupJob } from "@/lib/api";
 
 type Copy = { store: string; offsite: boolean; last: number | null; age_text: string; fresh: boolean };
 export type GuestRow = { id?: string; workload_id: string; vmid: number; name: string; type: string; status: "ok" | "partial" | "none"; copies: Copy[]; problems: string[]; covered_by: string[] };
@@ -12,14 +14,14 @@ const statusColor = { ok: "text-good", partial: "text-warn", none: "text-bad" } 
 const order = { none: 0, partial: 1, ok: 2 } as const;
 
 /** Every guest with its 3-2-1 result; open a row for all of its restore points and to restore from one. */
-export default function ProtectionGuests({ rows, stores }: { rows: GuestRow[]; stores: string[] }) {
+export default function ProtectionGuests({ rows, stores, jobs }: { rows: GuestRow[]; stores: string[]; jobs: BackupJob[] }) {
   return (
     <Table<GuestRow & { id: string }>
       rows={rows.map((r) => ({ ...r, id: r.workload_id }))}
       emptyMessage="No guests."
       storageKey="protection-guests"
       singleExpand
-      renderDetail={(r) => <RestorePoints workloadId={r.workload_id} name={r.name} vmid={r.vmid} />}
+      renderDetail={(r) => <div><div className="px-3 pt-3"><GuestJobs workloadId={r.workload_id} vmid={r.vmid} jobs={jobs} /></div><RestorePoints workloadId={r.workload_id} name={r.name} vmid={r.vmid} /></div>}
       columns={[
         {
           header: "Guest",

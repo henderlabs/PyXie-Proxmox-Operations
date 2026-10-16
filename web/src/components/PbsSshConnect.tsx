@@ -40,7 +40,7 @@ export default function PbsSshConnect({ serverId, serverName, ssh, pending, onCh
           <button disabled={busy} onClick={() => run(async () => { await call("POST", `servers/${serverId}/ssh/generate?force=true`); onChanged(); })} className={btn("border-warn hover:bg-warn/10")}>Regenerate Keypair</button>
         </div>}
       </div>
-      <p className="text-xs text-muted">On the server: run the host script (Setup guide, Connect a backup server, or this server's Access tab), then come back here to read and pin its host key. To fully remove it later, generate the removal script there and click Disconnect below.</p>
+      <p className="text-xs text-muted">On the server: run the host script (Credentials, Install or remove the host wrapper, or this server's Access tab), then come back here to read and pin its host key. To fully remove it later, generate the removal script there and click Disconnect below.</p>
       <div className="border border-border rounded px-3 py-2">
         <div className="flex items-center justify-between">
           <span className="text-text font-medium">{serverName}</span>

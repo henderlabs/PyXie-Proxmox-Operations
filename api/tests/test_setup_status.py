@@ -105,7 +105,7 @@ def test_hosts_substeps_after_keypair_point_at_builder_then_pinning():
                             "expected_wrapper": "1.1.0", "settings": {}}))
     sub = {x["key"]: x for x in s["hosts"]["substeps"]}
     assert sub["keypair"]["state"] == "done"
-    assert sub["script"]["state"] == "todo" and sub["script"]["action"]["anchor"] == "builder-host"
+    assert sub["script"]["state"] == "todo" and sub["script"]["action"]["href"] == "/platform/credentials#builder-host"
     assert "1 of 2" in sub["script"]["detail"]
     assert sub["pin"]["state"] == "todo" and sub["pin"]["action"]["href"] == "/platform/credentials"
     assert "1 of 2" in sub["pin"]["detail"]

@@ -270,10 +270,12 @@ export function PbsAccountsBuilder() {
   const [adminUser, setAdminUser] = useState("pyxie-pbs-admin@pbs");
   const [inventory, setInventory] = useState(false);
   const [admin, setAdmin] = useState(false);
+  const [restoreOn, setRestoreOn] = useState(false);
+  const [restoreUser, setRestoreUser] = useState("pyxie-pbs-restore@pbs");
   const [generated, setGenerated] = useState(false);
   const okName = (u: string) => /^[A-Za-z0-9._-]+@pbs$/.test(u);
-  const ok = (inventory || admin) && (!inventory || okName(roUser)) && (!admin || okName(adminUser));
-  const script = useMemo(() => (ok ? pbsScript({ roUser, adminUser, inventory, admin }) : ""), [ok, roUser, adminUser, inventory, admin]);
+  const ok = (inventory || admin || restoreOn) && (!inventory || okName(roUser)) && (!admin || okName(adminUser)) && (!restoreOn || okName(restoreUser));
+  const script = useMemo(() => (ok ? pbsScript({ roUser, adminUser, inventory, admin, restore: restoreOn, restoreUser }) : ""), [ok, roUser, adminUser, inventory, admin, restoreOn, restoreUser]);
   const touch = () => setGenerated(false);
   if (!isAdmin) return <p className="text-sm text-muted">Admin accounts can generate setup scripts.</p>;
   return (
@@ -288,10 +290,14 @@ export function PbsAccountsBuilder() {
           <Check checked={admin} onChange={(v) => { setAdmin(v); touch(); }} label="Admin token (administrative)" sub="Also DatastoreAdmin on /datastore and RemoteSyncOperator on /remote: create, change, delete and run sync, prune and verify jobs. It cannot install packages." />
           {admin && <UserField label="Admin account name" value={adminUser} def="pyxie-pbs-admin@pbs" onChange={(v) => { setAdminUser(v); touch(); }} ok={okName(adminUser)} />}
         </div>
+        <div className="space-y-1">
+          <Check checked={restoreOn} onChange={(v) => { setRestoreOn(v); touch(); }} label="Restore token (read backup data)" sub="DatastoreReader on /datastore. Only used to add a datastore Proxmox does not have yet (for example the offsite copy) as a read-only backup storage so you can restore from it. It cannot write or delete backups." />
+          {restoreOn && <UserField label="Restore account name" value={restoreUser} def="pyxie-pbs-restore@pbs" onChange={(v) => { setRestoreUser(v); touch(); }} ok={okName(restoreUser)} />}
+        </div>
       </div>
       <div className="flex items-center gap-3">
         <button type="button" disabled={!script} onClick={() => setGenerated(true)} className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50">Generate the account script</button>
-        {!inventory && !admin && <span className="text-xs text-muted">Tick at least one token first.</span>}
+        {!inventory && !admin && !restoreOn && <span className="text-xs text-muted">Tick at least one token first.</span>}
       </div>
       {generated && script && (
         <div className="space-y-3">
@@ -299,7 +305,7 @@ export function PbsAccountsBuilder() {
           <div className="border border-border rounded p-3 space-y-1 text-xs text-muted">
             <div className="text-sm font-medium text-text">After it runs: put each token into PyXie</div>
             <ol className="list-decimal pl-5 space-y-0.5">
-              <li>In <a className="text-accent hover:underline" href="/platform/credentials">Credentials</a>, Proxmox Backup Servers: the read-only token is <code>{inventory ? `${roUser}!inventory` : "not selected"}</code>, the admin token is <code>{admin ? `${adminUser}!administrative` : "not selected"}</code>. Press Edit or + Add Credential, enter the user and token name exactly as shown and the secret from <code>{PBS_TOKEN_FILE}</code>, then Test Connection.</li>
+              <li>In <a className="text-accent hover:underline" href="/platform/credentials">Credentials</a>, Proxmox Backup Servers: the read-only token is <code>{inventory ? `${roUser}!inventory` : "not selected"}</code>, the admin token is <code>{admin ? `${adminUser}!administrative` : "not selected"}</code>, the restore token is <code>{restoreOn ? `${restoreUser}!restore` : "not selected"}</code>. Press Edit or + Add Credential, enter the user and token name exactly as shown and the secret from <code>{PBS_TOKEN_FILE}</code>, then Test Connection.</li>
               <li>When every secret is in PyXie, delete the file on the PBS: <code>shred -u {PBS_TOKEN_FILE}</code></li>
             </ol>
           </div>

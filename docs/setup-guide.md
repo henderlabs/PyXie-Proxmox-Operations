@@ -14,7 +14,7 @@ Platform > Setup guide (in the left menu; formerly "Integrations") opens with "S
 | 7 | Notifications | email relay on and a recipient set |
 | 8 | Check everything | (button) |
 
-Step 2 is done by running the script from the **Script builder: Proxmox accounts** card on a Proxmox node; PyXie never
+Step 2 is done by running the script from the **Create the Proxmox accounts** section of **Settings > Credentials** on a Proxmox node; PyXie never
 creates accounts itself, and a new account does not appear in PyXie on its own: after the script runs, add each token on
 the Credentials page (**+ Add Credential Purpose**, purpose `inventory` / `maintenance` / `console`, token user and token
 id exactly as the script created them, the secret from `/root/pyxie-tokens.txt`, then `shred -u` that file) and press

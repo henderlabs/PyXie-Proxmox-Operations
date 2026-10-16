@@ -83,7 +83,7 @@ def rule_matches(rule: NotificationRule, *, category: str, severity: str, recove
 
 
 OPERATION_LABELS = {
-    "vm.live_migrate": "Live migration", "node.evacuate": "Evacuation", "host.update": "Host update", "pbs.update": "Backup server update", "pbs.reboot": "Backup server reboot", "workload.restore": "Restore from backup", "pbs.maintenance": "Backup server maintenance", "pbs.job_change": "Backup server job change", "host.reboot": "Host reboot", "maintenance.run": "Maintenance run",
+    "vm.live_migrate": "Live migration", "node.evacuate": "Evacuation", "host.update": "Host update", "pbs.update": "Backup server update", "pbs.reboot": "Backup server reboot", "workload.restore": "Restore from backup", "pbs.datastore_change": "Backup datastore change", "pbs.storage_add": "Add backup datastore to Proxmox", "pbs.maintenance": "Backup server maintenance", "pbs.job_change": "Backup server job change", "host.reboot": "Host reboot", "maintenance.run": "Maintenance run",
     "cluster.rebalance": "Balance Load", "workload.shutdown": "Shut down", "workload.start": "Start", "workload.force_stop": "Force stop", "workload.reboot": "Restart",
     "workload.resize": "Resize", "workload.move_storage": "Change storage", "workload.snapshot_create": "Take snapshot", "workload.snapshot_delete": "Delete snapshot",
     "workload.snapshot_rollback": "Roll back snapshot", "workload.tags_change": "Change tags", "cluster.tag_colors": "Change tag colors", "workload.disk_grow": "Grow disk",

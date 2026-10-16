@@ -6,7 +6,8 @@ PyXie can show a guest's screen (noVNC) inside the Console tab of a workload, an
 ## One-time setup (per PVE target; done by a PVE admin, not by PyXie)
 
 Two options. PyXie uses the `console` credential if one is saved and otherwise falls back to the
-`maintenance` credential. The easiest way is the **Script builder: Proxmox accounts** card on
+`maintenance` credential. The easiest way is the **Create the Proxmox accounts** section of the **Settings > Credentials** page,
+on
 **Platform > Setup guide**: it writes the script for either option (nothing is ticked at first).
 
 | Builder choice ("Embedded VM console") | What the script does | PyXie credential to add |
