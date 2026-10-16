@@ -124,6 +124,12 @@ def dry_run_restore(db, source: Workload, *, volid: str, mode: str, newid: int |
                 reasons.append("could not read the guest configuration inside the backup: its disks and network devices are not shown")
             disks = config_disks(cfg, kind)
             nets = config_nets(cfg)
+            if kind == "ct" and not storage:
+                # Proxmox restores a container onto ONE storage and falls back to 'local', which cannot hold containers: use the root disk's
+                root = next((d for d in disks if d["key"] == "rootfs" and d["storage"]), None)
+                if root:
+                    storage = ctx["storage"] = root["storage"]
+                    reasons.append(f"all of the container's disks go to {storage}, the storage of its root disk in the backup (Proxmox restores a container onto one storage)")
             disk_bytes = sum(d["size"] for d in disks)
             need = disk_bytes or int((point or {}).get("size") or 0)
             ctx["disk_count"], ctx["nic_count"] = len(disks), len(nets)

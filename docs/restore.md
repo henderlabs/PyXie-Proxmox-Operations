@@ -23,11 +23,12 @@ The backup still exists and has **not failed verification** on the backup server
 - A disk marked "no backup" (`backup=0`) is not in the backup, so it is not restored; Proxmox turns that line into a note on the restored guest. PyXie does not count such a disk when it checks the result.
 - After an **overwrite**, Proxmox 9 may keep the replaced disks as `unused` disks of the guest, still using space. The result of the operation lists them; remove them in the guest's hardware settings.
 - A restored guest does not start by itself when its host boots (the "start at boot" setting is cleared on a new guest).
-- Containers use the same restore (`pct restore`); this was written against the same calls but has not been exercised against a real container backup on the lab yet.
+- Containers use the same restore (`pct restore`). Proxmox restores a container onto one storage, so all its disks go to the storage of its root disk in the backup (or the storage you choose).
+- Each restore point also has **Verify** (the backup server re-checks that backup now) and **Protect** (pruning skips a protected backup).
 
 ## Offsite copies
 
-Proxmox can only restore from a datastore it has as a storage. A copy that exists only on another datastore (for example the offsite one) is listed as *not restorable from here* with the reason. Add that datastore to Proxmox as a storage to restore from it.
+Proxmox can only restore from a datastore it has as a storage. A copy that exists only on another datastore (for example the offsite one) is listed with a **Make restorable…** button: it adds that datastore to Proxmox as a read-only backup storage through the optional `restore` token of the backup server (see [adding-a-pbs.md](adding-a-pbs.md)), after a preview. If no restore token is saved the preview says so. Restoring from an S3-backed datastore reads the data back from the bucket.
 
 ## Not covered
 

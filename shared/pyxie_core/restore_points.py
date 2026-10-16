@@ -142,7 +142,7 @@ def read_restore_points(db, workload) -> dict:
                     for s in pc.snapshots(name, kind, str(workload.vmid)) or []:
                         pbs_points.append({"datastore": name, "time": int(s["backup-time"]), "size": s.get("size"),
                                            "verified": (s.get("verification") or {}).get("state"), "protected": bool(s.get("protected")),
-                                           "notes": s.get("comment"), "offsite": is_offsite(store), "backend": store["backend"], "server": t.name})
+                                           "notes": s.get("comment"), "offsite": is_offsite(store), "backend": store["backend"], "server": t.name, "server_id": str(t.id)})
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{t.name}: could not read its backups ({type(exc).__name__})")
     return {"points": merge_points(pve_points, pbs_points), "errors": errors, "kind": kind}

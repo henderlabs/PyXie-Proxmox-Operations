@@ -44,7 +44,7 @@ rush it.
 
 ## 2. Create the maintenance role
 
-(The Script builder (Proxmox accounts card) on the Setup guide page does steps 1 to 4 for you. It is safe to paste into a root shell: it runs inside its own `bash`, saves the token secrets to `/root/pyxie-tokens.txt`, and prints `STOPPED at line N` if something fails.), if you haven't already **[manual]**
+(The Script builder (Create the Proxmox accounts, on the Credentials page) does steps 1 to 4 for you. It is safe to paste into a root shell: it runs inside its own `bash`, saves the token secrets to `/root/pyxie-tokens.txt`, and prints `STOPPED at line N` if something fails.), if you haven't already **[manual]**
 
 `inventory` uses PVE's own built-in **`PVEAuditor`** role -- nothing to
 create. `maintenance` needs a custom role that doesn't exist by default:
@@ -164,7 +164,7 @@ it stays a deliberate manual step (or part of your own configuration
 management). Budget for it: a 16-node cluster means 16 installs and 16 host
 key pins.
 
-**Easiest way: Platform > Setup guide > the two "Script builder" cards.** *Proxmox accounts* (once per cluster) writes the script for the user, roles, tokens and optional console access; *Host wrapper* (every node) writes the install, upgrade or remove script. Nothing is ticked at first. Copy a script to a node and run it as root yourself; PyXie never runs it for you. The wrapper script downloads a
+**Easiest way: Settings > Credentials > the two script builders.** *Proxmox accounts* (once per cluster) writes the script for the user, roles, tokens and optional console access; *Host wrapper* (every node) writes the install, upgrade or remove script. Nothing is ticked at first. Copy a script to a node and run it as root yourself; PyXie never runs it for you. The wrapper script downloads a
 single self-contained installer from a 30-minute link and refuses to run unless its SHA-256 matches the one PyXie
 computed, so it is safe to use even over a connection the node does not trust. Running the same script again
 upgrades the wrapper; `bash pyxie-host-kit.sh --check` (on the node) shows installed vs available without changing

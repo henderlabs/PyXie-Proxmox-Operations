@@ -8,15 +8,19 @@ import AddCredentialForm from "@/components/AddCredentialForm";
 import EditCredentialForm from "@/components/EditCredentialForm";
 import DeleteCredentialButton from "@/components/DeleteCredentialButton";
 import PbsCredentials from "@/components/PbsCredentials";
+import { HostWrapperBuilder, PveAccountsBuilder } from "@/components/HostSetupBuilder";
+import type { SetupStatus } from "@/components/SetupGuide";
 import { KeyIcon } from "@/components/Icons";
 import Link from "next/link";
 
 export default async function CredentialsPage() {
-  const [targets, clusters, nodes] = await Promise.all([
+  const [targets, clusters, nodes, setupStatus] = await Promise.all([
     apiFetch<PveTarget[]>("/api/pve-targets"),
     apiFetch<Cluster[]>("/api/clusters"),
     apiFetch<Node[]>("/api/nodes"),
+    apiFetch<SetupStatus>("/api/setup/status").catch(() => null),
   ]);
+  const tlsMode = setupStatus?.tls_mode ?? "";
   const credentialsByTarget = await Promise.all(
     targets.map((t) => apiFetch<Credential[]>(`/api/pve-targets/${t.id}/credentials`))
   );
@@ -41,8 +45,8 @@ export default async function CredentialsPage() {
             message={
               <>
                 No PVE targets configured yet.{" "}
-                <Link href="/platform/providers" className="text-accent hover:underline">
-                  Add one in the Setup guide
+                <Link href="/platform/providers#targets" className="text-accent hover:underline">
+                  Connect your cluster in the Setup guide
                 </Link>
                 .
               </>
@@ -50,7 +54,13 @@ export default async function CredentialsPage() {
           />
         </Card>
       )}
-      {targets.length > 0 && <div className="text-xs font-semibold uppercase tracking-wider text-muted mb-2">Proxmox VE (clusters)</div>}
+      <div className="text-xs font-semibold uppercase tracking-wider text-muted mb-2">Proxmox VE (clusters)</div>
+      <Card className="mb-4" id="builder-accounts">
+        <details>
+          <summary className="cursor-pointer select-none text-sm font-medium text-text">Create the Proxmox accounts (script you run on a node)</summary>
+          <div className="mt-3"><PveAccountsBuilder /></div>
+        </details>
+      </Card>
       {targets.map((t, i) => (
         <Card key={t.id} className="mb-4">
           <CardTitle><span className="mr-2 px-1.5 py-0.5 rounded bg-proxmox/15 text-proxmox normal-case tracking-normal">PVE</span>{t.name}</CardTitle>
@@ -103,11 +113,15 @@ export default async function CredentialsPage() {
               Host Maintenance — Connect a Host
             </div>
             <HostMaintenanceSetup targetId={t.id} nodes={nodesForTarget(t.id)} initialCredential={hostMaintCredByTarget[i]} />
+            <details className="mt-3" id={i === 0 ? "builder-host" : undefined}>
+              <summary className="cursor-pointer select-none text-sm font-medium text-text">Install or remove the host wrapper (script you run on each node)</summary>
+              <div className="mt-3"><HostWrapperBuilder targets={[{ id: t.id, name: t.name }]} tlsMode={tlsMode} /></div>
+            </details>
           </div>
         </Card>
       ))}
       <div className="text-xs font-semibold uppercase tracking-wider text-muted mb-2 mt-6">Proxmox Backup Servers</div>
-      <PbsCredentials />
+      <PbsCredentials tlsMode={tlsMode} />
     </div>
   );
 }

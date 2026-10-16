@@ -87,7 +87,7 @@ export default async function DashboardPage() {
                 {wrapperFindings.length > 4 ? "…" : ""}
               </span>
               <span className="text-xs text-muted">Run the host script on the node to install or upgrade it.</span>
-              <Link href="/platform/providers#builder-host" className="text-xs text-accent hover:underline ml-auto">
+              <Link href="/platform/credentials#builder-host" className="text-xs text-accent hover:underline ml-auto">
                 Open the host script builder →
               </Link>
             </div>

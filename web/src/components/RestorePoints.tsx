@@ -8,7 +8,7 @@ import { useMe } from "@/lib/useMe";
 
 type Point = {
   datastore: string; time: number; size: number | null; verified: string | null | undefined; protected: boolean; notes?: string | null;
-  offsite?: boolean; volid: string | null; storage: string | null; restorable: boolean; reason: string | null;
+  offsite?: boolean; server_id?: string; volid: string | null; storage: string | null; restorable: boolean; reason: string | null;
 };
 type Options = {
   kind: "vm" | "ct"; name: string; node: string; status: string; next_id: number | null; error?: string;
@@ -35,6 +35,17 @@ export default function RestorePoints({ workloadId, name, vmid }: { workloadId: 
   const [data, setData] = useState<{ points: Point[]; errors: string[]; kind: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pick, setPick] = useState<Point | null>(null);
+  const [act, setAct] = useState<{ op: Operation; label: string; reload: boolean } | null>(null);
+  const [actErr, setActErr] = useState<string | null>(null);
+  async function pbsAction(p: Point, path: string, body: unknown, label: string, reload: boolean) {
+    setActErr(null);
+    try {
+      const r = await fetch(`/api/pbs/servers/${p.server_id}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "Preview failed");
+      setAct({ op: d, label, reload }); notifyOperationsChanged();
+    } catch (e) { setActErr((e as Error).message); }
+  }
   useEffect(() => { call("GET", `points/${workloadId}`).then(setData).catch((e) => setErr(e.message)); }, [workloadId]);
   if (err) return <div className="text-bad text-sm p-3">{err}</div>;
   if (!data) return <div className="text-muted text-sm p-3">Reading the restore points of {name}…</div>;
@@ -42,6 +53,8 @@ export default function RestorePoints({ workloadId, name, vmid }: { workloadId: 
     <div className="p-3 space-y-3">
       <div className="text-sm text-text font-medium">Restore points of {name} <span className="text-muted font-normal">(ID {vmid})</span></div>
       {data.errors.map((e) => <div key={e} className="text-warn text-xs">{e}</div>)}
+      {actErr && <div className="text-bad text-xs">{actErr}</div>}
+      {act && <OpPreview key={act.op.id} op={act.op} confirmLabel={act.label} progressText="Working on the backup server" doneText="Done and read back from the backup server (runs such as verify continue there and can take a while)." onFinished={() => notifyOperationsChanged()} onClose={() => { const r = act.reload; setAct(null); if (r) window.location.reload(); }} />}
       {pick && <RestoreForm workloadId={workloadId} name={name} point={pick} onDone={() => setPick(null)} />}
       <div className="text-xs text-muted">{data.points.length} restore point(s), newest first. Offsite copies can be restored once Proxmox has a storage for that datastore.</div>
       {data.points.length === 0 ? <div className="text-sm text-muted">No backups of {name} (ID {vmid}) were found on any backup datastore.</div> : (
@@ -55,9 +68,15 @@ export default function RestorePoints({ workloadId, name, vmid }: { workloadId: 
                 <td className="pr-3">{size(p.size)}</td>
                 <td className={`pr-3 ${p.verified === "ok" ? "text-good" : p.verified === "failed" ? "text-bad" : "text-muted"}`}>{p.verified === "ok" ? "verified" : p.verified === "failed" ? "FAILED" : "not verified"}</td>
                 <td className="pr-3 text-xs text-muted">{p.notes ?? ""}</td>
-                <td className="text-right whitespace-nowrap">
+                <td className="text-right whitespace-nowrap space-x-1">
+                  {canRestore && p.server_id && <button className="text-xs text-accent hover:underline" title="Have the backup server re-read this backup and check it against its checksums"
+                    onClick={() => pbsAction(p, "datastores/dry-run", { store: p.datastore, action: "verify_run", params: { backup_type: data.kind, backup_id: String(vmid), backup_time: p.time } }, "Verify now", false)}>Verify</button>}
+                  {canRestore && p.server_id && <button className="text-xs text-accent hover:underline" title="A protected backup is skipped by pruning and cannot be deleted by mistake"
+                    onClick={() => pbsAction(p, "datastores/dry-run", { store: p.datastore, action: "protect", params: { backup_type: data.kind, backup_id: String(vmid), backup_time: p.time, protected: !p.protected } }, p.protected ? "Remove protection" : "Protect", true)}>{p.protected ? "Unprotect" : "Protect"}</button>}
                   {p.restorable ? (canRestore && <button className={`${btn} border-proxmox`} onClick={() => setPick(pick === p ? null : p)}>{pick === p ? "Close" : "Restore…"}</button>)
-                    : <span className="text-xs text-muted" title={p.reason ?? ""}>not restorable from here</span>}
+                    : (canRestore && p.server_id
+                      ? <button className={`${btn} border-accent`} title={p.reason ?? ""} onClick={() => pbsAction(p, "storage-add/dry-run", { workload_id: workloadId, datastore: p.datastore }, "Add to Proxmox", true)}>Make restorable…</button>
+                      : <span className="text-xs text-muted" title={p.reason ?? ""}>not restorable from here</span>)}
                 </td>
               </tr>
             ))}
@@ -107,7 +126,7 @@ function RestoreForm({ workloadId, name, point, onDone }: { workloadId: string; 
           <label className="text-xs text-muted">Name<input className={input} value={newName} onChange={(e) => setNewName(e.target.value)} /></label>
           <label className="text-xs text-muted">ID (empty = next free{opts.next_id ? `, ${opts.next_id}` : ""})<input className={input} type="number" value={newId} onChange={(e) => setNewId(e.target.value)} placeholder={String(opts.next_id ?? "")} /></label>
           <label className="text-xs text-muted">Host<select className={input} value={node} onChange={(e) => { setNode(e.target.value); setStorage(""); }}>{opts.nodes.filter((n) => n.online).map((n) => <option key={n.name} value={n.name}>{n.name}{n.maintenance ? " (maintenance)" : ""}</option>)}</select></label>
-          <label className="text-xs text-muted">Disks go to<select className={input} value={storage} onChange={(e) => setStorage(e.target.value)}><option value="">the storages named in the backup</option>{opts.storages.map((s) => <option key={s.name} value={s.name}>{s.name}{s.avail ? ` · ${(s.avail / GIB).toFixed(0)} GiB free` : ""}</option>)}</select></label>
+          <label className="text-xs text-muted">Disks go to<select className={input} value={storage} onChange={(e) => setStorage(e.target.value)}><option value="">{ct ? "the storage of its root disk in the backup" : "the storages named in the backup"}</option>{opts.storages.map((s) => <option key={s.name} value={s.name}>{s.name}{s.avail ? ` · ${(s.avail / GIB).toFixed(0)} GiB free` : ""}</option>)}</select></label>
           <label className="text-xs text-muted">Pool<select className={input} value={pool} onChange={(e) => setPool(e.target.value)}><option value="">none</option>{opts.pools.map((p) => <option key={p}>{p}</option>)}</select></label>
         </div>
       ) : (

@@ -155,6 +155,25 @@ class PbsWriteClient(PbsClient):
     def delete_job(self, kind: str, job_id: str) -> Any:
         return self._send("DELETE", f"/config/{_job_kind(kind)}/{job_id}")
 
+    def set_datastore(self, store: str, params: dict, delete: Optional[list] = None) -> Any:
+        """PUT /config/datastore/{store}: only what PyXie edits (the garbage collection schedule)."""
+        body = dict(params)
+        if delete:
+            body["delete"] = list(delete)
+        return self._send("PUT", f"/config/datastore/{store}", body)
+
+    def gc_run(self, store: str) -> Any:
+        """POST /admin/datastore/{store}/gc: starts garbage collection; answers with the task id."""
+        return self._send("POST", f"/admin/datastore/{store}/gc")
+
+    def verify_run(self, store: str, params: Optional[dict] = None) -> Any:
+        """POST /admin/datastore/{store}/verify: verify one backup, one guest's backups, or the whole datastore; answers with the task id."""
+        return self._send("POST", f"/admin/datastore/{store}/verify", dict(params or {}))
+
+    def set_protected(self, store: str, params: dict) -> Any:
+        """PUT /admin/datastore/{store}/protected: protect or unprotect one backup."""
+        return self._send("PUT", f"/admin/datastore/{store}/protected", dict(params))
+
     def reboot(self) -> Any:
         """Restart the server (the same call Proxmox VE uses for a node). Needs Sys.PowerManagement."""
         return self._send("POST", "/nodes/localhost/status", {"command": "reboot"})

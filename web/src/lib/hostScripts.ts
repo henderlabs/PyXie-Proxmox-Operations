@@ -11,7 +11,7 @@ export const TOKEN_FILE = "/root/pyxie-tokens.txt";
 export const PBS_TOKEN_FILE = "/root/pyxie-pbs-tokens.txt";
 
 /** Proxmox Backup Server accounts: the same shape as pveScript. A token never has more than its user, so every grant is made to the user AND to the token. */
-export function pbsScript(o: { roUser: string; adminUser: string; inventory: boolean; admin: boolean }): string {
+export function pbsScript(o: { roUser: string; adminUser: string; inventory: boolean; admin: boolean; restore?: boolean; restoreUser?: string }): string {
   const B: string[] = [
     "set -Eeuo pipefail",
     `trap 'echo "STOPPED at line $LINENO: $BASH_COMMAND" >&2' ERR`,
@@ -36,6 +36,12 @@ export function pbsScript(o: { roUser: string; adminUser: string; inventory: boo
       `grant /remote RemoteSyncOperator '${o.adminUser}' administrative`,
       "# Reboot Node and Full Maintenance for the backup server need Sys.PowerManagement, which PBS only has in its Admin role (granted on /system only)",
       `grant /system Admin '${o.adminUser}' administrative`);
+  }
+  if (o.restore) {
+    const ru = o.restoreUser || "pyxie-pbs-restore@pbs";
+    users.push(ru);
+    B.push("", "# Restore account: restore token (read only access to backup data, so Proxmox can restore from datastores it has no storage for)",
+      `ensure_user '${ru}' "PyXie restore (reads backup data)"`, `add_token '${ru}' restore`, `grant /datastore DatastoreReader '${ru}' restore`);
   }
   B.push("", 'echo ""', 'echo "DONE. Tokens on these accounts (secrets are not shown again):"');
   for (const u of users) B.push(`proxmox-backup-manager user list-tokens '${u}'`);
