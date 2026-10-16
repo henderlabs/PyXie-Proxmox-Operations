@@ -20,6 +20,19 @@ def is_offsite(store: dict) -> bool:
     return store.get("backend") == "s3" or "offsite" in str(store.get("name", "")).lower()
 
 
+def schedule_allowance_h(schedules: list) -> Optional[int]:
+    """How old a copy may be before it is late, given how often the job that feeds it runs (PBS calendar text).
+    monthly -> 35 days, weekly -> 9 days, anything else (daily or a time of day) -> 48 hours. None if no schedule."""
+    best = None
+    for sc in schedules:
+        t = str(sc or "").strip().lower()
+        if not t:
+            continue
+        h = 24 * 35 if t in ("monthly",) or t.startswith("*-*-01") or t.startswith("*-01") else (24 * 9 if t in ("weekly",) or t[:3] in ("mon", "tue", "wed", "thu", "fri", "sat", "sun") else 48)
+        best = max(best or 0, h)
+    return best
+
+
 def _age_h(ts: Optional[int], now: float) -> Optional[float]:
     return None if not ts else max(0.0, (now - ts) / 3600)
 
@@ -39,7 +52,7 @@ def score_guest(last_by_store: dict, stores: list[dict], covered_by: list[str], 
     for st in stores:
         ts = last_by_store.get(st["name"])
         age = _age_h(ts, now)
-        limit = offsite_max_age_h if is_offsite(st) else backup_max_age_h
+        limit = (st.get("max_age_h") or offsite_max_age_h) if is_offsite(st) else backup_max_age_h
         copies.append({
             "store": st["name"], "offsite": is_offsite(st), "backend": st["backend"],
             "last": ts, "age_h": age, "fresh": age is not None and age <= limit,
@@ -83,16 +96,14 @@ def store_notes(store: dict, prune: list[dict], verify: list[dict], sync_into: l
         if v.get("last-run-state") not in (None, "OK"):
             notes.append({"level": "bad", "text": f"Verify job {v['id']} last run: {v.get('last-run-state')}"})
     if is_offsite(store):
-        if not sync_into and store.get("backend") != "s3":
-            notes.append({"level": "warn", "text": "No sync job feeds this offsite store"})
+        limit = store.get("max_age_h") or offsite_max_age_h
         age = _age_h(newest, now)
         if age is None:
             notes.append({"level": "bad", "text": "Offsite store is empty"})
-        elif age > offsite_max_age_h:
-            notes.append({"level": "bad", "text": f"Newest offsite backup is {fmt_age(age)}"
-                          + ("" if sync_into else " and no sync job feeds it")})
-        elif not sync_into:
-            notes.append({"level": "warn", "text": "No sync job feeds this offsite store"})
+        elif age > limit:
+            notes.append({"level": "bad", "text": f"Newest offsite backup is {fmt_age(age)}, later than its schedule allows ({int(limit // 24)} days)"})
+        if not sync_into:
+            notes.append({"level": "info", "text": "No sync job is visible to PyXie. If one feeds this store, its API token may lack permission to list it"})
     return notes
 
 

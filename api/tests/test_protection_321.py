@@ -30,7 +30,7 @@ def test_offsite_by_name_counts():
 def test_store_notes_offsite_stale_no_sync():
     n = p.store_notes(dict(OFF, newest=NOW - 15 * 86400), [], [], [], NOW - 15 * 86400, NOW)
     texts = " ".join(x["text"] for x in n)
-    assert "15d ago and no sync job" in texts and "No verify job" in texts and "No prune job" in texts
+    assert "15d ago, later than its schedule allows" in texts and "No verify job" in texts and "No prune job" in texts
 
 
 def test_retention_text():
