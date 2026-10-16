@@ -13,9 +13,9 @@ export default async function QuickStartBanner() {
     <div className="mb-4 px-4 py-3 rounded-lg border border-accent bg-accent/5 flex items-center gap-3 flex-wrap">
       <div className="text-sm text-text">
         <span className="font-medium">New here?</span>{" "}
-        <span className="text-muted">{next ? `Next: ${next.title}.` : "Finish connecting your cluster."} The quick start walks you through it, including the two Proxmox tokens.</span>
+        <span className="text-muted">{next ? `Next: ${next.title}.` : "Finish connecting your cluster."} The Setup guide walks you through it, including the two Proxmox tokens.</span>
       </div>
-      <Link href="/platform/quick-start" className="ml-auto px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10">Open the quick start</Link>
+      <Link href="/platform/providers" className="ml-auto px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10">Open the Setup guide</Link>
     </div>
   );
 }

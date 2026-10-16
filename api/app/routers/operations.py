@@ -352,6 +352,10 @@ _JOB_TIMEOUT_BY_TYPE = {
     "workload.hw_change": 3600,  # optional snapshot + shutdown + config + start
     "workload.resize": 600,  # shutdown + config PUT + start, generous margin over each's own wait_for_task timeout
     "host.reboot": 1800,
+    "pbs.update": 3900,
+    "pbs.reboot": 1800,
+    "pbs.maintenance": 7200,
+    "pbs.job_change": 300,
     "host.update": 3900,  # comfortably above host_maintenance_client's 3600s apply() timeout
     "maintenance.run": 21600,  # 6h
     "node.enter_maintenance": 10800,  # 3h -- same evacuation shape as node.evacuate
@@ -428,6 +432,18 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "host.reboot":
         from pyxie_core.reboot_workflow import approve as approve_reboot
         return approve_reboot(db, op, approved_by=actor)
+    if op.operation_type_id == "pbs.reboot":
+        from pyxie_core.pbs_reboot_workflow import approve as approve_pbs_reboot
+        return approve_pbs_reboot(db, op, approved_by=actor)
+    if op.operation_type_id == "pbs.maintenance":
+        from pyxie_core.pbs_maintenance_workflow import approve as approve_pbs_maint
+        return approve_pbs_maint(db, op, approved_by=actor)
+    if op.operation_type_id == "pbs.update":
+        from pyxie_core.pbs_update_workflow import approve as approve_pbs_update
+        return approve_pbs_update(db, op, approved_by=actor)
+    if op.operation_type_id == "pbs.job_change":
+        from pyxie_core.pbs_job_workflow import approve as approve_pbs_job
+        return approve_pbs_job(db, op, approved_by=actor)
     if op.operation_type_id == "host.update":
         from pyxie_core.host_update_workflow import approve as approve_host_update
         return approve_host_update(db, op, approved_by=actor)

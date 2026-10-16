@@ -101,9 +101,9 @@ A new installation takes about 15 minutes. Commands run as the login user on the
    starting empty, see the next section.
 5. **Create your admin account.** Open `https://<PYXIE_HOSTNAME>`. With `internal` certificates the browser warns
    until you trust Caddy's root certificate (see TLS modes). The first visit shows **Create the administrator account**; once one exists, that form is gone for good.
-6. **Connect your cluster.** The Dashboard shows a **New here?** banner linking to **Platform > Quick start**;
-   **Platform > Setup guide** then walks you through eight steps (site, Proxmox accounts and tokens, cluster, admin
-   token, host wrapper, features, notifications, Run check). See [`setup-guide.md`](setup-guide.md) and
+6. **Connect your cluster.** The Dashboard shows a **New here?** banner linking to **Platform > Setup guide**,
+   which walks you through nine steps (site, Proxmox accounts and tokens, cluster, admin
+   token, host wrapper, an optional backup server, features, notifications, Run check). See [`setup-guide.md`](setup-guide.md) and
    [`host-kit.md`](host-kit.md). PyXie never creates Proxmox accounts for you; the script builder prints the commands
    for someone with root on a node to run.
 7. **Turn on updates and backups** (optional but recommended):

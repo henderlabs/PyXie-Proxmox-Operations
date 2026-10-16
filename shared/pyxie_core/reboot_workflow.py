@@ -75,8 +75,8 @@ def dry_run_reboot(db: Session, node: Node, *, actor: str, parent_operation_id=N
     running_resident = [w for w in resident if w.status == "running"]
     if running_resident:
         reasons.append(
-            f"{len(running_resident)} workload(s) still running on this node -- evacuate first "
-            f"(Stage W2 node evacuation / Stage W3 shutdown), reboot assumes an already-evacuated node"
+            f"{len(running_resident)} workload(s) still running on this node -- use Full Maintenance, "
+            f"which moves them off first, or move or stop them yourself, then reboot"
         )
         blocking_rules.append("SAFE-ROLLBACK-001")
 
@@ -150,11 +150,11 @@ def execute_reboot(db: Session, operation_id) -> Operation:
     try:
         if op.status == "approved":
             op = enter_stage(db, op, status="revalidating", stage="revalidating")
-            log_stage(op.id, f"Approved. Re-checking {node.name}: maintenance mode, reachability, quorum, no guests left on it.")
-            if not node.maintenance_mode:
-                # Previewing reboot eligibility never required this (dry_run_reboot
-                # has no such gate) -- only actually rebooting does.
-                return block_operation(db, op, blocking_safety_rules=["SAFE-MAINTMODE-001"], actor="system")
+            log_stage(op.id, f"Approved. Re-checking {node.name}: reachability, quorum, nothing running on it.")
+            # No manual maintenance mode: the node only has to be idle (no running guests, no active tasks),
+            # which is re-checked here against live state. To empty it first, use Full Maintenance.
+            if db.query(PveTask).filter(PveTask.node_id == node.id, PveTask.status == "running").count():
+                return block_operation(db, op, blocking_safety_rules=["SAFE-BACKUP-001"], actor="system")
             reachable, online, _ = _node_status_tolerant(db, target, node.name, avoid_node_id=node.id)
             if not reachable:
                 return block_operation(db, op, blocking_safety_rules=["SAFE-QUORUM-001"], actor="system")

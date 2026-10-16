@@ -25,15 +25,16 @@ updates later can reboot a node.
 The "Turn features on" step also says whether the embedded console is off and whether a credential able to open one exists.
 Nodes whose host wrapper is outdated raise a warning (category *Host wrapper*, e-mailable) and a Dashboard banner.
 
-"Run check" (step 8) does live, read-only checks and lists problems in plain words: each token works, the console
+"Run check" (the last step) does live, read-only checks and lists problems in plain words: each token works, the console
 permission (when the console is on), how many nodes can act as the cluster entry point if one is down (ingress failover),
 each host's SSH wrapper (connected, version), the write and console switches, and email alerts.
 
 API: `GET /api/setup/status` (database only, any signed-in user) and `POST /api/setup/check` (admin).
 
-## Quick start (Platform > Quick start)
+## Reference (bottom of the Setup guide)
 
-A short page for new installations: the two Proxmox tokens side by side (read-only inventory and Maintenance (Admin)),
-what each is used for and cannot do, exactly how to create each in Proxmox (the script builder, or the web-interface
-clicks) and where each goes in PyXie, what each privilege of the `PyXieAdmin` role is for, and the safety gates. The
-Dashboard shows a "New here?" banner until a site, the accounts and a connected cluster exist.
+The former Quick start page now lives at the bottom of the Setup guide as collapsed sections: the two Proxmox tokens side by side (read-only inventory and Maintenance (Admin)), the Proxmox Backup Server accounts, the names used, the three ways to put the host kit on a node, what each privilege of the `PyXieAdmin` role is for, the by-hand clicks in the Proxmox web interface, and the safety gates. `/platform/quick-start` redirects there. The Dashboard shows a "New here?" banner until a site, the accounts and a connected cluster exist.
+
+## Backup server step (optional)
+
+Step 6 connects a Proxmox Backup Server: create the `pyxie-pbs-ro@pbs` account (and optionally `pyxie-pbs-admin@pbs`), add the server, then connect it for patching exactly like a Proxmox node. See [adding-a-pbs.md](adding-a-pbs.md).

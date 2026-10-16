@@ -21,6 +21,7 @@ export default function MaintenanceWorkspace({
   initialNodeId,
   initialActionKey,
   initialWorkloadId,
+  backupServers,
 }: {
   nodes: Node[];
   workloads: Workload[];
@@ -31,9 +32,11 @@ export default function MaintenanceWorkspace({
   initialNodeId?: string;
   initialActionKey?: string;
   initialWorkloadId?: string;
+  backupServers?: import("@/components/NodeActionsForm").BackupServerRow[];
 }) {
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>(initialNodeId ? [initialNodeId] : []);
   const [nodes, setNodes] = useState<Node[]>(initialNodes);
+  const [pbsServers, setPbsServers] = useState(backupServers ?? []);
   // Starts empty on purpose -- the page no longer waits on this. Measured
   // directly (2026-09-12): host-maintenance-status (the SSH probe behind
   // Reboot Required) takes 1-3+ seconds PER NODE. It used to be fetched
@@ -52,6 +55,13 @@ export default function MaintenanceWorkspace({
         .then((data: Node[] | null) => data && setNodes(data))
         .catch(() => {});
     }
+    function refreshPbs() {
+      // backup servers (cached status, a cheap read): keeps the update count and Reboot Required badge current
+      fetch("/api/pbs/servers")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => Array.isArray(data) && setPbsServers(data))
+        .catch(() => {});
+    }
     function refreshHostMaintenance() {
       Promise.all(
         initialNodes.map(async (n) => {
@@ -65,8 +75,9 @@ export default function MaintenanceWorkspace({
       ).then((entries) => setHostMaintenance(Object.fromEntries(entries)));
     }
     refreshNodes();
+    refreshPbs();
     refreshHostMaintenance();
-    const interval = setInterval(refreshNodes, 5000);
+    const interval = setInterval(() => { refreshNodes(); refreshPbs(); }, 5000);
     // host-maintenance-status never had its own heartbeat -- only the bus
     // (fired by a user action elsewhere on the page) refreshed it, so a
     // reboot that finished while nobody clicked anything here left "Reboot
@@ -78,6 +89,7 @@ export default function MaintenanceWorkspace({
     const hostMaintenanceInterval = setInterval(refreshHostMaintenance, 30000);
     const unsubscribe = onOperationsChanged(() => {
       refreshNodes();
+      refreshPbs();
       refreshHostMaintenance();
     });
     return () => {
@@ -123,6 +135,7 @@ export default function MaintenanceWorkspace({
           <CardTitle>Nodes</CardTitle>
           <NodeActionsForm
             nodes={nodes}
+            backupServers={pbsServers}
             hostMaintenanceByNode={hostMaintenance}
             storage={storage}
             defaultStorageByNode={defaultStorageByNode}
@@ -131,7 +144,7 @@ export default function MaintenanceWorkspace({
             onSelectionChange={setSelectedNodeIds}
           />
         </Card>
-        <Card>
+        <Card className="flex flex-col">
           <CardTitle>Workloads</CardTitle>
           <WorkloadLifecycleForm
             workloads={workloads}

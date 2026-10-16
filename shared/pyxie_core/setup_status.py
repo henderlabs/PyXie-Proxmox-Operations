@@ -121,6 +121,22 @@ def build_steps(inp: dict) -> list[dict]:
         add("hosts", "Connect each host for patching", "todo", f"{ready} of {n_nodes} nodes ready. Finish the parts below, in order.",
             items=items, substeps=substeps)
 
+    # 5b. backup server (optional)
+    pbs = inp.get("pbs") or []
+    if pbs:
+        got = [x for x in pbs if x.get("has_inventory")]
+        full = [x for x in pbs if x.get("has_inventory") and x.get("has_admin") and x.get("ssh_ready")]
+        add("pbs", "Connect a backup server (optional)", "done" if got else "optional",
+            f"{len(got)} of {len(pbs)} backup server(s) readable; {len(full)} fully connected (read token, admin token for job edits, SSH for patching)."
+            if got else "Added, but its read token is not saved yet.",
+            items=[{"name": x["name"], "ok": bool(x.get("has_inventory")), "detail": ("read ok" if x.get("has_inventory") else "no read token")
+                    + (", admin token" if x.get("has_admin") else ", no admin token") + (", patching ready" if x.get("ssh_ready") else ", patching not set up")} for x in pbs],
+            action={"label": "Open the backup server section", "anchor": "pbs"})
+    else:
+        add("pbs", "Connect a backup server (optional)", "optional",
+            "Only if you use Proxmox Backup Server: adds the 3-2-1 scorecard, backup job editing and patching. Skip it otherwise.",
+            action={"label": "Open the backup server section", "anchor": "pbs"})
+
     # 6. features
     writes, console = bool(st.get("pve_mutations_enabled")), bool(st.get("console_enabled"))
     have_console_cred = any(t.get("console_credential") for t in targets)
@@ -154,7 +170,8 @@ def build_steps(inp: dict) -> list[dict]:
 
 
 def progress(steps: list[dict]) -> dict:
-    countable = [s for s in steps if s["key"] != "check"]
+    # the backup-server step only counts once a backup server has been added: it is optional
+    countable = [s for s in steps if s["key"] != "check" and not (s["key"] == "pbs" and not s.get("items"))]
     return {"done": sum(1 for s in countable if s["state"] == "done"), "total": len(countable)}
 
 

@@ -24,7 +24,7 @@ def test_site_done_then_accounts_is_next():
     steps = build_steps({"sites": 1, "targets": [], "nodes": [], "hostmaint": [], "settings": {}})
     s = by_key(steps)
     assert s["sites"]["state"] == "done" and s["accounts"]["state"] == "next"
-    assert [x["number"] for x in steps] == list(range(1, 9))
+    assert [x["number"] for x in steps] == list(range(1, 10))
 
 
 def test_target_with_valid_inventory_marks_accounts_and_cluster_done():

@@ -94,7 +94,6 @@ const SECTIONS: NavSection[] = [
           { label: "Notifications", href: "/platform/settings/notifications", icon: <BellIcon /> },
           { label: "Email (SMTP)", href: "/platform/settings/email", icon: <MailIcon /> },
           { label: "Updates", href: "/platform/settings/updates", icon: <PackageIcon /> },
-          { label: "Quick start", href: "/platform/quick-start", icon: <LightbulbIcon /> },
           { label: "Setup guide", href: "/platform/providers", icon: <PlugIcon /> },
           { label: "Credentials", href: "/platform/credentials", icon: <KeyIcon /> },
           { label: "Users", href: "/platform/users", icon: <UsersIcon />, adminOnly: true },

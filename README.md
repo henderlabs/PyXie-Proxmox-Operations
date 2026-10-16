@@ -13,7 +13,7 @@ rebalancing, per-workload NIC VLAN reassignment, and PBS backup-job
 membership -- and, since v0.37, creating, changing, cloning and deleting
 VMs and containers, snapshots, tags (with Proxmox's own colors), defaults
 and templates, resource pools, an ISO library and NFS storage setup (see
-[`docs/guest-management.md`](docs/guest-management.md)), and a 3-2-1 backup scorecard ([`docs/protection.md`](docs/protection.md)). See the Safety
+[`docs/guest-management.md`](docs/guest-management.md)), and a 3-2-1 backup scorecard ([`docs/protection.md`](docs/protection.md)) and Proxmox Backup Server management: status, jobs and patching ([`docs/adding-a-pbs.md`](docs/adding-a-pbs.md)). See the Safety
 Contract section below for exactly how every one of those is gated.
 
 ## Installation
@@ -23,7 +23,7 @@ PyXie runs as one Docker stack (web, API, worker, PostgreSQL, Redis and Caddy fo
 1. **Install it:** follow [`docs/docker-caddy.md`](docs/docker-caddy.md). It covers what you need first (VM size,
    network, certificate choice) and a step-by-step first-time setup, from `git clone` to creating your admin account.
 2. **Connect your Proxmox cluster:** on first sign-in PyXie shows a **New here?** banner on the Dashboard that opens
-   **Platform > Quick start**, and **Platform > Setup guide** walks the same setup in 8 steps with live status. Written
+   **Platform > Setup guide**, which walks the setup in 9 steps with live status (the last-but-two, optional, connects a Proxmox Backup Server), with the reference material (accounts, names, privileges) folded underneath. Written
    up in [`docs/setup-guide.md`](docs/setup-guide.md); installing the host wrapper on each node is in
    [`docs/host-kit.md`](docs/host-kit.md) and [`docs/adding-a-host.md`](docs/adding-a-host.md).
 3. **Keep it current:** [`docs/updates.md`](docs/updates.md) (Settings > Updates) and

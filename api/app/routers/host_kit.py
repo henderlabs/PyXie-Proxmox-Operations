@@ -16,7 +16,7 @@ from pyxie_core import host_kit as hk
 from pyxie_core.audit import write_audit_event
 from pyxie_core.crypto import decrypt_secret
 from pyxie_core.host_maintenance_client import derive_public_key_line
-from pyxie_core.models import HostMaintenanceCredential, PveTarget
+from pyxie_core.models import HostMaintenanceCredential, ProtectionTarget, PveTarget
 
 from .. import config
 from ..auth_deps import get_current_user, require_admin
@@ -40,8 +40,13 @@ def _r():
 def _build(db: Session, target_id) -> tuple[bytes, PveTarget]:
     target = db.query(PveTarget).filter(PveTarget.id == target_id).one_or_none()
     if target is None:
-        raise HTTPException(404, "PVE target not found")
-    cred = db.query(HostMaintenanceCredential).filter(HostMaintenanceCredential.pve_target_id == target_id).one_or_none()
+        # a Proxmox Backup Server target uses the same kit and the same kind of credential
+        target = db.query(ProtectionTarget).filter(ProtectionTarget.id == target_id).one_or_none()
+        if target is None:
+            raise HTTPException(404, "target not found")
+        cred = db.query(HostMaintenanceCredential).filter(HostMaintenanceCredential.protection_target_id == target_id).one_or_none()
+    else:
+        cred = db.query(HostMaintenanceCredential).filter(HostMaintenanceCredential.pve_target_id == target_id).one_or_none()
     if cred is None:
         raise HTTPException(409, "no host-maintenance credential generated for this target yet -- generate one first")
     pub = derive_public_key_line(decrypt_secret(cred.encrypted_private_key))

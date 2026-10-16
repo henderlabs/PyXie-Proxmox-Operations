@@ -8,7 +8,7 @@ import { WrenchIcon } from "@/components/Icons";
 
 const W2_W6_TYPES = new Set([
   "node.evacuate", "workload.shutdown", "workload.start", "workload.force_stop", "workload.reboot",
-  "host.update", "host.reboot", "maintenance.run",
+  "host.update", "host.reboot", "maintenance.run", "pbs.update", "pbs.reboot", "pbs.maintenance",
 ]);
 
 export default async function MaintenancePage({
@@ -22,6 +22,7 @@ export default async function MaintenancePage({
   // owned entirely by MaintenanceWorkspace (client-side, fetched once,
   // right after the page shell has already painted) -- see its own
   // comment for the measurement that motivated this.
+  const backupServers = await apiFetch<unknown[]>("/api/pbs/servers").catch(() => []);
   const [nodes, workloads, operations, workloadMetrics, workloadStorage, storage, recommendations, nodePolicies] =
     await Promise.all([
       apiFetch<Node[]>("/api/nodes"),
@@ -57,6 +58,7 @@ export default async function MaintenancePage({
 
       <MaintenanceWorkspace
         nodes={nodes}
+        backupServers={backupServers as never}
         workloads={workloads}
         workloadMetrics={workloadMetrics}
         workloadStorage={workloadStorage}

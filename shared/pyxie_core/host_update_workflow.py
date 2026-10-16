@@ -39,7 +39,7 @@ from .host_maintenance_client import (
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .operation_log import HostLogStreamer, log_stage
 from .maintenance import _quorum_after_removal
-from .models import Cluster, HostMaintenanceCredential, Node, Operation, PveTarget
+from .models import Cluster, HostMaintenanceCredential, Node, Operation, PveTarget, PveTask
 from .pve_client import PveClient
 from .operations_engine import (
     OperationError,
@@ -202,6 +202,12 @@ def dry_run_host_update(
         )
         blocking_rules.append("SAFE-DISK-001")
 
+    if not check_only:
+        active = db.query(PveTask).filter(PveTask.node_id == node.id, PveTask.status == "running").count()
+        if active:
+            reasons.append(f"{active} task(s) are running on {node.name} (backup, migration or similar): wait for them to finish, then apply updates")
+            blocking_rules.append("SAFE-BACKUP-001")
+
     if not packages:
         reasons.append("no pending package updates on this host right now -- nothing to apply")
 
@@ -269,15 +275,12 @@ def execute_host_update(db: Session, operation_id) -> Operation:
     try:
         if op.status == "approved":
             op = enter_stage(db, op, status="revalidating", stage="revalidating")
-            log_stage(op.id, f"Approved. Re-checking {node.name}: maintenance mode, package lists, and that the plan is unchanged.")
-            if not node.maintenance_mode:
-                # Checking for updates never required this (dry_run_host_update
-                # has no such gate) -- only actually applying them does. Matches
-                # the same block_operation-with-just-the-rule-id pattern as
-                # every other revalidation-stage block in this function (e.g.
-                # SAFE-HOSTCONN-001 below); the safety_rules table row is what
-                # carries the human-readable explanation.
-                return block_operation(db, op, blocking_safety_rules=["SAFE-MAINTMODE-001"], actor="system")
+            log_stage(op.id, f"Approved. Re-checking {node.name}: nothing else running on it, package lists, and that the plan is unchanged.")
+            # Installing packages needs the host idle (no backup, migration or other task running on it), not
+            # emptied of guests: running guests keep running through an apt upgrade. A kernel or QEMU update only
+            # takes effect at the next reboot, which is a separate, guarded action.
+            if db.query(PveTask).filter(PveTask.node_id == node.id, PveTask.status == "running").count():
+                return block_operation(db, op, blocking_safety_rules=["SAFE-BACKUP-001"], actor="system")
             try:
                 with HostMaintenanceClient(hm_creds) as client:
                     client.refresh()

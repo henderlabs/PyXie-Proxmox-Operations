@@ -98,6 +98,10 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "workload.force_stop": "Guest Force Stop",
   "workload.reboot": "Guest Reboot",
   "host.update": "Host Package Update",
+  "pbs.update": "Backup Server Update",
+  "pbs.reboot": "Backup Server Reboot",
+  "pbs.maintenance": "Backup Server Maintenance",
+  "pbs.job_change": "Backup Server Job Change",
   "host.reboot": "Host Reboot",
   "maintenance.run": "Full Maintenance Run",
   "node.enter_maintenance": "Enter Maintenance Mode",
@@ -182,7 +186,7 @@ function operationSummary(op: Operation): string {
       : "";
     return `${r?.workload_name || `vmid ${r?.vmid}`}${r?.workload_name ? ` (vmid ${r?.vmid})` : ""} — ${r?.source_node} → ${r?.target_node}${storagePart}`;
   }
-  if (op.operation_type_id === "host.update") {
+  if (op.operation_type_id === "host.update" || op.operation_type_id === "pbs.update") {
     const count = r?.planned_package_count;
     return `${OPERATION_TYPE_LABELS[op.operation_type_id]} — ${r?.node || "?"}${count != null ? ` · ${count} package${count === 1 ? "" : "s"}` : ""}`;
   }
@@ -725,15 +729,15 @@ export default function OperationCard({
         <div className="text-xs text-bad mb-2">Blocked by: {op.blocking_safety_rules.join(", ")}</div>
       )}
 
-      {(op.operation_type_id === "host.update" || op.operation_type_id === "host.reboot") && op.status !== "awaiting_approval" && (
+      {(op.operation_type_id === "host.update" || op.operation_type_id === "pbs.update" || op.operation_type_id === "pbs.reboot" || op.operation_type_id === "pbs.maintenance" || op.operation_type_id === "host.reboot") && op.status !== "awaiting_approval" && (
         <OperationLogPanel operationId={op.id} active={isInFlight(op.status)} />
       )}
 
-      {op.operation_type_id === "host.update" && op.dry_run_result?.planned_packages != null && (
+      {(op.operation_type_id === "host.update" || op.operation_type_id === "pbs.update" || op.operation_type_id === "pbs.maintenance") && op.dry_run_result?.planned_packages != null && (
         <HostUpdatePlan result={op.dry_run_result} />
       )}
 
-      {op.operation_type_id === "host.update" && op.status === "completed" && op.verification_result && (
+      {(op.operation_type_id === "host.update" || op.operation_type_id === "pbs.update") && op.status === "completed" && op.verification_result && (
         <HostUpdateVerification result={op.verification_result} />
       )}
 

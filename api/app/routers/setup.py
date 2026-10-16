@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from pyxie_core import edge_probe, host_kit
 from pyxie_core.credentials import CredentialNotConfigured, load_pve_credentials, resolve_pve_endpoints
 from pyxie_core.models import (
-    AppSettings, Cluster, HostMaintenanceCredential, Node, NotificationRule, PveCredential, PveTarget, Site, Workload,
+    AppSettings, Cluster, HostMaintenanceCredential, Node, NotificationRule, ProtectionCredential, ProtectionTarget, PveCredential, PveTarget, Site, Workload,
 )
 from pyxie_core.pve_client import PveClient
 from pyxie_core.pve_write_client import PveMaintenanceClient
@@ -44,7 +44,13 @@ def _inputs(db: Session) -> dict:
             nodes_out.append({"name": n.name, "target_id": str(t.id), "pinned": bool(n.ssh_host_key_base64),
                               "wrapper_version": n.wrapper_version, "failover_enabled": n.failover_enabled is not False})
     s = db.query(AppSettings).filter(AppSettings.id == 1).one_or_none()
+    pbs = []
+    for pt in db.query(ProtectionTarget).order_by(ProtectionTarget.name).all():
+        slots = {c.slot_name for c in db.query(ProtectionCredential).filter(ProtectionCredential.protection_target_id == pt.id).all()}
+        pbs.append({"name": pt.name, "has_inventory": "inventory" in slots, "has_admin": "administrative" in slots,
+                    "ssh_ready": bool(pt.ssh_host_key_base64) and bool(pt.wrapper_version)})
     return {
+        "pbs": pbs,
         "sites": db.query(Site).count(),
         "targets": targets,
         "nodes": nodes_out,

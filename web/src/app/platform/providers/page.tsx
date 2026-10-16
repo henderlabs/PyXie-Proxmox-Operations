@@ -9,6 +9,8 @@ import SiteRow from "@/components/SiteRow";
 import { PlugIcon } from "@/components/Icons";
 import { HostWrapperBuilder, PveAccountsBuilder } from "@/components/HostSetupBuilder";
 import SetupGuide from "@/components/SetupGuide";
+import SetupReference from "@/components/SetupReference";
+import SetupPbs from "@/components/SetupPbs";
 import type { SetupStatus } from "@/components/SetupGuide";
 
 const UNIMPLEMENTED_CATEGORIES = ["protection", "monitoring", "notification", "itsm", "authentication", "hardware"];
@@ -95,7 +97,12 @@ export default async function ProvidersPage() {
         </div>
       </Card>
 
-      <Card className="opacity-70">
+      <Card className="mb-4" id="pbs">
+        <CardTitle>Optional · Connect a backup server (Proxmox Backup Server)</CardTitle>
+        <SetupPbs sites={sites} tlsMode={setupStatus.tls_mode ?? ""} />
+      </Card>
+
+      <Card className="opacity-70 mb-6">
         <details>
           <summary className="cursor-pointer select-none">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted">
@@ -116,6 +123,7 @@ export default async function ProvidersPage() {
         </details>
       </Card>
 
+      <SetupReference />
     </div>
   );
 }
