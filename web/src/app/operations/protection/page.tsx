@@ -22,7 +22,7 @@ type Scorecard = { summary: { ok: number; partial: number; none: number; total: 
 type Target = { id: string; name: string; hostname: string; connection_health: string };
 
 const when = (s: number | null) => (s ? new Date(s * 1000).toLocaleDateString() : "never");
-const noteColor = (l: string) => (l === "bad" ? "text-bad" : "text-warn");
+const noteColor = (l: string) => (l === "bad" ? "text-bad" : l === "info" ? "text-muted" : "text-warn");
 const statusText = { ok: "3-2-1 met", partial: "Partly protected", none: "Not protected" } as const;
 const statusColor = { ok: "text-good", partial: "text-warn", none: "text-bad" } as const;
 
@@ -74,7 +74,7 @@ export default async function ProtectionPage() {
             </div>
           ))}
         </div>
-        <div className="text-xs text-muted mt-3">A datastore counts as offsite when it is S3-backed or its name says offsite. A copy counts when it is under {card.rules.backup_max_age_h} hours old ({Math.round(card.rules.offsite_max_age_h / 24)} days for offsite). Schedules and retention are set in Proxmox and PBS; PyXie shows them and does not change them.</div>
+        <div className="text-xs text-muted mt-3">A datastore counts as offsite when it is S3-backed or its name says offsite. A copy counts when it is under {card.rules.backup_max_age_h} hours old (an offsite copy may be as old as its job's schedule allows, for example 35 days for a monthly job). Schedules and retention are set in Proxmox and PBS; PyXie shows them and does not change them.</div>
       </Card>
 
       <Card className="mb-4">

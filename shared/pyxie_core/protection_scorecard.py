@@ -39,6 +39,13 @@ def build_scorecard(db: Session, now: float | None = None) -> dict:
         for key, per in d["last"].items():
             last.setdefault(key, {}).update(per)
 
+    for d in pbs_list:
+        for s in d["stores"]:
+            sched = [j.get("schedule") for j in d["sync"] if j.get("store") == s["name"]] or \
+                    [j.get("schedule") for j in d["prune"] if j.get("store") == s["name"]]
+            s["max_age_h"] = p321.schedule_allowance_h(sched) if p321.is_offsite(s) else None
+    stores = [dict(s, target=d["target"], host=d["host"]) for d in pbs_list for s in d["stores"]]
+
     store_cards = []
     for d in pbs_list:
         for s in d["stores"]:
@@ -82,4 +89,4 @@ def build_scorecard(db: Session, now: float | None = None) -> dict:
     order = {"none": 0, "partial": 1, "ok": 2}
     rows.sort(key=lambda r: (order[r["status"]], r["name"] or ""))
     return {"summary": p321.summarize(rows), "rows": rows, "stores": store_cards, "jobs": jobs, "errors": errors,
-            "rules": {"backup_max_age_h": p321.BACKUP_MAX_AGE_H, "offsite_max_age_h": p321.OFFSITE_MAX_AGE_H}}
+            "rules": {"offsite_by_schedule": True, "backup_max_age_h": p321.BACKUP_MAX_AGE_H, "offsite_max_age_h": p321.OFFSITE_MAX_AGE_H}}
