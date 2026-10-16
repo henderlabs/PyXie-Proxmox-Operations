@@ -6,6 +6,7 @@ import ActionButton from "@/components/ActionButton";
 import PbsTargetForm from "@/components/PbsTargetForm";
 import ProtectionResultsTable from "@/components/tables/ProtectionResultsTable";
 import BackupJobMembership from "@/components/BackupJobMembership";
+import BackupPolicies from "@/components/BackupPolicies";
 import { ShieldIcon } from "@/components/Icons";
 
 type ProtectionTarget = {
@@ -35,6 +36,8 @@ export default async function ProtectionPage() {
   return (
     <div>
       <PageHeader title="Protection" subtitle="Backup/DR posture per workload -- UNKNOWN is not SAFE" icon={<ShieldIcon className="w-5 h-5" />} />
+
+      <BackupPolicies />
 
       <Card className="mb-4">
         <CardTitle>Provider Implementation / Validation Matrix</CardTitle>

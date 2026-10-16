@@ -57,3 +57,10 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
 }
+
+/** Memory sizes (given in MiB, as Proxmox stores them) always in GB, because nobody thinks of RAM in megabytes any more. */
+export function formatMemoryGb(mb: number | null | undefined): string {
+  if (mb === null || mb === undefined) return "—";
+  const gb = mb / 1024;
+  return `${Number.isInteger(gb) ? gb : Math.round(gb * 100) / 100} GB`;
+}

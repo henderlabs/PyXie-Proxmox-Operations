@@ -5,7 +5,7 @@
 export type ConsoleOpt = "none" | "maintenance" | "separate";
 export type Link = { path: string; sha256: string; expires_in: number; kit_version: string; wrapper_version: string };
 
-export const MAINT_PRIVS = "Datastore.Allocate,Datastore.AllocateSpace,Sys.Audit,Sys.Modify,Sys.PowerMgmt,VM.Audit,VM.Config.CPU,VM.Config.Disk,VM.Config.Memory,VM.Migrate,VM.PowerMgmt";
+export const MAINT_PRIVS = "Datastore.Allocate,Datastore.AllocateSpace,Datastore.AllocateTemplate,Pool.Allocate,Pool.Audit,SDN.Use,Sys.Audit,Sys.Modify,Sys.PowerMgmt,VM.Allocate,VM.Audit,VM.Backup,VM.Clone,VM.Config.CDROM,VM.Config.CPU,VM.Config.Disk,VM.Config.HWType,VM.Config.Memory,VM.Config.Network,VM.Config.Options,VM.Migrate,VM.PowerMgmt,VM.Snapshot,VM.Snapshot.Rollback";
 
 export const TOKEN_FILE = "/root/pyxie-tokens.txt";
 

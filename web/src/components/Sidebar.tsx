@@ -56,8 +56,26 @@ const SECTIONS: NavSection[] = [
     label: "Infrastructure",
     items: [
       { label: "Hosts & Clusters", href: "/infrastructure/nodes", icon: <ServerIcon /> },
-      { label: "Workloads", href: "/infrastructure/workloads", icon: <WorkloadIcon /> },
-      { label: "Storage", href: "/infrastructure/storage", icon: <StorageIcon /> },
+      {
+        label: "Workloads",
+        href: "/infrastructure/workloads",
+        icon: <WorkloadIcon />,
+        children: [
+          { label: "Pools", href: "/infrastructure/workloads/pools", icon: <WorkloadIcon /> },
+          { label: "Defaults & templates", href: "/infrastructure/workloads/defaults", icon: <SlidersIcon /> },
+        ],
+      },
+      {
+        label: "Storage",
+        href: "/infrastructure/storage",
+        icon: <StorageIcon />,
+        exact: true,
+        children: [
+          { label: "Datastores", href: "/infrastructure/storage/datastores", icon: <StorageIcon /> },
+          { label: "ISO library", href: "/infrastructure/storage/iso", icon: <StorageIcon /> },
+          { label: "Storage setup", href: "/infrastructure/storage/setup", icon: <StorageIcon /> },
+        ],
+      },
       { label: "Network", href: "/infrastructure/network", icon: <NetworkIcon /> },
     ],
   },
@@ -158,9 +176,10 @@ export default function Sidebar({ version }: { version: string }) {
     // Sub-routes (e.g. /infrastructure/nodes/<id>, a node detail page
     // nested under the Hosts & Clusters item) should still light up their
     // parent nav item, not just an exact match.
+    const inChild = !!item.children?.some((c) => pathname === c.href || pathname.startsWith(c.href + "/"));
     const active = item.exact
       ? pathname === item.href
-      : pathname === item.href || pathname.startsWith(item.href + "/");
+      : (pathname === item.href || pathname.startsWith(item.href + "/")) && !inChild;
     if (item.comingSoon) {
       return (
         <div

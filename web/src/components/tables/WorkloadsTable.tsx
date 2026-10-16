@@ -1,5 +1,7 @@
 "use client";
 
+import TagChips from "@/components/TagChip";
+import BulkTagsAction from "@/components/BulkTagsAction";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -87,6 +89,11 @@ export default function WorkloadsTable({
   // page's VM picker) -- case-insensitive substring on name or vmid --
   // so a VM findable there is findable the same way here.
   const [search, setSearch] = useState("");
+  const me = useMe();
+  const admin = me === undefined || me?.is_admin === true;
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkTags, setBulkTags] = useState(false);
+  const toggleSelected = (id: string) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const searchQuery = search.trim().toLowerCase();
   const searchedWorkloads = searchQuery
     ? visibleWorkloads.filter((w) => (w.name || "").toLowerCase().includes(searchQuery) || String(w.vmid).includes(searchQuery))
@@ -201,6 +208,10 @@ export default function WorkloadsTable({
   }, []);
 
   const columns: Column<Workload>[] = [
+    {
+      header: "",
+      render: (w) => <input type="checkbox" aria-label={`Select ${w.name || w.vmid}`} checked={selected.has(w.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleSelected(w.id)} />,
+    },
         { header: "VMID", render: (w) => w.vmid, sortValue: (w) => w.vmid },
         {
           header: "Name",
@@ -283,14 +294,14 @@ export default function WorkloadsTable({
         {
           header: "Power",
           tooltip:
-            "Start/Shut down/Restart this guest -- same Safety Contract as everywhere else (preview, then confirm). Only the action that matches its current status is clickable. VM-only for now; not yet implemented for containers.",
+            "Start/Shut down/Restart this guest -- same Safety Contract as everywhere else (preview, then confirm). Only the action that matches its current status is clickable. Works for VMs and containers.",
           render: (w) => (
             <WorkloadLifecycleButtons
               workloadId={w.id}
               workloadName={w.name || `VMID ${w.vmid}`}
               status={w.status}
-              disabled={w.type !== "vm" || w.is_missing}
-              disabledReason={w.is_missing ? "Not currently visible to PVE" : "Guest lifecycle actions are only implemented for VMs, not containers"}
+              disabled={w.is_missing}
+              disabledReason="Not currently visible to PVE"
             />
           ),
         },
@@ -442,7 +453,7 @@ export default function WorkloadsTable({
         },
         {
           header: "Tags",
-          render: (w) => (w.tags && w.tags.length ? w.tags.join(", ") : "—"),
+          render: (w) => <TagChips tags={w.tags} clusterId={w.cluster_id} />,
           sortValue: (w) => (w.tags && w.tags.length ? w.tags.join(", ") : ""),
           optional: true,
         },
@@ -575,6 +586,7 @@ export default function WorkloadsTable({
   ];
 
   const sortedSearchedWorkloads = sortRows(searchedWorkloads, columns, sort);
+  const selectedWorkloads = workloads.filter((w) => selected.has(w.id) && !w.is_missing);
   const totalPages = Math.max(1, Math.ceil(sortedSearchedWorkloads.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const pagedWorkloads = sortedSearchedWorkloads.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
@@ -599,6 +611,14 @@ export default function WorkloadsTable({
           className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm w-64"
         />
       </div>
+      {admin && selected.size > 0 && (
+        <div className="flex items-center gap-3 mb-2 text-xs">
+          <span className="text-text">{selected.size} selected</span>
+          <button type="button" onClick={() => setBulkTags(true)} className="text-accent hover:underline">Tags…</button>
+          <button type="button" onClick={() => setSelected(new Set())} className="text-muted hover:text-text">Clear</button>
+        </div>
+      )}
+      {bulkTags && selectedWorkloads.length > 0 && <BulkTagsAction workloads={selectedWorkloads} onClose={() => setBulkTags(false)} />}
       <Table
         rows={pagedWorkloads}
         controlledSort={sort}

@@ -323,6 +323,33 @@ _JOB_TIMEOUT_BY_TYPE = {
     "workload.force_stop": 300,
     "workload.reboot": 600,
     "workload.move_storage": 21600,  # 6h: one Proxmox disk move per disk, each with its own size-based limit
+    "workload.snapshot_create": 2400,
+    "workload.snapshot_delete": 2400,
+    "workload.snapshot_rollback": 2400,
+    "workload.tags_change": 120,  # synchronous config write
+    "cluster.tag_colors": 120,  # synchronous datacenter option write
+    "workload.disk_grow": 1200,
+    "workload.nic_change": 300,
+    "workload.disk_change": 1200,
+    "backup.policy_change": 300,
+    "workload.create": 1800,
+    "storage.iso_download": 7800,
+    "storage.iso_delete": 900,
+    "storage.iso_enable": 120,
+    "workload.delete": 2400,
+    "workload.clone": 8400,
+    "workload.cdrom_change": 300,
+    "workload.ct_create": 1800,
+    "workload.ct_resize": 300,
+    "pool.create": 600,
+    "pool.delete": 600,
+    "pool.members": 600,
+    "storage.create": 600,
+    "storage.remove": 600,
+    "workload.ct_nic_change": 300,
+    "storage.ct_template_download": 3900,
+    "storage.ct_template_delete": 900,
+    "workload.hw_change": 3600,  # optional snapshot + shutdown + config + start
     "workload.resize": 600,  # shutdown + config PUT + start, generous margin over each's own wait_for_task timeout
     "host.reboot": 1800,
     "host.update": 3900,  # comfortably above host_maintenance_client's 3600s apply() timeout
@@ -341,7 +368,7 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "node.evacuate":
         from pyxie_core.evacuation_workflow import approve as approve_evac
         return approve_evac(db, op, approved_by=actor)
-    if op.operation_type_id in ("workload.shutdown", "workload.start", "workload.force_stop"):
+    if op.operation_type_id in ("workload.shutdown", "workload.start", "workload.force_stop", "workload.reboot"):
         from pyxie_core.lifecycle_workflow import approve as approve_lifecycle
         return approve_lifecycle(db, op, approved_by=actor)
     if op.operation_type_id == "workload.resize":
@@ -350,6 +377,54 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "workload.move_storage":
         from pyxie_core.storage_move_workflow import approve as approve_storage_move
         return approve_storage_move(db, op, approved_by=actor)
+    if op.operation_type_id in ("workload.snapshot_create", "workload.snapshot_delete", "workload.snapshot_rollback"):
+        from pyxie_core.snapshot_workflow import approve as approve_snapshot
+        return approve_snapshot(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.tags_change":
+        from pyxie_core.tags_workflow import approve as approve_tags
+        return approve_tags(db, op, approved_by=actor)
+    if op.operation_type_id in ("pool.create", "pool.delete", "pool.members"):
+        from pyxie_core.pool_workflow import approve as approve_pool
+        return approve_pool(db, op, approved_by=actor)
+    if op.operation_type_id in ("storage.create", "storage.remove"):
+        from pyxie_core.storage_workflow import approve as approve_storage
+        return approve_storage(db, op, approved_by=actor)
+    if op.operation_type_id in ("workload.ct_resize", "workload.ct_nic_change"):
+        from pyxie_core.ct_edit_workflow import approve as approve_ct_edit
+        return approve_ct_edit(db, op, approved_by=actor)
+    if op.operation_type_id in ("workload.ct_create", "storage.ct_template_download", "storage.ct_template_delete"):
+        from pyxie_core.ct_workflow import approve as approve_ct
+        return approve_ct(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.cdrom_change":
+        from pyxie_core.cdrom_workflow import approve as approve_cdrom
+        return approve_cdrom(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.clone":
+        from pyxie_core.clone_workflow import approve as approve_clone
+        return approve_clone(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.delete":
+        from pyxie_core.delete_workflow import approve as approve_delete
+        return approve_delete(db, op, approved_by=actor)
+    if op.operation_type_id in ("storage.iso_download", "storage.iso_delete", "storage.iso_enable"):
+        from pyxie_core.iso_workflow import approve as approve_iso
+        return approve_iso(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.create":
+        from pyxie_core.vm_create_workflow import approve as approve_create
+        return approve_create(db, op, approved_by=actor)
+    if op.operation_type_id == "backup.policy_change":
+        from pyxie_core.backup_policy_workflow import approve as approve_backup_policy
+        return approve_backup_policy(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.disk_change":
+        from pyxie_core.disk_workflow import approve as approve_disk
+        return approve_disk(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.nic_change":
+        from pyxie_core.nic_workflow import approve as approve_nic
+        return approve_nic(db, op, approved_by=actor)
+    if op.operation_type_id in ("workload.disk_grow", "workload.hw_change"):
+        from pyxie_core.hw_edit_workflow import approve as approve_hw_edit
+        return approve_hw_edit(db, op, approved_by=actor)
+    if op.operation_type_id == "cluster.tag_colors":
+        from pyxie_core.tag_colors_workflow import approve as approve_tag_colors
+        return approve_tag_colors(db, op, approved_by=actor)
     if op.operation_type_id == "host.reboot":
         from pyxie_core.reboot_workflow import approve as approve_reboot
         return approve_reboot(db, op, approved_by=actor)
@@ -925,6 +1000,277 @@ def create_storage_move_dry_run(payload: StorageMoveRequest, user=Depends(get_cu
     try:
         op = dry_run_storage_move(db, workload, target_storage=payload.target_storage, actor=user.email)
     except StorageMoveError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+class SnapshotRequest(BaseModel):
+    workload_id: uuid.UUID
+    action: str  # create | delete | rollback
+    name: str
+    description: str | None = None
+    include_ram: bool = False
+
+
+class TagsRequest(BaseModel):
+    workload_id: uuid.UUID
+    tags: list[str]
+
+
+@router.post("/workload-snapshots/dry-run", dependencies=[Depends(require_admin)])
+def create_snapshot_dry_run(payload: SnapshotRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.snapshot_workflow import SnapshotError, dry_run_snapshot
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_snapshot(db, workload, action=payload.action, name=payload.name, description=payload.description or "",
+                              include_ram=payload.include_ram, actor=user.email)
+    except SnapshotError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-tags/dry-run", dependencies=[Depends(require_admin)])
+def create_tags_dry_run(payload: TagsRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.tags_workflow import TagsError, dry_run_tags
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_tags(db, workload, tags=payload.tags, actor=user.email)
+    except TagsError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+class TagColorsRequest(BaseModel):
+    cluster_id: uuid.UUID
+    changes: dict[str, str | None]  # tag -> six-digit hex color, or null to go back to Proxmox's automatic color
+
+
+@router.post("/cluster-tag-colors/dry-run", dependencies=[Depends(require_admin)])
+def create_tag_colors_dry_run(payload: TagColorsRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.models import Cluster
+    from pyxie_core.tag_colors_workflow import TagColorsError, dry_run_tag_colors
+    cluster = db.query(Cluster).filter(Cluster.id == payload.cluster_id).one_or_none()
+    if cluster is None:
+        raise HTTPException(404, "cluster not found")
+    try:
+        op = dry_run_tag_colors(db, cluster, changes=payload.changes, actor=user.email)
+    except TagColorsError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+class DiskGrowRequest(BaseModel):
+    workload_id: uuid.UUID
+    disk: str
+    new_size_gb: int
+
+
+class HwChangeRequest(BaseModel):
+    workload_id: uuid.UUID
+    machine: str | None = None
+    cpu_type: str | None = None
+    snapshot_first: bool = True
+    power_cycle: bool = False
+
+
+class NicChangeRequest(BaseModel):
+    workload_id: uuid.UUID
+    action: str  # add | edit | remove
+    net_id: str | None = None
+    model: str | None = None
+    bridge: str | None = None
+    tag: int | None = None
+    firewall: bool = False
+    mac: str | None = None
+    link_down: bool = False
+
+
+class DiskChangeRequest(BaseModel):
+    workload_id: uuid.UUID
+    action: str  # add | detach | attach | delete_unused | move_to_vm
+    key: str | None = None
+    bus: str | None = None
+    size_gb: int | None = None
+    storage: str | None = None
+    cache: str = "none"
+    discard: bool = False
+    ssd: bool = False
+    iothread: bool = False
+    target_workload_id: uuid.UUID | None = None
+    confirm: str = ""
+    backup: bool = True
+    readonly: bool = False
+    path: str | None = None
+
+
+@router.post("/workload-disk-change/dry-run", dependencies=[Depends(require_admin)])
+def create_disk_change_dry_run(payload: DiskChangeRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.disk_workflow import DiskError, dry_run_disk_change
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_disk_change(db, workload, action=payload.action, key=payload.key, bus=payload.bus, size_gb=payload.size_gb, storage=payload.storage, cache=payload.cache,
+                                 discard=payload.discard, ssd=payload.ssd, iothread=payload.iothread, target_workload_id=payload.target_workload_id, confirm=payload.confirm,
+                                 backup=payload.backup, readonly=payload.readonly, path=payload.path, actor=user.email)
+    except DiskError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-nic-change/dry-run", dependencies=[Depends(require_admin)])
+def create_nic_change_dry_run(payload: NicChangeRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.nic_workflow import NicError, dry_run_nic_change
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_nic_change(db, workload, action=payload.action, net_id=payload.net_id, model=payload.model, bridge=payload.bridge, tag=payload.tag,
+                                firewall=payload.firewall, mac=payload.mac, link_down=payload.link_down, actor=user.email)
+    except NicError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+class DeleteRequest(BaseModel):
+    workload_id: uuid.UUID
+    confirm_name: str = ""
+    purge: bool = True
+    destroy_unreferenced: bool = False
+
+
+class CloneRequest(BaseModel):
+    workload_id: uuid.UUID
+    name: str
+    newid: int | None = None
+    target_node: str | None = None
+    full: bool = True
+    storage: str | None = None
+    pool: str | None = None
+    tags: list[str] | None = None
+    start_after: bool = False
+
+
+class CdromRequest(BaseModel):
+    workload_id: uuid.UUID
+    slot: str | None = None  # null = add a new drive
+    volid: str | None = None  # null = eject
+    boot_first: bool = False
+
+
+class CtResizeRequest(BaseModel):
+    workload_id: uuid.UUID
+    cores: int | None = None
+    memory_mb: int | None = None
+    swap_mb: int | None = None
+
+
+class CtNicRequest(BaseModel):
+    workload_id: uuid.UUID
+    action: str
+    net_id: str | None = None
+    bridge: str | None = None
+    tag: int | None = None
+    firewall: bool = False
+    ip: str | None = None
+    gateway: str | None = None
+    mac: str | None = None
+
+
+@router.post("/workload-ct-resize/dry-run", dependencies=[Depends(require_admin)])
+def create_ct_resize_dry_run(payload: CtResizeRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.ct_edit_workflow import CtEditError, dry_run_ct_resize
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_ct_resize(db, workload, cores=payload.cores, memory_mb=payload.memory_mb, swap_mb=payload.swap_mb, actor=user.email)
+    except CtEditError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-ct-nic/dry-run", dependencies=[Depends(require_admin)])
+def create_ct_nic_dry_run(payload: CtNicRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.ct_edit_workflow import CtEditError, dry_run_ct_nic
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_ct_nic(db, workload, action=payload.action, net_id=payload.net_id, bridge=payload.bridge, tag=payload.tag, firewall=payload.firewall, ip=payload.ip,
+                            gateway=payload.gateway, mac=payload.mac, actor=user.email)
+    except CtEditError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-cdrom/dry-run", dependencies=[Depends(require_admin)])
+def create_cdrom_dry_run(payload: CdromRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.cdrom_workflow import CdromError, dry_run_cdrom
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_cdrom(db, workload, slot=payload.slot, volid=payload.volid, boot_first=payload.boot_first, actor=user.email)
+    except CdromError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-clone/dry-run", dependencies=[Depends(require_admin)])
+def create_clone_dry_run(payload: CloneRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.clone_workflow import CloneError, dry_run_clone
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_clone(db, workload, name=payload.name, newid=payload.newid, target_node=payload.target_node, full=payload.full, storage=payload.storage, pool=payload.pool,
+                           tags=payload.tags, start_after=payload.start_after, actor=user.email)
+    except CloneError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-delete/dry-run", dependencies=[Depends(require_admin)])
+def create_delete_dry_run(payload: DeleteRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.delete_workflow import DeleteError, dry_run_delete
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_delete(db, workload, confirm_name=payload.confirm_name, purge=payload.purge, destroy_unreferenced=payload.destroy_unreferenced, actor=user.email)
+    except DeleteError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-disk-grow/dry-run", dependencies=[Depends(require_admin)])
+def create_disk_grow_dry_run(payload: DiskGrowRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.hw_edit_workflow import HwEditError, dry_run_disk_grow
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_disk_grow(db, workload, disk=payload.disk, new_size_gb=payload.new_size_gb, actor=user.email)
+    except HwEditError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.post("/workload-hw-change/dry-run", dependencies=[Depends(require_admin)])
+def create_hw_change_dry_run(payload: HwChangeRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    from pyxie_core.hw_edit_workflow import HwEditError, dry_run_hw_change
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_hw_change(db, workload, machine=payload.machine, cpu_type=payload.cpu_type, snapshot_first=payload.snapshot_first,
+                               power_cycle=payload.power_cycle, actor=user.email)
+    except HwEditError as exc:
         raise HTTPException(400, str(exc))
     return _serialize(op)
 

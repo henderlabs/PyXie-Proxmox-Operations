@@ -5,6 +5,16 @@ import { getSessionToken } from "./session";
 
 const BASE_URL = process.env.API_INTERNAL_URL || "http://pyxie-manager-api:8000";
 
+/** FastAPI errors arrive as {"detail": "..."} (or a list of validation problems): show the sentence, not the JSON. Anything else is left as it is. */
+function readableError(text: string): string {
+  try {
+    const d = JSON.parse(text)?.detail;
+    if (typeof d === "string") return d;
+    if (Array.isArray(d)) return d.map((x) => (typeof x === "string" ? x : `${(x.loc || []).slice(1).join(".")}: ${x.msg}`)).join("; ");
+  } catch { /* not JSON */ }
+  return text;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -47,7 +57,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   if (res.status === 401 && inPageRender()) redirect("/login");
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text || res.statusText);
+    throw new ApiError(res.status, readableError(text) || res.statusText);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -134,6 +144,8 @@ export type Workload = {
   memory_bytes: number | null;
   tags: string[] | null;
   ha_state: string | null;
+  is_template?: boolean;
+  pool?: string | null;
   sensitivity: string;
   downtime_tolerance: string;
   placement_notes: string | null;
@@ -157,6 +169,19 @@ export type StorageItem = {
   status: string;
   last_seen: string;
   is_missing: boolean;
+};
+
+export type StorageDefinition = {
+  cluster_id: string;
+  name: string;
+  type: string | null;
+  content: string[];
+  server: string | null;
+  export: string | null;
+  path: string | null;
+  nodes: string[];
+  shared: boolean;
+  disabled: boolean;
 };
 
 export type NetworkInterface = {
@@ -198,6 +223,16 @@ export type WorkloadNics = {
   cluster_name: string;
   error?: string;
   nics: WorkloadNic[];
+};
+
+export type VlanSegment = {
+  cluster_id: string;
+  cluster_name: string | null;
+  bridge: string;
+  tag: number | null;
+  guests: { workload_id: string; vmid: number; name: string | null; type: string; node: string; net_id: string; status: string }[];
+  problems: string[];
+  blocked_hosts: { node: string; reason: string }[];
 };
 
 export type Site = { id: string; organization_id: string; name: string; slug: string };

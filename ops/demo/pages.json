@@ -25,5 +25,9 @@
   "path": "/operations/balance",
   "run": "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Select heavy nodes').click();new Promise(r=>setTimeout(r,1500)).then(()=>[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Preview Balance Load')).click())",
   "runWait": 9000
+ },
+ {
+  "name": "workloads",
+  "path": "/infrastructure/workloads"
  }
 ]

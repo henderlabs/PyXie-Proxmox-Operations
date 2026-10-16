@@ -301,6 +301,49 @@ class PveClient:
     def qemu_snapshots(self, node: str, vmid: int) -> list[dict]:
         return self._get(f"/nodes/{node}/qemu/{vmid}/snapshot") or []
 
+    def qemu_feature(self, node: str, vmid: int, feature: str) -> bool:
+        """GET /nodes/{node}/qemu/{vmid}/feature?feature=snapshot|clone|copy -- Proxmox's own answer to "can this VM do that with
+        the storage its disks are on right now?" (hasFeature)."""
+        data = self._get(f"/nodes/{node}/qemu/{vmid}/feature", params={"feature": feature}) or {}
+        return bool(data.get("hasFeature"))
+
+    def storage_config(self, storage: str) -> dict:
+        """GET /storage/{storage}: the datacenter's configuration of one storage (type, content types, nodes...)."""
+        return self._get(f"/storage/{storage}") or {}
+
+    def cluster_next_id(self) -> int:
+        """GET /cluster/nextid: the lowest free VM ID Proxmox would hand out."""
+        return int(self._get("/cluster/nextid"))
+
+    def storage_content(self, node: str, storage: str, content: str) -> list[dict]:
+        """GET /nodes/{node}/storage/{storage}/content?content=iso|images|...: the volumes of that kind ({volid, size, format})."""
+        return self._get(f"/nodes/{node}/storage/{storage}/content", params={"content": content}) or []
+
+    def pools(self) -> list[dict]:
+        """GET /pools: the resource pools ({poolid, comment})."""
+        return self._get("/pools") or []
+
+    def lxc_pending(self, node: str, vmid: int) -> list[dict]:
+        """GET /nodes/{node}/lxc/{vmid}/pending: each config key with its running `value` and, if a change waits, its `pending`."""
+        return self._get(f"/nodes/{node}/lxc/{vmid}/pending") or []
+
+    def lxc_feature(self, node: str, vmid: int, feature: str) -> bool:
+        """GET /nodes/{node}/lxc/{vmid}/feature?feature=snapshot|clone|copy."""
+        data = self._get(f"/nodes/{node}/lxc/{vmid}/feature", params={"feature": feature}) or {}
+        return bool(data.get("hasFeature"))
+
+    def qemu_cpu_models(self, node: str) -> list[dict]:
+        """GET /nodes/{node}/capabilities/qemu/cpu: the CPU types this host's QEMU offers ({name, vendor, custom})."""
+        return self._get(f"/nodes/{node}/capabilities/qemu/cpu") or []
+
+    def qemu_machine_types(self, node: str) -> list[dict]:
+        """GET /nodes/{node}/capabilities/qemu/machines: the machine types this host's QEMU offers ({id, type, version})."""
+        return self._get(f"/nodes/{node}/capabilities/qemu/machines") or []
+
+    def qemu_pending(self, node: str, vmid: int) -> list[dict]:
+        """GET /nodes/{node}/qemu/{vmid}/pending: each config key with its running `value` and, if a change waits for the next start, its `pending`."""
+        return self._get(f"/nodes/{node}/qemu/{vmid}/pending") or []
+
     def lxc_snapshots(self, node: str, vmid: int) -> list[dict]:
         return self._get(f"/nodes/{node}/lxc/{vmid}/snapshot") or []
 

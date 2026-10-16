@@ -19,6 +19,11 @@ const STATIC_ASSET_RE = /\.(png|jpe?g|gif|svg|webp|ico|css|js|map|woff2?|ttf)$/i
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  // A path segment that smuggles a slash (%2F), a backslash or a dot segment could make a proxy route build a different backend path than it meant to.
+  const rawPath = new URL(req.url).pathname;
+  if (/%2f|%5c|%00/i.test(rawPath) || rawPath.split("/").some((s) => s === ".." || s.toLowerCase() === "%2e%2e")) {
+    return new NextResponse(JSON.stringify({ error: "bad path" }), { status: 400, headers: { "content-type": "application/json" } });
+  }
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/accept-invite") ||

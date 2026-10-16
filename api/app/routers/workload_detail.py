@@ -146,6 +146,193 @@ def workload_ips(workload_id: uuid.UUID, db: Session = Depends(get_db)):
     return {"addresses": out, "error": None}
 
 
+@router.get("/snapshots-summary")
+def snapshots_summary(db: Session = Depends(get_db)):
+    """Dashboard card: how many snapshots exist, how many VMs hold them, how old the oldest is, and the ones past the warning age
+    (from the Reporting inventory's stored copy, refreshed every 30 minutes and after every snapshot action)."""
+    from pyxie_core.models import WorkloadSnapshot
+    from pyxie_core.reports import SNAPSHOT_CRIT_DAYS, SNAPSHOT_WARN_DAYS
+
+    rows = (
+        db.query(WorkloadSnapshot, Workload)
+        .join(Workload, Workload.id == WorkloadSnapshot.workload_id)
+        .filter(Workload.is_missing.is_(False))
+        .all()
+    )
+    now = datetime.now(timezone.utc)
+    items = []
+    for snap, wl in rows:
+        age = (now - snap.snapshot_time).days if snap.snapshot_time else None
+        items.append({"workload_id": str(wl.id), "vmid": wl.vmid, "workload_name": wl.name, "snapshot": snap.name, "age_days": age,
+                      "includes_ram": snap.includes_ram, "created": snap.snapshot_time.isoformat() if snap.snapshot_time else None})
+    aged = [i for i in items if i["age_days"] is not None and i["age_days"] >= SNAPSHOT_WARN_DAYS]
+    oldest = sorted((i for i in items if i["age_days"] is not None), key=lambda i: -i["age_days"])[:5]
+    return {
+        "total": len(items),
+        "workloads": len({i["workload_id"] for i in items}),
+        "oldest_days": oldest[0]["age_days"] if oldest else None,
+        "warn_days": SNAPSHOT_WARN_DAYS,
+        "crit_days": SNAPSHOT_CRIT_DAYS,
+        "aged": len(aged),
+        "aged_critical": len([i for i in aged if i["age_days"] >= SNAPSHOT_CRIT_DAYS]),
+        "oldest": oldest,
+    }
+
+
+_TAG_COLOR_CACHE: dict = {}
+
+
+@router.get("/tag-colors")
+def tag_colors(fresh: bool = False, db: Session = Depends(get_db)):
+    """Tag colors per cluster, read live from Proxmox's datacenter tag-style option (cached 15 seconds; ?fresh=1 skips the cache)."""
+    from pyxie_core.tag_colors import parse_tag_style, view
+
+    out = []
+    for cluster in db.query(Cluster).all():
+        key = str(cluster.id)
+        hit = _TAG_COLOR_CACHE.get(key)
+        if hit and not fresh and time.monotonic() - hit[0] < 15:
+            out.append(hit[1])
+            continue
+        entry = {"cluster_id": key, "cluster": cluster.name, "colors": {}, "ordering": None, "shape": None, "error": None}
+        try:
+            client, _cred = _client(db, cluster)
+            with client:
+                raw = (client._get("/cluster/options") or {}).get("tag-style")
+            entry.update(view(parse_tag_style(raw)))
+        except Exception as exc:  # noqa: BLE001 -- colors are cosmetic: the page still works without them
+            entry["error"] = str(exc)[:160]
+        _TAG_COLOR_CACHE[key] = (time.monotonic(), entry)
+        out.append(entry)
+    return {"clusters": out}
+
+
+@router.get("/{workload_id}/defaults")
+def workload_defaults(workload_id: uuid.UUID, db: Session = Depends(get_db)):
+    """The defaults that apply to this guest (its cluster, tags and pool) and where it differs from the ones somebody set on purpose."""
+    from pyxie_core.defaults import deviations, resolve
+    from pyxie_core.hw_compat import split_cpu
+    from pyxie_core.models import WorkloadDefault
+    from pyxie_core.nic_workflow import net_fields
+
+    w, node, cluster = _load(db, workload_id)
+    layers = [{"scope_type": r.scope_type, "scope_value": r.scope_value, "cluster_id": str(r.cluster_id) if r.cluster_id else None, "priority": r.priority, "values": r.values or {}}
+              for r in db.query(WorkloadDefault).all()]
+    values, sources = resolve(layers, cluster_id=str(cluster.id), tags=w.tags or [], pool=w.pool, ostype=w.os_type, cluster_names={str(cluster.id): cluster.name})
+    out = {"values": values, "sources": sources, "deviations": [], "pool": w.pool, "error": None}
+    if w.type != "vm" or w.is_missing:
+        return out
+    try:
+        client, _cred = _client(db, cluster)
+        with client:
+            config = client.qemu_config(node.name, w.vmid)
+        actual = {"machine": config.get("machine"), "cpu_type": split_cpu(config.get("cpu"))[0] or "kvm64", "bios": config.get("bios") or "seabios",
+                  "agent": str(config.get("agent", "")).split(",", 1)[0].strip().lower() in ("1", "true", "yes") or "enabled=1" in str(config.get("agent", "")),
+                  "scsihw": config.get("scsihw") or "lsi",
+                  "nic_model": [net_fields(v)["model"] for k, v in sorted(config.items()) if k.startswith("net") and k[3:].isdigit()]}
+        out["deviations"] = deviations(actual, values, sources)
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)[:200]
+    return out
+
+
+@router.get("/{workload_id}/nic-options")
+def workload_nic_options(workload_id: uuid.UUID, db: Session = Depends(get_db)):
+    """What the network-device editor offers: the bridges any host has (each with the hosts that lack it, and whether it is VLAN-aware), the NIC models,
+    and the VM's devices as Proxmox has them now."""
+    from pyxie_core.nic_workflow import MODELS, bridges_by_node, net_fields, next_free_slot
+
+    w, node, cluster = _load(db, workload_id)
+    out = {"supported": w.type == "vm", "models": MODELS, "bridges": [], "nics": [], "next_slot": None, "hosts": [], "error": None}
+    if w.type != "vm" or w.is_missing:
+        return out
+    try:
+        client, _cred = _client(db, cluster)
+        with client:
+            config = client.qemu_config(node.name, w.vmid)
+        topo = bridges_by_node(db, cluster)
+        out["hosts"] = sorted(topo)
+        names = sorted({b for t in topo.values() for b in t})
+        out["bridges"] = [{"name": b, "vlan_aware": all(bool(topo[n][b].get("vlan_aware")) for n in topo if b in topo[n]),
+                           "allowed_vlans": next((topo[n][b].get("allowed_vlans") for n in topo if b in topo[n]), None),
+                           "missing_on": [n for n in sorted(topo) if b not in topo[n]]} for b in names]
+        out["nics"] = [{"net_id": k, **net_fields(v)} for k, v in sorted(config.items()) if k.startswith("net") and k[3:].isdigit()]
+        out["next_slot"] = next_free_slot(config)
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)[:200]
+    return out
+
+
+@router.get("/{workload_id}/hw-options")
+def workload_hw_options(workload_id: uuid.UUID, db: Session = Depends(get_db)):
+    """What the machine/CPU type editor offers: the VM's current values, every machine and CPU type any host offers (each with the hosts
+    that do NOT offer it), whether the VM can be snapshotted, and the snapshot-first default."""
+    from pyxie_core.hw_compat import split_cpu
+    from pyxie_core.hw_edit_workflow import read_hosts
+
+    w, node, cluster = _load(db, workload_id)
+    out = {"supported": w.type == "vm", "machine": None, "cpu": None, "machines": [], "cpus": [], "hosts": [], "can_snapshot": None, "error": None}
+    if w.type != "vm" or w.is_missing:
+        return out
+    try:
+        client, _cred = _client(db, cluster)
+        with client:
+            config = client.qemu_config(node.name, w.vmid)
+            hosts = read_hosts(db, cluster, client, node.name)
+            try:
+                out["can_snapshot"] = client.qemu_feature(node.name, w.vmid, "snapshot")
+            except Exception:  # noqa: BLE001
+                pass
+        out["machine"] = config.get("machine")
+        out["cpu"] = split_cpu(config.get("cpu"))[0] or None
+        names = sorted({n for h in hosts for n in (h["machines"] or [])})
+        out["machines"] = [{"id": n, "missing_on": [h["name"] for h in hosts if h["machines"] is not None and n not in h["machines"]]} for n in names]
+        cpu_names = sorted({n for h in hosts for n in (h["models"] or {})}, key=str.lower)
+        vendor = {n: v for h in hosts for n, v in (h["models"] or {}).items()}
+        out["cpus"] = [{"name": n, "vendor": vendor.get(n), "missing_on": [h["name"] for h in hosts if h["models"] is not None and n not in h["models"]]} for n in cpu_names]
+        out["hosts"] = [{"name": h["name"], "is_current": h["is_current"], "cpu_model": h["cpu_model"], "readable": h["models"] is not None} for h in hosts]
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)[:200]
+    return out
+
+
+@router.get("/tags")
+def known_tags(db: Session = Depends(get_db)):
+    """Every tag in use across the workloads (with how many carry it), for the tag editor's suggestions."""
+    counts: dict[str, int] = {}
+    for (tags,) in db.query(Workload.tags).filter(Workload.is_missing.is_(False)).all():
+        for t in tags or []:
+            counts[t] = counts.get(t, 0) + 1
+    return [{"tag": t, "count": n} for t, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+@router.get("/{workload_id}/snapshots")
+def workload_snapshots(workload_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Live snapshot list straight from Proxmox (also refreshes PyXie's stored copy), plus whether Proxmox says the VM can be
+    snapshotted at all."""
+    from pyxie_core.snapshot_workflow import real_snapshots, refresh_stored_snapshots, suggest_name
+
+    w, node, cluster = _load(db, workload_id)
+    out = {"snapshots": [], "can_snapshot": None, "suggested_name": suggest_name(), "supported": True, "memory": w.type == "vm", "error": None}
+    if w.is_missing:
+        return out
+    try:
+        client, _cred = _client(db, cluster)
+        with client:
+            from pyxie_core import guest_kind as gk
+            rows = gk.snapshots(client, w, node.name)
+            out["can_snapshot"] = gk.can_snapshot(client, w, node.name)  # None when Proxmox could not be asked: the list still helps
+        out["snapshots"] = [
+            {"name": s.get("name"), "description": (s.get("description") or "").strip() or None, "snaptime": s.get("snaptime"),
+             "vmstate": bool(s.get("vmstate")), "parent": s.get("parent")}
+            for s in real_snapshots(rows)
+        ]
+        refresh_stored_snapshots(db, w, rows)
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)[:200]
+    return out
+
+
 @router.get("/{workload_id}/tasks")
 def workload_tasks(workload_id: uuid.UUID, db: Session = Depends(get_db)):
     """Recent PVE tasks naming this guest, across every node it has lived on."""

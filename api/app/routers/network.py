@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from pyxie_core.vlan_view import build_vlan_view
 from pyxie_core.models import Cluster, Workload
 from pyxie_core.network_workflow import (
     NetworkWorkflowError,
@@ -65,3 +66,9 @@ def create_vlan_change_dry_run(
     except NetworkWorkflowError as exc:
         raise HTTPException(400, str(exc))
     return {"id": str(op.id), "status": op.status, "dry_run_result": op.dry_run_result}
+
+
+@router.get("/vlans")
+def get_vlans(db: Session = Depends(get_db)):
+    """Read-only: guest NICs grouped by bridge + VLAN, with hosts that cannot carry each."""
+    return build_vlan_view(get_topology(db), get_nics(db))

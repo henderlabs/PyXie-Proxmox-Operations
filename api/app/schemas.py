@@ -98,6 +98,8 @@ class WorkloadOut(OrmModel):
     storage_preference: Optional[str] = None
     preferred_node_id: Optional[uuid.UUID] = None
     do_not_move: bool = False
+    is_template: bool = False
+    pool: Optional[str] = None
     last_seen: datetime
     is_missing: bool
 

@@ -8,7 +8,7 @@ export type WorkloadOverview = {
 };
 
 export type DiskInfo = { key: string; volume: string; storage: string | null; size: string | null; kind: string; options: Record<string, string>; empty: boolean };
-export type NetInfo = { key: string; model: string | null; mac: string | null; bridge: string | null; vlan_tag: string | null; firewall: boolean; rate: string | null; ip: string | null };
+export type NetInfo = { key: string; model: string | null; mac: string | null; bridge: string | null; vlan_tag: string | null; firewall: boolean; rate: string | null; ip: string | null; link_down?: boolean };
 
 export type ConfigSummary = {
   start_at_boot: boolean;
@@ -23,6 +23,7 @@ export type ConfigSummary = {
   sockets: number;
   vcpus: number | null;
   cpu_type: string | null;
+  template?: boolean;
   disks: DiskInfo[];
   nets: NetInfo[];
   // VM-only

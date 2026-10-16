@@ -34,6 +34,13 @@ from .routers import (
     reports,
     system_updates,
     workload_detail,
+    defaults,
+    vm_create,
+    iso_library,
+    ct,
+    pools,
+    backup_policies,
+    storage_setup,
 )
 from .seed import seed_defaults
 
@@ -111,6 +118,13 @@ app.include_router(host_kit.public_router)
 app.include_router(setup.router)
 app.include_router(feedback.router)
 app.include_router(auto_balance.router)
+app.include_router(defaults.router)
+app.include_router(vm_create.router)
+app.include_router(iso_library.router)
+app.include_router(ct.router)
+app.include_router(storage_setup.router)
+app.include_router(pools.router)
+app.include_router(backup_policies.router)
 
 
 @app.get("/api/health")

@@ -156,6 +156,8 @@ class Workload(Base):
     mem_used_bytes = Column(BigInteger, nullable=True)
     os_type = Column(String, nullable=True)  # PVE qemu config 'ostype' (win11, win10, l26, other, ...); null for lxc/unset
     tags = Column(JSONB, nullable=True)
+    is_template = Column(Boolean, nullable=False, default=False, server_default="false")  # Proxmox template flag (VMs only)
+    pool = Column(String, nullable=True)  # Proxmox resource pool the guest is a member of (cluster resources `pool`); null = none
     ha_state = Column(String, nullable=True)
     sensitivity = Column(String, nullable=False, default="standard")  # standard | restricted -- restricted may not land on a trust_tier=low node
     downtime_tolerance = Column(String, nullable=False, default="standard")  # low | standard | high -- 'low' means CANNOT tolerate downtime (critical); also may not land on trust_tier=low
@@ -1212,3 +1214,62 @@ class PlacementPinRule(Base):
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class WorkloadDefault(Base):
+    """Defaults / templates for VMs. scope_type cluster (cluster_id null = all clusters), tag, pool, or template (picked by name); `values` holds only the
+    fields this layer sets -- the rest is inherited. See pyxie_core/defaults.py for how layers combine."""
+
+    __tablename__ = "workload_defaults"
+
+    id = uuid_pk()
+    scope_type = Column(String, nullable=False)
+    scope_value = Column(String, nullable=True)
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id", ondelete="CASCADE"), nullable=True)
+    priority = Column(Integer, nullable=False, default=0)
+    description = Column(Text, nullable=True)
+    values = Column(JSONB, nullable=False, default=dict)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)
+
+
+
+class BackupPolicy(Base):
+    """A named backup bundle (datastore, schedule, mode, retention) PyXie turns into one Proxmox backup job (job_id). See pyxie_core/backup_policy.py."""
+
+    __tablename__ = "backup_policies"
+
+    id = uuid_pk()
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)
+    storage = Column(String, nullable=False)
+    schedule = Column(String, nullable=False)
+    mode = Column(String, nullable=False, default="snapshot")
+    enabled = Column(Boolean, nullable=False, default=True)
+    notes_template = Column(String, nullable=True)
+    keep_last = Column(Integer, nullable=True)
+    keep_hourly = Column(Integer, nullable=True)
+    keep_daily = Column(Integer, nullable=True)
+    keep_weekly = Column(Integer, nullable=True)
+    keep_monthly = Column(Integer, nullable=True)
+    keep_yearly = Column(Integer, nullable=True)
+    job_id = Column(String, nullable=False)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class BackupAssignment(Base):
+    """Which policy applies to the cluster (default), to every VM with a tag, or to one VM (scope_value = workload id). policy_id null = 'do not back this up'."""
+
+    __tablename__ = "backup_assignments"
+
+    id = uuid_pk()
+    cluster_id = Column(UUID(as_uuid=True), ForeignKey("clusters.id", ondelete="CASCADE"), nullable=False)
+    policy_id = Column(UUID(as_uuid=True), ForeignKey("backup_policies.id", ondelete="CASCADE"), nullable=True)
+    scope_type = Column(String, nullable=False)  # cluster | tag | vm
+    scope_value = Column(String, nullable=True)
+    priority = Column(Integer, nullable=False, default=0)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)

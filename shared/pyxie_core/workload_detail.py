@@ -65,9 +65,9 @@ def parse_disks(config: dict, *, lxc: bool = False) -> list[dict]:
     out: list[dict] = []
     for key in sorted(config, key=_natural_key):
         if lxc:
-            if not _LXC_MOUNT_KEY.match(key):
+            if not (_LXC_MOUNT_KEY.match(key) or re.match(r"^unused\d+$", key)):
                 continue
-        elif key.startswith(("efidisk", "tpmstate")):
+        elif key.startswith(("efidisk", "tpmstate")) or re.match(r"^unused\d+$", key):
             pass
         elif not _QEMU_DISK_KEY.match(key):
             continue
@@ -79,7 +79,7 @@ def parse_disks(config: dict, *, lxc: bool = False) -> list[dict]:
                 "volume": volume,
                 "storage": _storage_of(volume),
                 "size": opts.get("size"),
-                "kind": "cdrom" if is_cdrom else ("efi" if key.startswith("efidisk") else "tpm" if key.startswith("tpmstate") else "disk"),
+                "kind": "cdrom" if is_cdrom else ("efi" if key.startswith("efidisk") else "tpm" if key.startswith("tpmstate") else "unused" if key.startswith("unused") else "disk"),
                 "options": {k: v for k, v in opts.items() if k not in ("size", "media")},
                 "empty": volume in ("none", ""),
             }
@@ -105,6 +105,7 @@ def parse_nets(config: dict, *, lxc: bool = False) -> list[dict]:
                 "vlan_tag": opts.get("tag"),
                 "firewall": _truthy(opts.get("firewall")),
                 "rate": opts.get("rate"),
+                "link_down": _truthy(opts.get("link_down")),
                 "ip": opts.get("ip"),
             }
         )
@@ -139,6 +140,7 @@ def summarize_config(config: dict | None, *, lxc: bool = False) -> dict | None:
         "sockets": sockets,
         "vcpus": (cores or 0) * sockets or None,
         "cpu_type": cfg.get("cpu"),
+        "template": _truthy(cfg.get("template")),
         "disks": parse_disks(cfg, lxc=lxc),
         "nets": parse_nets(cfg, lxc=lxc),
     }

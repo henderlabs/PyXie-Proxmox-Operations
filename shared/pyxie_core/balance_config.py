@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from .models import MetricPoint, Policy
+from .models import MetricPoint, Policy, Workload
 
 CONFIG_KEY = "balance.auto"
 STATE_KEY = "balance.auto_state"
@@ -158,6 +158,18 @@ def smooth_from_rows(rows: list[tuple], now: datetime) -> dict:
     return out
 
 
+def guest_based_mem_pct(total_bytes, node_used_bytes, guests: list[dict]) -> float | None:
+    """A node's busy memory as the guests ON IT NOW would use it: each guest's own busy level (its 7-day 90th percentile, or its live use when it has no history),
+    plus the host's own overhead (what the node uses beyond its guests right now). This judges the node by who lives there today; the node's own history also
+    carries guests that have since moved away, which made a node that used to be crowded look full long after it was emptied. Pure."""
+    if not total_bytes:
+        return None
+    live_guests = sum((g.get("live") or 0) for g in guests)
+    overhead = max(0.0, (node_used_bytes or 0) - live_guests)
+    busy = sum((g.get("busy") if g.get("busy") is not None else (g.get("live") or 0)) for g in guests)
+    return (busy + overhead) / total_bytes * 100.0
+
+
 def smoothed_loads(db: Session, nodes, now: datetime) -> tuple[dict, bool]:
     """Per node id: busy-level memory and CPU (7-day 90th percentile). Second value: does every live node have at
     least MIN_HISTORY_HOURS of history, so the numbers can be trusted."""
@@ -172,6 +184,26 @@ def smoothed_loads(db: Session, nodes, now: datetime) -> tuple[dict, bool]:
             .group_by(MetricPoint.object_id, MetricPoint.metric).all()
         )
     loads = smooth_from_rows(rows, now)
+    # Memory is judged by the guests on each node today (see guest_based_mem_pct); the node's own history stays for CPU and for "is there enough history".
+    if ids:
+        guests = db.query(Workload).filter(Workload.node_id.in_(ids), Workload.is_missing.is_(False), Workload.status == "running").all()
+        busy_rows = {
+            oid: val for oid, val in db.query(MetricPoint.object_id, func.percentile_cont(SMOOTH_QUANTILE).within_group(MetricPoint.value))
+            .filter(MetricPoint.object_type == "workload", MetricPoint.object_id.in_([g.id for g in guests] or [None]), MetricPoint.metric == "mem_used_bytes",
+                    MetricPoint.sampled_at >= now - timedelta(days=SMOOTH_DAYS), MetricPoint.value.isnot(None))
+            .group_by(MetricPoint.object_id).all()
+        } if guests else {}
+        by_node: dict = {}
+        for g in guests:
+            by_node.setdefault(g.node_id, []).append({"busy": float(busy_rows[g.id]) if g.id in busy_rows else None, "live": float(g.mem_used_bytes or 0)})
+        for n in live:
+            slot = loads.get(n.id)
+            if slot is None or not n.mem_total_bytes or n.mem_usage_pct is None:
+                continue
+            pct = guest_based_mem_pct(n.mem_total_bytes, n.mem_total_bytes * n.mem_usage_pct / 100.0, by_node.get(n.id, []))
+            if pct is not None:
+                slot["mem_pct_node_history"] = slot["mem_pct"]
+                slot["mem_pct"] = pct
     enough = bool(live) and all(n.id in loads and loads[n.id]["mem_pct"] is not None and loads[n.id]["hours"] >= MIN_HISTORY_HOURS for n in live)
     return loads, enough
 

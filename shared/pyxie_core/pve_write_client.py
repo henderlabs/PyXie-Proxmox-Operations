@@ -250,6 +250,12 @@ class TaskResult:
     def succeeded(self) -> bool:
         return self.status == "stopped" and self.exit_status == "OK"
 
+    @property
+    def finished_ok(self) -> bool:
+        """Done, with or without warnings. Proxmox ends a task "WARNINGS: n" when it worked but said something (a stale disk, an HA note): the caller's read-back decides
+        whether the result is what was asked for."""
+        return self.status == "stopped" and (self.exit_status == "OK" or str(self.exit_status or "").startswith("WARNINGS"))
+
 
 class PveMaintenanceClient:
     def __init__(self, creds: PveCredentials, timeout: float = 15.0, *, transport=None):
@@ -269,7 +275,14 @@ class PveMaintenanceClient:
     def __exit__(self, *exc):
         self.close()
 
+    def for_guest(self, kind: str) -> "PveMaintenanceClient":
+        """Use this client for a container (kind 'lxc') instead of a VM: the same calls then go to the /lxc/ paths. Returns self, so it works in a `with`."""
+        self.guest_kind = "lxc" if kind in ("lxc", "ct") else "qemu"
+        return self
+
     def _request(self, method: str, path: str, **kwargs) -> dict:
+        if getattr(self, "guest_kind", "qemu") == "lxc":
+            path = path.replace("/qemu/", "/lxc/", 1)
         try:
             resp = self._pool.request(method, path, **kwargs)
         except httpx.ConnectError as exc:
@@ -412,6 +425,213 @@ class PveMaintenanceClient:
             raise MutationsDisabledError(_disabled_message("move a disk"))
         return self._request("POST", f"/nodes/{node}/qemu/{vmid}/move_disk", data={"disk": disk, "storage": storage, "delete": 1 if delete_source else 0})
 
+    def create_snapshot(self, node: str, vmid: int, name: str, *, description: str = "", include_ram: bool = False) -> str:
+        """POST /nodes/{node}/qemu/{vmid}/snapshot -> UPID. include_ram saves the running memory too (vmstate), so a rollback
+        resumes the VM exactly where it was."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("take a snapshot"))
+        data = {"snapname": name}
+        if description:
+            data["description"] = description
+        if include_ram and getattr(self, "guest_kind", "qemu") != "lxc":
+            data["vmstate"] = 1
+        return self._request("POST", f"/nodes/{node}/qemu/{vmid}/snapshot", data=data)
+
+    def delete_snapshot(self, node: str, vmid: int, name: str) -> str:
+        """DELETE /nodes/{node}/qemu/{vmid}/snapshot/{name} -> UPID. Removes only that snapshot; the VM and its other snapshots stay."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("delete a snapshot"))
+        return self._request("DELETE", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}")
+
+    def rollback_snapshot(self, node: str, vmid: int, name: str) -> str:
+        """POST /nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback -> UPID. Throws away everything the VM has written since."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("roll back a snapshot"))
+        _guard_self_vmid(vmid, "roll back a snapshot of")
+        return self._request("POST", f"/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback", data={})
+
+    def download_url(self, node: str, storage: str, url: str, filename: str, *, checksum: Optional[str] = None, algorithm: Optional[str] = None,
+                     verify_certificates: bool = True) -> str:
+        """POST /nodes/{node}/storage/{storage}/download-url -> UPID. The node itself fetches `url` into the storage as an ISO; a wrong checksum fails the task."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("download an ISO"))
+        data = {"url": url, "filename": filename, "content": "iso", "verify-certificates": 1 if verify_certificates else 0}
+        if checksum:
+            data["checksum"] = checksum
+            data["checksum-algorithm"] = algorithm or "sha256"
+        return self._request("POST", f"/nodes/{node}/storage/{storage}/download-url", data=data)
+
+    def delete_volume(self, node: str, storage: str, volid: str) -> str:
+        """DELETE /nodes/{node}/storage/{storage}/content/{volid} -> UPID. Removes one volume (here: an ISO image)."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("delete an ISO"))
+        from urllib.parse import quote
+        return self._request("DELETE", f"/nodes/{node}/storage/{storage}/content/{quote(volid, safe='')}")
+
+    def set_storage_content(self, storage: str, content: str) -> None:
+        """PUT /storage/{storage} with the full comma-separated `content` list (a datacenter setting; synchronous)."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change storage content types"))
+        self._request("PUT", f"/storage/{storage}", data={"content": content})
+
+    def create_nfs_storage(self, spec: dict) -> None:
+        """POST /storage (type nfs): defines an NFS storage for the datacenter; the listed hosts (default: all) mount it. Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("add a storage"))
+        data = {"storage": spec["id"], "type": "nfs", "server": spec["server"], "export": spec["export"], "content": ",".join(spec["content"])}
+        if spec.get("nodes"):
+            data["nodes"] = ",".join(spec["nodes"])
+        if spec.get("nfs_version"):
+            data["options"] = f"vers={spec['nfs_version']}"
+        self._request("POST", "/storage", data=data)
+
+    def create_pool(self, poolid: str, comment: str = "") -> None:
+        """POST /pools: creates an empty resource pool. Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("create a pool"))
+        data = {"poolid": poolid}
+        if comment:
+            data["comment"] = comment
+        self._request("POST", "/pools", data=data)
+
+    def delete_pool(self, poolid: str) -> None:
+        """DELETE /pools/{poolid}: Proxmox itself refuses a pool that still has members."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("delete a pool"))
+        self._request("DELETE", f"/pools/{poolid}")
+
+    def set_pool_members(self, poolid: str, vmids: list[int], *, remove: bool) -> None:
+        """PUT /pools/{poolid} with vms (and delete=1 to take them out): membership only, no guest is touched."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change pool members"))
+        data = {"vms": ",".join(str(v) for v in vmids)}
+        if remove:
+            data["delete"] = 1
+        self._request("PUT", f"/pools/{poolid}", data=data)
+
+    def create_storage(self, spec: dict) -> None:
+        """POST /storage for any supported type (nfs, iscsi, dir, lvm, lvmthin, zfspool). Synchronous; the listed hosts (default: all) use it."""
+        kind = spec.get("type", "nfs")
+        if kind == "nfs":
+            return self.create_nfs_storage(spec)
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("add a storage"))
+        data = {"storage": spec["id"], "type": kind, "content": ",".join(spec["content"])}
+        if kind == "iscsi":
+            data.update(portal=spec["portal"], target=spec["target"])
+        elif kind == "dir":
+            data["path"] = spec["path"]
+        elif kind in ("lvm", "lvmthin"):
+            data["vgname"] = spec["vgname"]
+            if kind == "lvmthin":
+                data["thinpool"] = spec["thinpool"]
+            elif spec.get("shared"):
+                data["shared"] = 1
+        elif kind == "zfspool":
+            data["pool"] = spec["pool"]
+        if spec.get("nodes"):
+            data["nodes"] = ",".join(spec["nodes"])
+        self._request("POST", "/storage", data=data)
+
+    def remove_storage(self, storage: str) -> None:
+        """DELETE /storage/{storage}: removes the definition only; Proxmox never deletes the files on the share."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("remove a storage"))
+        self._request("DELETE", f"/storage/{storage}")
+
+    def create_ct(self, node: str, params: dict) -> str:
+        """POST /nodes/{node}/lxc -> UPID. Creates a container from a template with the full parameter set."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("create a container"))
+        return self._request("POST", f"/nodes/{node}/lxc", data=params)
+
+    def download_appliance(self, node: str, storage: str, template: str) -> str:
+        """POST /nodes/{node}/aplinfo -> UPID. Downloads one of Proxmox's official container templates into the storage (it checks the published checksum)."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("download a container template"))
+        return self._request("POST", f"/nodes/{node}/aplinfo", data={"storage": storage, "template": template})
+
+    def set_vm_config_keys(self, node: str, vmid: int, keys: dict) -> None:
+        """PUT /nodes/{node}/qemu/{vmid}/config with several config keys at once (a CD/DVD drive line, the boot order...). Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change the VM configuration"))
+        if keys:
+            self._request("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=keys)
+
+    def clone_vm(self, node: str, vmid: int, newid: int, *, name: str, target: Optional[str] = None, full: bool = True, storage: Optional[str] = None, pool: Optional[str] = None) -> str:
+        """POST /nodes/{node}/qemu/{vmid}/clone -> UPID. A full copy, or (only from a template, full=False) a linked clone. `target` clones onto another host; `storage` is for full copies."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("clone a VM"))
+        data: dict = {"newid": newid, ("hostname" if getattr(self, "guest_kind", "qemu") == "lxc" else "name"): name, "full": 1 if full else 0}
+        if target:
+            data["target"] = target
+        if storage and full:
+            data["storage"] = storage
+        if pool:
+            data["pool"] = pool
+        return self._request("POST", f"/nodes/{node}/qemu/{vmid}/clone", data=data)
+
+    def delete_guest(self, node: str, vmid: int, *, guest_type: str = "qemu", purge: bool = True, destroy_unreferenced: bool = False) -> str:
+        """DELETE /nodes/{node}/qemu|lxc/{vmid} -> UPID. Destroys the guest and its disks; purge also removes it from backup jobs, replication and HA."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("delete a guest"))
+        _guard_self_vmid(vmid, "delete")
+        params = {"purge": 1 if purge else 0, "destroy-unreferenced-disks": 1 if destroy_unreferenced else 0}
+        return self._request("DELETE", f"/nodes/{node}/{'qemu' if guest_type == 'qemu' else 'lxc'}/{vmid}", params=params)
+
+    def create_vm(self, node: str, params: dict) -> str:
+        """POST /nodes/{node}/qemu -> UPID. Creates a VM (and allocates its disks) from the full parameter set."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("create a VM"))
+        return self._request("POST", f"/nodes/{node}/qemu", data=params)
+
+    def move_disk_to_vm(self, node: str, vmid: int, disk: str, target_vmid: int, target_disk: str) -> str:
+        """POST /nodes/{node}/qemu/{vmid}/move_disk with target-vmid: re-labels the volume to another VM on the same host (no data copy). Returns the task id."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("move a disk to another VM"))
+        return self._request("POST", f"/nodes/{node}/qemu/{vmid}/move_disk", data={"disk": disk, "target-vmid": target_vmid, "target-disk": target_disk})
+
+    def set_vm_net(self, node: str, vmid: int, net_id: str, line: str) -> None:
+        """PUT /nodes/{node}/qemu/{vmid}/config with one network device line (adds it if the slot is free, replaces it otherwise)."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change a network device"))
+        self._request("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={net_id: line})
+
+    def delete_vm_net(self, node: str, vmid: int, net_id: str) -> None:
+        """PUT /nodes/{node}/qemu/{vmid}/config with delete=<netN>: removes the device (unplugged at once if the guest allows it, else at its next stop/start)."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("remove a network device"))
+        self._request("PUT", f"/nodes/{node}/qemu/{vmid}/config", data={"delete": net_id})
+
+    def resize_disk(self, node: str, vmid: int, disk: str, size: str):
+        """PUT /nodes/{node}/qemu/{vmid}/resize with an absolute size such as '120G'. Grow only; Proxmox refuses anything not larger."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("resize a disk"))
+        return self._request("PUT", f"/nodes/{node}/qemu/{vmid}/resize", data={"disk": disk, "size": size})
+
+    def set_vm_hardware(self, node: str, vmid: int, *, machine: Optional[str] = None, cpu: Optional[str] = None) -> None:
+        """PUT /nodes/{node}/qemu/{vmid}/config with `machine` and/or `cpu`. On a running VM Proxmox records it as pending until the next stop/start."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change hardware"))
+        data = {k: v for k, v in (("machine", machine), ("cpu", cpu)) if v}
+        if data:
+            self._request("PUT", f"/nodes/{node}/qemu/{vmid}/config", data=data)
+
+    def set_tag_style(self, style: str) -> None:
+        """PUT /cluster/options with `tag-style` (the datacenter-wide tag color map); an empty string removes the option. Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change tag colors"))
+        self._request("PUT", "/cluster/options", data={"tag-style": style} if style else {"delete": "tag-style"})
+
+    def set_vm_tags(self, node: str, vmid: int, tags: list[str], *, guest_type: str = "vm") -> None:
+        """PUT /nodes/{node}/qemu|lxc/{vmid}/config with `tags` (semicolon separated). Synchronous; applies at once, also on a
+        running guest. An empty list removes the tags (delete=tags)."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change tags"))
+        kind = "qemu" if guest_type == "vm" else "lxc"
+        data = {"tags": ";".join(tags)} if tags else {"delete": "tags"}
+        self._request("PUT", f"/nodes/{node}/{kind}/{vmid}/config", data=data)
+
     def start_vm(self, node: str, vmid: int) -> str:
         """POST /nodes/{node}/qemu/{vmid}/status/start."""
         if not _mutations_enabled():
@@ -505,6 +725,28 @@ class PveMaintenanceClient:
         else:
             params = {"all": 0, "vmid": vmid or "", "delete": "exclude"}
         self._request("PUT", f"/cluster/backup/{job_id}", data=params)
+
+    def create_backup_job(self, params: dict) -> None:
+        """POST /cluster/backup: a new vzdump job (params include its id). Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("create a backup job"))
+        self._request("POST", "/cluster/backup", data={k: v for k, v in params.items() if k != "type"})
+
+    def replace_backup_job(self, job_id: str, params: dict, current: dict) -> None:
+        """PUT /cluster/backup/{id} so the job matches `params`; optional keys the job has but `params` lacks are deleted (a retention or note that was removed)."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("update a backup job"))
+        data = {k: v for k, v in params.items() if k not in ("id", "type")}
+        drop = [k for k in ("prune-backups", "notes-template", "exclude", "pool") if k in (current or {}) and k not in data]
+        if drop:
+            data["delete"] = ",".join(drop)
+        self._request("PUT", f"/cluster/backup/{job_id}", data=data)
+
+    def delete_backup_job(self, job_id: str) -> None:
+        """DELETE /cluster/backup/{id}: removes the job definition only; backups already taken stay on the datastore."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("delete a backup job"))
+        self._request("DELETE", f"/cluster/backup/{job_id}")
 
     def force_stop_vm(self, node: str, vmid: int) -> str:
         """POST /nodes/{node}/qemu/{vmid}/status/stop -- immediate power-off,

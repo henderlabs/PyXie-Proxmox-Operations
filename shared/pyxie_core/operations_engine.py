@@ -160,6 +160,17 @@ def enter_stage(
         rollback_classification=op.rollback_classification,
         metadata={"operation_id": str(op.id)},
     )
+    if status in ("failed", "blocked"):  # tell the people who asked for it; best effort, never raises
+        try:
+            from .notifications import dispatch_event, operation_event
+            event = operation_event(op)
+            if event:
+                dispatch_event(db, observed_at=now(), **event)
+        except Exception:  # noqa: BLE001
+            try:
+                db.rollback()
+            except Exception:  # noqa: BLE001
+                pass
     return op
 
 
