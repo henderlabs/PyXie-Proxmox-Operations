@@ -33,3 +33,9 @@ def test_unknown_types_still_get_a_readable_label_and_category_exists():
     e = operation_event(op(operation_type_id="storage.some_new_thing"))
     assert "storage some new thing" in e["title"].lower()
     assert "operation" in CATEGORY_KEYS and "snapshot" in CATEGORY_KEYS
+
+
+def test_a_failed_preview_nobody_approved_is_not_an_alert():
+    from types import SimpleNamespace
+    op = SimpleNamespace(operation_type_id="backup.policy_change", status="failed", error="the preview did not finish", approved_at=None, dry_run_result=None, context={})
+    assert operation_event(op) is None

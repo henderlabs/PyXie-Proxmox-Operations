@@ -186,6 +186,17 @@ def fail_operation(db: Session, op: Operation, *, error: str, actor: str = "syst
     return enter_stage(db, op, status="failed", error=error, actor=actor)
 
 
+def fail_stale_previews(db: Session, *, minutes: int = 15) -> int:
+    """Close previews that never finished (the request crashed or was interrupted after its row was created) so they do not sit open forever. Nothing was ever
+    changed in Proxmox by a preview. Returns how many were closed."""
+    from datetime import timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    rows = db.query(Operation).filter(Operation.status == "pending", Operation.created_at < cutoff).all()
+    for op in rows:
+        fail_operation(db, op, error="the preview did not finish (it hit an error or was interrupted); nothing was changed")
+    return len(rows)
+
+
 def block_operation(db: Session, op: Operation, *, blocking_safety_rules: list[str], actor: str = "system") -> Operation:
     return enter_stage(db, op, status="blocked", blocking_safety_rules=blocking_safety_rules, actor=actor)
 

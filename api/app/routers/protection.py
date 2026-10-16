@@ -17,6 +17,7 @@ from pyxie_core.models import (
     Workload,
 )
 from pyxie_core.protection import sync_pbs_protection
+from pyxie_core.protection_scorecard import build_scorecard
 from pyxie_core.protection_workflow import ProtectionWorkflowError, dry_run_backup_membership, list_pbs_backup_jobs
 
 from ..auth_deps import get_current_user, require_admin
@@ -160,6 +161,12 @@ def create_backup_membership_dry_run(
     except ProtectionWorkflowError as exc:
         raise HTTPException(400, str(exc))
     return {"id": str(op.id), "status": op.status, "dry_run_result": op.dry_run_result}
+
+
+@router.get("/scorecard")
+def scorecard(db: Session = Depends(get_db)):
+    """3-2-1 posture per guest plus datastore cards and read-only job info. Reads PBS and Proxmox, writes nothing."""
+    return build_scorecard(db)
 
 
 @router.get("/results")

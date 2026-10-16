@@ -98,8 +98,8 @@ def operation_event(op) -> dict | None:
     """The alert (severity, category, title, recovered) for an operation that FAILED, or that a safety check stopped after somebody approved it; None otherwise (a preview
     that was refused, or anything that is not a bad ending). Pure."""
     status = getattr(op, "status", None)
-    if status == "failed":
-        severity = "critical"
+    if status == "failed" and getattr(op, "approved_at", None) is not None:
+        severity = "critical"  # a change somebody approved that then failed; a preview that crashed before approval is not a page
     elif status == "blocked" and getattr(op, "approved_at", None) is not None:
         severity = "warning"
     else:

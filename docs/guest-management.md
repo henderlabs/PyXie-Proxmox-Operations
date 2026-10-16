@@ -77,7 +77,7 @@ Notification rules can now include **Operation failed or stopped** (a change tha
 ## Proxmox privileges
 The `PyXieAdmin` role needs, beyond the privileges for migration, power and patching:
 
-`VM.Allocate` (create and delete), `VM.Backup` (backup policies: putting VMs into backup jobs), `VM.Clone`, `VM.Snapshot`, `VM.Snapshot.Rollback`, `VM.Config.Options` (tags), `VM.Config.HWType` (machine/CPU type), `VM.Config.Network`,
+`VM.Allocate` (create and delete), `VM.Backup` (putting VMs into backup jobs), `VM.Clone`, `VM.Snapshot`, `VM.Snapshot.Rollback`, `VM.Config.Options` (tags), `VM.Config.HWType` (machine/CPU type), `VM.Config.Network`,
 `VM.Config.CDROM`, `SDN.Use` (attach to a bridge), `Datastore.AllocateTemplate` (ISOs and container templates). Pools need `Pool.Allocate` (create, delete, change members; adding a guest also needs `VM.Allocate` on it) and `Pool.Audit` (Proxmox hides a pool from an account without it, so PyXie could not read the pool back).
 `VM.Allocate` also allows deleting guests: PyXie only does so through the guarded Delete above.
 
