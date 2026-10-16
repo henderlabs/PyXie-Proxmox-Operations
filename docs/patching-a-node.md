@@ -22,31 +22,20 @@ patching wrapper installed and its host key pinned.
    see below.
 5. **Check the PVE-writes switch** (Settings) is on.
 
-## The stages (each is its own approval)
+## The actions (Maintenance page, Nodes card)
 
-1. **Enter Maintenance Mode.** Select exactly one node (zoom in and check
-   the ticked box -- a banner can shift the page and move buttons), open
-   the preview, review where every VM goes and which stopped ones stay,
-   then *Approve & Execute*. VMs move one at a time, smallest first,
-   roughly 45-60 s each for ordinary VMs; the run stops at the first
-   failure. The node is only marked as in maintenance once PVE confirms no
-   guests are running on it.
-2. **Apply Updates.** Checks, then applies automatically if the check is
-   clean (full `dist-upgrade` through the wrapper, about 6 minutes for ~270
-   packages). A new kernel installs but only takes effect at the reboot.
-3. **Reboot Node.** Preview, then approve. Expect the node offline for
-   about 3 minutes. Watch cluster quorum (it should stay quorate with the
-   other nodes online), that the node returns on the new kernel, that all
-   storages are active, and that the PVE services are running.
-4. **Exit Maintenance Mode.** Preview and approve. (The worker picks the
-   operation up after a short delay.)
-5. **Return load** (optional). Balance Load proposes moves cluster-wide and
-   favours the largest VMs; review it and do not approve moves you would
-   not make by hand. Bulk Migrate on the Maintenance page lets you tick
-   specific VMs and pick a fixed destination.
+There is no manual maintenance mode to enter first. Four actions, each previewed and approved:
 
-A *Full Maintenance* run chains all of these; the staged form above is
-easier to stop and was used on live workloads.
+1. **Check for Updates.** A look: runs `apt-get update` through the wrapper and lists what is waiting. Changes nothing else.
+2. **Apply Updates.** Checks, then applies automatically if the check is clean (full `dist-upgrade` through the wrapper, about 6 minutes for ~270 packages). It only needs the node to be **idle**: no backup, migration or other task running on it. Running guests keep running through an apt upgrade. A new kernel installs but only takes effect at the reboot, which the row flags as *Reboot Required*.
+3. **Reboot Node.** Needs the node idle **and empty of running guests**, and the cluster to keep quorum. If guests are running the preview says so and points you to Full Maintenance. Expect the node offline for about 3 minutes; watch quorum, that it returns on the new kernel, that storages are active and PVE services running.
+4. **Full Maintenance.** The whole cycle in one run, each step still reviewed and approved: evacuate the node (live-migrate what can move, shut down in place what cannot), check and apply updates, reboot, bring it back into service, then either restore the VMs to it or leave it empty. VMs move one at a time, smallest first, roughly 45-60 s each; the run stops at the first failure. During the run the node is marked as in maintenance mode.
+
+A node a Full Maintenance run left in maintenance mode (for example after a failure) shows an **Exit Maintenance Mode** button; it restarts what the run shut down and marks the node available again (it does not move anything back).
+
+Backup servers (Proxmox Backup Server) are in the same table: Check for Updates and Apply Updates work on them too, with the same idle rule (no backup, sync, prune, verify or garbage collection running). PyXie never reboots a backup server: *Reboot Required* only tells you.
+
+Balance Load (its own page) proposes moves cluster-wide and favours the largest VMs; review it and do not approve moves you would not make by hand.
 
 ## When a VM is locked
 
@@ -77,7 +66,7 @@ config). On the VM's node, as root:
 ## Things to know
 
 - **A failed operation cannot be resumed.** Start a new one (for example,
-  re-run Enter Maintenance Mode: already-moved VMs are simply no longer on
+  re-run Full Maintenance: already-moved VMs are simply no longer on
   the node).
 - **Keep databases apart.** Create a keep-apart rule per pair (workload
   pair) or tag the VMs and use one tag-group rule. Hard block forbids

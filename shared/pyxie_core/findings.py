@@ -349,6 +349,7 @@ def evaluate_findings(db: Session) -> dict:
     current.extend(_liveness_findings(db))
     current.extend(_snapshot_findings(db))
     current.extend(_wrapper_findings(db))
+    current.extend(_pbs_server_findings(db))
     current.extend(_stale_inventory_findings(db))
     current.extend(_edge_findings(db))
     current.extend(_node_metric_findings(db))
@@ -675,3 +676,45 @@ def _protection_findings(db: Session) -> list[dict]:
                 }
             )
     return findings
+
+
+def _pbs_server_findings(db: Session) -> list[dict]:
+    """Proxmox Backup Server as a host: unreachable, datastore nearly full, failed tasks, patches waiting, old host wrapper.
+    Reads the status the worker stored (protection_targets.host_status); a server never read yet produces nothing."""
+    from pathlib import Path
+
+    from . import host_kit
+    from .models import ProtectionTarget
+
+    kit_dir = Path(__file__).resolve().parents[1] / "host_maintenance_kit"
+    expected = host_kit.wrapper_version(kit_dir) if (kit_dir / "pyxie-maint").exists() else None
+    out: list[dict] = []
+    for t in db.query(ProtectionTarget).all():
+        st = t.host_status
+        if not st:
+            continue
+
+        def add(key, sev, title, evidence, category="backup_server"):
+            out.append({"dedupe_key": f"pbs.{key}:{t.id}", "object_type": "protection_target", "object_id": t.id,
+                        "category": category, "severity": sev, "title": title, "evidence": evidence, "confidence": "high"})
+
+        if not st.get("reachable"):
+            add("unreachable", "critical", f"Backup server {t.name} cannot be reached", {"error": st.get("error")})
+            continue
+        for d in st.get("datastores") or []:
+            if d.get("total") and d.get("used") is not None:
+                pct = 100 * d["used"] / d["total"]
+                if pct >= 85:
+                    add(f"full.{d['name']}", "critical" if pct >= 95 else "warning",
+                        f"Backup datastore {d['name']} on {t.name} is {pct:.0f}% full", {"used": d["used"], "total": d["total"]})
+        failed = st.get("tasks_failed_24h") or []
+        if failed:
+            add("failed_tasks", "warning", f"{len(failed)} task(s) failed on {t.name} in the last 24 hours",
+                {"tasks": failed[:5]})
+        upd = (st.get("updates") or {}).get("count")
+        if upd:
+            add("updates", "warning", f"Backup server {t.name} has {upd} package update(s) waiting", {"count": upd})
+        if expected and t.wrapper_version and host_kit.is_outdated(t.wrapper_version, expected):
+            add("wrapper_outdated", "warning", f"Host wrapper on {t.name} is {t.wrapper_version}; this PyXie ships {expected}",
+                {"installed": t.wrapper_version, "expected": expected}, category="host_wrapper")
+    return out

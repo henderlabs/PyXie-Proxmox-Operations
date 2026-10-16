@@ -62,7 +62,15 @@ cmd_version() {
 cmd_status() {
   local kernel pve_ver upgradable reboot_req disk_free
   kernel=$(uname -r)
-  pve_ver=$(pveversion 2>/dev/null | head -1 || echo "unknown")
+  # Proxmox VE has pveversion; Proxmox Backup Server has proxmox-backup-manager. The JSON key stays
+  # "pve_version" (contract 1) and carries whichever product's version line this host reports.
+  if command -v pveversion >/dev/null 2>&1; then
+    pve_ver=$(pveversion 2>/dev/null | head -1 || echo "unknown")
+  elif command -v proxmox-backup-manager >/dev/null 2>&1; then
+    pve_ver=$(proxmox-backup-manager versions 2>/dev/null | head -1 || echo "unknown")
+  else
+    pve_ver="unknown"
+  fi
   upgradable=$(apt-get "${APT_LOCK_OPTS[@]}" -s dist-upgrade 2>/dev/null | grep -c '^Inst ' || true)
 
   # /var/run/reboot-required is an Ubuntu update-notifier-common convention

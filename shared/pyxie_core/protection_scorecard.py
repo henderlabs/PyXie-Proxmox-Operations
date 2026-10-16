@@ -14,8 +14,11 @@ from .protection_workflow import list_pbs_backup_jobs
 
 def _pbs_targets(db: Session):
     for t in db.query(ProtectionTarget).all():
-        c = db.query(ProtectionCredential).filter(
-            ProtectionCredential.protection_target_id == t.id, ProtectionCredential.slot_name == "inventory").one_or_none()
+        # a saved administrative token can see more (sync jobs), so read with it when there is one
+        c = (db.query(ProtectionCredential).filter(
+            ProtectionCredential.protection_target_id == t.id, ProtectionCredential.slot_name == "administrative").one_or_none()
+            or db.query(ProtectionCredential).filter(
+            ProtectionCredential.protection_target_id == t.id, ProtectionCredential.slot_name == "inventory").one_or_none())
         if c:
             yield t, PbsCredentials(t.hostname, t.api_port, c.token_user, c.token_id, decrypt_secret(c.encrypted_secret), t.tls_verify)
 

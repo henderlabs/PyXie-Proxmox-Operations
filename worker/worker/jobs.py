@@ -91,6 +91,19 @@ def sync_protection_targets():
     return _run_logged("protection_sync", _job)
 
 
+def pbs_status_job():
+    """Read each Proxmox Backup Server's status (version, load, disk, pending updates, tasks, datastore use) and store it."""
+    def _job(db):
+        from pyxie_core.pbs_server import refresh_status, status_is_stale
+        out = {}
+        for target in db.query(ProtectionTarget).all():
+            if status_is_stale(target, minutes=4):
+                out[str(target.id)] = bool(refresh_status(db, target).get("reachable"))
+        return out
+
+    return _run_logged("pbs_status", _job)
+
+
 def stale_previews_job():
     from pyxie_core.operations_engine import fail_stale_previews
     return _run_logged("stale_previews", lambda db: {"closed": fail_stale_previews(db)})
@@ -215,6 +228,18 @@ def execute_operation_job(operation_id: str):
         elif op.operation_type_id == "host.reboot":
             from pyxie_core.reboot_workflow import execute_reboot
             result = execute_reboot(db, operation_id)
+        elif op.operation_type_id == "pbs.reboot":
+            from pyxie_core.pbs_reboot_workflow import execute_pbs_reboot
+            result = execute_pbs_reboot(db, operation_id)
+        elif op.operation_type_id == "pbs.maintenance":
+            from pyxie_core.pbs_maintenance_workflow import execute_pbs_maintenance
+            result = execute_pbs_maintenance(db, operation_id)
+        elif op.operation_type_id == "pbs.update":
+            from pyxie_core.pbs_update_workflow import execute_pbs_update
+            result = execute_pbs_update(db, operation_id)
+        elif op.operation_type_id == "pbs.job_change":
+            from pyxie_core.pbs_job_workflow import execute_job_change
+            result = execute_job_change(db, operation_id)
         elif op.operation_type_id == "host.update":
             from pyxie_core.host_update_workflow import execute_host_update
             result = execute_host_update(db, operation_id)
@@ -295,6 +320,10 @@ def resume_inflight_operations():
         "storage.ct_template_delete": 900,
         "workload.hw_change": 3600,
         "host.reboot": 1800,
+        "pbs.update": 3900,
+        "pbs.reboot": 1800,
+        "pbs.maintenance": 7200,
+        "pbs.job_change": 300,
         "host.update": 3900,
         "maintenance.run": 21600,
         "node.enter_maintenance": 10800,
@@ -323,6 +352,7 @@ def run_all():
     stale_previews_job()
     discover_all_targets()
     sync_protection_targets()
+    pbs_status_job()
     evaluate_findings_job()
     generate_recommendations_job()
     auto_balance_job()

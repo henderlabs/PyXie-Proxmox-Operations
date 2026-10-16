@@ -94,7 +94,7 @@ export default function SetupGuide({ initial }: { initial: SetupStatus }) {
     <div className="mb-6" id="guide">
       <div className="flex items-center gap-3 mb-2">
         <h2 className="text-base font-semibold text-text">Set up PyXie, step by step</h2>
-        <a href="/platform/quick-start" className="text-xs text-accent hover:underline">New? Read the quick start</a>
+        <a href="#reference" className="text-xs text-accent hover:underline">What each account is for: see Reference below</a>
         <span className="ml-auto text-xs text-muted">{done} of {total} done</span>
       </div>
       <Prerequisites collapsible />

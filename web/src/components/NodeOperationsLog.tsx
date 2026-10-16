@@ -19,6 +19,9 @@ const TYPE_LABELS: Record<string, string> = {
   "workload.reboot": "Guest Reboot",
   "workload.resize": "Guest Resize",
   "host.update": "Host Update Preflight",
+  "pbs.update": "Backup Server Update",
+  "pbs.reboot": "Backup Server Reboot",
+  "pbs.maintenance": "Backup Server Maintenance",
   "host.reboot": "Host Reboot",
   "maintenance.run": "Full Maintenance Run",
   "node.enter_maintenance": "Enter Maintenance Mode",
@@ -34,6 +37,7 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
   "workload.reboot": <RestartIcon className="w-4 h-4" />,
   "workload.resize": <CpuIcon className="w-4 h-4" />,
   "host.update": <PackageIcon className="w-4 h-4" />,
+  "pbs.update": <PackageIcon className="w-4 h-4" />,
   "host.reboot": <ClockIcon className="w-4 h-4" />,
   "maintenance.run": <WrenchIcon className="w-4 h-4" />,
   "node.enter_maintenance": <WrenchIcon className="w-4 h-4" />,
@@ -55,7 +59,7 @@ function subtitleFor(op: Operation): string {
     return count > 0 ? `${count} workload${count === 1 ? "" : "s"}` : "already balanced";
   }
   const node = String(op.dry_run_result?.node || "?");
-  if (op.operation_type_id === "host.update") {
+  if (op.operation_type_id === "host.update" || op.operation_type_id === "pbs.update") {
     // Reboot-required is only a real, post-apply fact once the patch has
     // actually run (verification_result) -- before that, dry_run_result's
     // hint is a preflight guess. A completed patch run used to give no
@@ -198,7 +202,7 @@ export default function NodeOperationsLog({ initialOperations }: { initialOperat
                   )}
                 </div>
               </div>
-              {op.operation_type_id === "host.update" && op.dry_run_result?.planned_packages != null && (
+              {(op.operation_type_id === "host.update" || op.operation_type_id === "pbs.update") && op.dry_run_result?.planned_packages != null && (
                 <div className="mt-1.5">
                   <HostUpdatePlan result={op.dry_run_result} />
                 </div>

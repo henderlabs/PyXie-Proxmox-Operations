@@ -24,4 +24,4 @@ a **warning** "Host wrapper on X is outdated" (category *Host wrapper*, e-mailab
 
 On a node that is already set up, running the script again upgrades it, and the script's last lines say there is nothing more to do in PyXie (the host key stays pinned). Only a first install asks you to pin the host key.
 
-**Impact:** once the wrapper is installed, applying updates from PyXie can reboot that node (kernel updates need it). Use maintenance mode so its VMs move off first. Installing the wrapper does not reboot anything.
+**Impact:** once the wrapper is installed, applying updates from PyXie can reboot that node (kernel updates need it). Use Full Maintenance so its VMs move off first. Installing the wrapper does not reboot anything.

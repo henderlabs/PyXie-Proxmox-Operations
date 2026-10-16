@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { apiFetch } from "@/lib/api";
 import type { BackupJob, Site } from "@/lib/api";
 import { Card, CardTitle, PageHeader } from "@/components/Card";
@@ -19,7 +20,8 @@ type Store = {
 };
 type JobInfo = { cluster_id: string; cluster_name: string; job_id: string; storage: string; schedule: string; enabled: boolean; all_guests: boolean; member_count: number; scope_node: string | null; pve_url: string | null };
 type Scorecard = { summary: { ok: number; partial: number; none: number; total: number }; rows: Row[]; stores: Store[]; jobs: JobInfo[]; errors: string[]; rules: { backup_max_age_h: number; offsite_max_age_h: number } };
-type Target = { id: string; name: string; hostname: string; connection_health: string };
+type Server = { id: string; name: string; hostname: string; status: { reachable: boolean; version?: string; updates?: { count: number } | null } | null;
+  credentials: Record<string, unknown>; ssh: { host_key_pinned: boolean } };
 
 const when = (s: number | null) => (s ? new Date(s * 1000).toLocaleDateString() : "never");
 const noteColor = (l: string) => (l === "bad" ? "text-bad" : l === "info" ? "text-muted" : "text-warn");
@@ -27,9 +29,9 @@ const statusText = { ok: "3-2-1 met", partial: "Partly protected", none: "Not pr
 const statusColor = { ok: "text-good", partial: "text-warn", none: "text-bad" } as const;
 
 export default async function ProtectionPage() {
-  const [card, targets, sites, backupJobs] = await Promise.all([
+  const [card, servers, sites, backupJobs] = await Promise.all([
     apiFetch<Scorecard>("/api/protection/scorecard"),
-    apiFetch<Target[]>("/api/protection/targets"),
+    apiFetch<Server[]>("/api/pbs/servers"),
     apiFetch<Site[]>("/api/sites"),
     apiFetch<BackupJob[]>("/api/protection/backup-jobs"),
   ]);
@@ -128,11 +130,21 @@ export default async function ProtectionPage() {
 
       <Card>
         <CardTitle>Backup servers</CardTitle>
+        <div className="text-xs text-muted mb-2">Each Proxmox Backup Server is managed like a host: status and jobs here, package patching on the <Link href="/operations/maintenance#backup-servers" className="text-accent hover:underline">Maintenance page</Link>, and its accounts, tokens and SSH access under <Link href="/platform/credentials" className="text-accent hover:underline">Settings, Credentials</Link>.</div>
         <div className="space-y-3">
-          {targets.map((t) => (
+          {servers.map((t) => (
             <div key={t.id} className="flex items-center justify-between bg-surface2 rounded p-3">
-              <div><div className="text-sm text-text">{t.name}</div><div className="text-xs text-muted">{t.hostname}</div></div>
-              <div className="flex items-center gap-3"><StatusBadge status={t.connection_health} /><ActionButton href={`/api/protection/targets/${t.id}/sync`} label="Sync Now" variant="primary" /></div>
+              <div>
+                <Link href={`/operations/protection/servers/${t.id}`} className="text-sm text-text hover:underline">{t.name}</Link>
+                <div className="text-xs text-muted">{t.hostname}{t.status?.reachable ? ` · PBS ${t.status.version}` : ""}
+                  {t.status?.updates?.count ? <span className="text-warn"> · {t.status.updates.count} update(s) waiting: <Link href="/operations/maintenance#backup-servers" className="underline">patch in Maintenance</Link></span> : null}
+                  {!t.credentials.inventory || !t.credentials.administrative || !t.ssh.host_key_pinned ? <span className="text-warn"> · setup incomplete</span> : null}</div>
+              </div>
+              <div className="flex items-center gap-3">
+                <StatusBadge status={t.status ? (t.status.reachable ? "connected" : "unavailable") : "unknown"} />
+                <Link href={`/operations/protection/servers/${t.id}`} className="text-xs text-accent hover:underline">Manage</Link>
+                <ActionButton href={`/api/protection/targets/${t.id}/sync`} label="Sync Now" variant="primary" />
+              </div>
             </div>
           ))}
           {defaultSite && <PbsTargetForm siteId={defaultSite.id} />}

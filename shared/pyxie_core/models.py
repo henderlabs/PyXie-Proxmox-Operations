@@ -405,7 +405,9 @@ class HostMaintenanceCredential(Base):
     __tablename__ = "host_maintenance_credentials"
 
     id = uuid_pk()
-    pve_target_id = Column(UUID(as_uuid=True), ForeignKey("pve_targets.id"), nullable=False, unique=True)
+    pve_target_id = Column(UUID(as_uuid=True), ForeignKey("pve_targets.id"), nullable=True, unique=True)
+    # A Proxmox Backup Server target uses the same kind of credential; exactly one of the two ids is set.
+    protection_target_id = Column(UUID(as_uuid=True), ForeignKey("protection_targets.id"), nullable=True, unique=True)
     ssh_username = Column(String, nullable=False)
     ssh_port = Column(Integer, nullable=False, default=22)
     encrypted_private_key = Column(Text, nullable=False)
@@ -767,6 +769,16 @@ class ProtectionTarget(Base):
     hostname = Column(String, nullable=False)
     api_port = Column(Integer, nullable=False, default=8007)
     tls_verify = Column(Boolean, nullable=False, default=True)
+    # Proxmox Backup Server as a managed host: pinned SSH host key (patching), last-seen wrapper, cached status.
+    ssh_host_key_type = Column(String, nullable=True)
+    ssh_host_key_base64 = Column(Text, nullable=True)
+    ssh_host_key_fingerprint = Column(String, nullable=True)
+    ssh_host_key_pinned_at = Column(DateTime(timezone=True), nullable=True)
+    ssh_host_key_pinned_by = Column(String, nullable=True)
+    wrapper_version = Column(String, nullable=True)
+    wrapper_checked_at = Column(DateTime(timezone=True), nullable=True)
+    host_status = Column(JSONB, nullable=True)
+    host_status_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)
 

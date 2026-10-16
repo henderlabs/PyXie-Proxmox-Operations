@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMe } from "@/lib/useMe";
-import { hostScript, pveScript, TOKEN_FILE } from "@/lib/hostScripts";
+import { hostScript, pbsScript, pveScript, PBS_TOKEN_FILE, TOKEN_FILE } from "@/lib/hostScripts";
 import type { ConsoleOpt, Link } from "@/lib/hostScripts";
 
 type Target = { id: string; name: string };
@@ -256,6 +256,101 @@ export function PveAccountsBuilder() {
               {effConsole === "separate" && <li>Turn the console on in Settings after the console credential tests as valid.</li>}
             </ol>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Proxmox Backup Server accounts: same builder shape as the Proxmox one. Nothing runs from here; you paste the script into a root shell on the PBS. */
+export function PbsAccountsBuilder() {
+  const me = useMe();
+  const isAdmin = me === undefined || me?.is_admin === true;
+  const [roUser, setRoUser] = useState("pyxie-pbs-ro@pbs");
+  const [adminUser, setAdminUser] = useState("pyxie-pbs-admin@pbs");
+  const [inventory, setInventory] = useState(false);
+  const [admin, setAdmin] = useState(false);
+  const [generated, setGenerated] = useState(false);
+  const okName = (u: string) => /^[A-Za-z0-9._-]+@pbs$/.test(u);
+  const ok = (inventory || admin) && (!inventory || okName(roUser)) && (!admin || okName(adminUser));
+  const script = useMemo(() => (ok ? pbsScript({ roUser, adminUser, inventory, admin }) : ""), [ok, roUser, adminUser, inventory, admin]);
+  const touch = () => setGenerated(false);
+  if (!isAdmin) return <p className="text-sm text-muted">Admin accounts can generate setup scripts.</p>;
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted">Run <b>once per backup server</b>. It creates the service accounts and API tokens <i>inside Proxmox Backup Server</i>. You paste it into a root shell on the PBS yourself; PyXie never connects to create accounts. Each grant is made to the user and to its token (a token can never do more than its user).</p>
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <Check checked={inventory} onChange={(v) => { setInventory(v); touch(); }} label="Read-only token (inventory)" sub="Audit on /, RemoteAudit on /remote. Status, datastores, tasks, updates and all sync, prune and verify jobs. Never changes anything." />
+          {inventory && <UserField label="Read-only account name" value={roUser} def="pyxie-pbs-ro@pbs" onChange={(v) => { setRoUser(v); touch(); }} ok={okName(roUser)} />}
+        </div>
+        <div className="space-y-1">
+          <Check checked={admin} onChange={(v) => { setAdmin(v); touch(); }} label="Admin token (administrative)" sub="Also DatastoreAdmin on /datastore and RemoteSyncOperator on /remote: create, change, delete and run sync, prune and verify jobs. It cannot install packages." />
+          {admin && <UserField label="Admin account name" value={adminUser} def="pyxie-pbs-admin@pbs" onChange={(v) => { setAdminUser(v); touch(); }} ok={okName(adminUser)} />}
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <button type="button" disabled={!script} onClick={() => setGenerated(true)} className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50">Generate the account script</button>
+        {!inventory && !admin && <span className="text-xs text-muted">Tick at least one token first.</span>}
+      </div>
+      {generated && script && (
+        <div className="space-y-3">
+          <ScriptBox title="Backup server accounts script (run once, as root, on the PBS)" hint={`Paste it into a root shell on the backup server. PBS shows each token secret exactly once, so the script also saves its output to ${PBS_TOKEN_FILE} (root only).`} text={script} filename="pyxie-pbs-setup.sh" />
+          <div className="border border-border rounded p-3 space-y-1 text-xs text-muted">
+            <div className="text-sm font-medium text-text">After it runs: put each token into PyXie</div>
+            <ol className="list-decimal pl-5 space-y-0.5">
+              <li>In <a className="text-accent hover:underline" href="/platform/credentials">Credentials</a>, Proxmox Backup Servers: the read-only token is <code>{inventory ? `${roUser}!inventory` : "not selected"}</code>, the admin token is <code>{admin ? `${adminUser}!administrative` : "not selected"}</code>. Press Edit or + Add Credential, enter the user and token name exactly as shown and the secret from <code>{PBS_TOKEN_FILE}</code>, then Test Connection.</li>
+              <li>When every secret is in PyXie, delete the file on the PBS: <code>shred -u {PBS_TOKEN_FILE}</code></li>
+            </ol>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The wrapper on a backup server: same host script as for a Proxmox node, generated from this server's key and kit link. */
+export function PbsHostWrapperBuilder({ servers, tlsMode }: { servers: { id: string; name: string }[]; tlsMode: string }) {
+  const me = useMe();
+  const isAdmin = me === undefined || me?.is_admin === true;
+  const [serverId, setServerId] = useState(servers[0]?.id ?? "");
+  const [mode, setMode] = useState<"" | "install" | "uninstall">("");
+  const [insecure, setInsecure] = useState(tlsMode === "internal");
+  const [link, setLink] = useState<Link | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [needKey, setNeedKey] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const call = async (path: string) => { const r = await fetch(`/api/pbs/servers/${serverId}/${path}`, { method: "POST" }); const d = await r.json().catch(() => ({})); if (!r.ok) throw Object.assign(new Error(d.error || `Request failed (${r.status})`), { status: r.status }); return d; };
+  async function generate() {
+    setBusy(true); setError(null);
+    try { setLink(await call("host-kit/link")); setNeedKey(false); }
+    catch (e) { if ((e as { status?: number }).status === 409) { setNeedKey(true); setError("The SSH key has not been generated yet."); } else setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
+  async function keyThenGenerate() { setBusy(true); try { await call("ssh/generate"); setNeedKey(false); } catch (e) { setError((e as Error).message); setBusy(false); return; } setBusy(false); await generate(); }
+  if (!isAdmin) return <p className="text-sm text-muted">Admin accounts can generate host scripts.</p>;
+  if (servers.length === 0) return <p className="text-xs text-warn">Add the backup server first (it needs its read token).</p>;
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted"><b>You run this script yourself, as root, on the backup server.</b> It installs the locked-down <code>pyxie-hostmaint</code> identity, the <code>pyxie-maint</code> wrapper and a sudoers entry (and <code>sudo</code> itself if the server has none). It never reboots the server. The server&apos;s package sources must work: with no subscription, disable the enterprise repository first (the script stops with a message if apt cannot refresh).</p>
+      {servers.length > 1 && <label className="block text-xs text-muted space-y-1"><span className="text-text">Backup server</span><select className={INPUT} value={serverId} onChange={(e) => { setServerId(e.target.value); setLink(null); }}>{servers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
+      <div className="space-y-2">
+        {([["install", "Install or upgrade the host wrapper", "Safe to run again."], ["uninstall", "Remove the host wrapper", "Removes the PyXie SSH identity, wrapper and sudoers entry."]] as ["install" | "uninstall", string, string][]).map(([v, label, sub]) => (
+          <label key={v} className="flex items-start gap-2 text-sm"><input type="radio" name={`pbs-host-opt-${serverId}`} className="mt-1" checked={mode === v} onChange={() => { setMode(v); setLink(null); }} /><span><span className="text-text">{label}</span><span className="block text-xs text-muted">{sub}</span></span></label>
+        ))}
+      </div>
+      {mode !== "" && <Check checked={insecure} onChange={(v) => { setInsecure(v); setLink(null); }} label="The server does not trust PyXie's certificate" sub="Adds curl -k. The script still checks the downloaded file against the checksum PyXie gives it." />}
+      <div className="flex items-center gap-3 flex-wrap">
+        <button type="button" disabled={busy || mode === ""} onClick={generate} className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50">{busy ? "Generating…" : "Generate the host script"}</button>
+        {mode === "" && <span className="text-xs text-muted">Choose what to do first.</span>}
+        {error && <span className="text-sm text-bad">{error}</span>}
+        {needKey && <button type="button" onClick={keyThenGenerate} disabled={busy} className="px-3 py-1.5 rounded text-sm border border-warn hover:bg-warn/10 disabled:opacity-50">Generate the SSH key now</button>}
+      </div>
+      {link && mode !== "" && (
+        <div className="space-y-2">
+          <ScriptBox title={`Host wrapper script (${mode === "install" ? "install or upgrade" : "remove"}; run as root on the backup server)`} hint={`The download link expires in ${Math.round(link.expires_in / 60)} minutes (generate again after that). Expected checksum ${link.sha256.slice(0, 16)}…`} text={hostScript({ origin, link, mode, insecure })} filename="pyxie-pbs-host-setup.sh" />
+          <p className="text-xs text-muted">Then, under <a className="text-accent hover:underline" href="/platform/credentials">Credentials</a>, Connect a Host: Read Host Key, compare the fingerprint with <code>ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code> on the server, Pin it, then Check Connection.</p>
         </div>
       )}
     </div>

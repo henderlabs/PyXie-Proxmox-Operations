@@ -356,7 +356,7 @@ export default function WorkloadLifecycleForm({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 flex flex-col flex-1 min-h-0">
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 text-xs text-muted cursor-pointer">
           <input type="checkbox" checked={filterByNode} onChange={(e) => setFilterByNode(e.target.checked)} />
@@ -384,7 +384,7 @@ export default function WorkloadLifecycleForm({
         </div>
       </div>
 
-      <div className="max-h-[34rem] overflow-y-auto" ref={tableScrollRef}>
+      <div className="max-h-[34rem] lg:max-h-none lg:flex-1 lg:basis-0 lg:min-h-[28rem] overflow-y-auto" ref={tableScrollRef}>
         <Table
           rows={visibleVms}
           emptyMessage={filterByNode && selectedNodeIds.length > 0 ? "No VMs on the selected node(s)." : "No VMs."}

@@ -7,6 +7,7 @@ import HostMaintenanceSetup from "@/components/HostMaintenanceSetup";
 import AddCredentialForm from "@/components/AddCredentialForm";
 import EditCredentialForm from "@/components/EditCredentialForm";
 import DeleteCredentialButton from "@/components/DeleteCredentialButton";
+import PbsCredentials from "@/components/PbsCredentials";
 import { KeyIcon } from "@/components/Icons";
 import Link from "next/link";
 
@@ -33,7 +34,7 @@ export default async function CredentialsPage() {
 
   return (
     <div>
-      <PageHeader title="Credentials" subtitle="One API token per access level (credential purpose), per PVE target — secret material is never redisplayed" icon={<KeyIcon className="w-5 h-5" />} />
+      <PageHeader title="Credentials" subtitle="API tokens per access level, for Proxmox VE clusters and Proxmox Backup Servers: secret material is never redisplayed" icon={<KeyIcon className="w-5 h-5" />} />
       {targets.length === 0 && (
         <Card>
           <EmptyState
@@ -49,9 +50,10 @@ export default async function CredentialsPage() {
           />
         </Card>
       )}
+      {targets.length > 0 && <div className="text-xs font-semibold uppercase tracking-wider text-muted mb-2">Proxmox VE (clusters)</div>}
       {targets.map((t, i) => (
         <Card key={t.id} className="mb-4">
-          <CardTitle>{t.name}</CardTitle>
+          <CardTitle><span className="mr-2 px-1.5 py-0.5 rounded bg-proxmox/15 text-proxmox normal-case tracking-normal">PVE</span>{t.name}</CardTitle>
           <div className="divide-y divide-border mb-4">
             {credentialsByTarget[i].map((c) => (
               <div key={c.id} className="py-2 text-sm">
@@ -77,6 +79,21 @@ export default async function CredentialsPage() {
             ))}
           </div>
 
+          <div className="divide-y divide-border mb-4 -mt-2">
+            <div className="py-2 text-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-text font-medium">ssh (host patching)</div>
+                  <div className="text-xs text-muted">{hostMaintCredByTarget[i] ? `${hostMaintCredByTarget[i]!.ssh_username} · key created ${new Date(hostMaintCredByTarget[i]!.created_at).toLocaleDateString()}` : "no key generated yet"}</div>
+                </div>
+                <div className="text-xs text-muted font-mono">{hostMaintCredByTarget[i] ? "SSH key (private half stored encrypted)" : ""}</div>
+                {hostMaintCredByTarget[i] && <StatusBadge status={hostMaintCredByTarget[i]!.status} />}
+                <div className="text-xs text-muted">{nodesForTarget(t.id).length} nodes · set up below under Host Maintenance</div>
+              </div>
+              <div className="text-xs text-muted">Installs package updates through the restricted pyxie-maint wrapper. The Proxmox API can only list updates, not install them.</div>
+            </div>
+          </div>
+
           <div className="mb-4">
             <AddCredentialForm targetId={t.id} existingSlots={credentialsByTarget[i].map((c) => c.slot_name)} />
           </div>
@@ -89,6 +106,8 @@ export default async function CredentialsPage() {
           </div>
         </Card>
       ))}
+      <div className="text-xs font-semibold uppercase tracking-wider text-muted mb-2 mt-6">Proxmox Backup Servers</div>
+      <PbsCredentials />
     </div>
   );
 }

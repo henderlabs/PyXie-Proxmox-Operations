@@ -11,7 +11,7 @@ import { notifyOperationsChanged, onOperationsChanged } from "@/lib/operationsBu
 import { useMe } from "@/lib/useMe";
 import { isInFlight, isTerminal } from "@/lib/operationStatus";
 import { formatBytes, isOverprovisioned, overprovisionedPct } from "@/lib/format";
-import { WrenchIcon, PlugIcon, PackageIcon, ClockIcon, ChecklistIcon, MigrateIcon } from "@/components/Icons";
+import { WrenchIcon, PlugIcon, PackageIcon, ClockIcon, ChecklistIcon } from "@/components/Icons";
 
 // "Wx" stage numbers are an internal build-tracking label, not something an
 // end user should need to decode -- these describe the actual outcome
@@ -20,18 +20,10 @@ import { WrenchIcon, PlugIcon, PackageIcon, ClockIcon, ChecklistIcon, MigrateIco
 // that got repetitive across six buttons and read as clutter.
 const ACTIONS = [
   {
-    id: "enter-maintenance",
-    key: "node-maintenance/enter",
-    label: "Enter Maintenance Mode",
-    description: "Evacuates the node (live-migrates what can move, gracefully shuts down what can't) and marks it out of service. Required before applying updates or rebooting -- for any reason, patching or not. Checking for updates never requires this.",
-    icon: WrenchIcon,
-    group: "mode" as const,
-  },
-  {
     id: "exit-maintenance",
     key: "node-maintenance/exit",
     label: "Exit Maintenance Mode",
-    description: "Restarts anything this node's maintenance entry shut down and marks it available again. Does not migrate anything back onto it -- workloads moved off stay wherever they were sent.",
+    description: "Only for a node a Full Maintenance run left in maintenance mode: restarts anything that run shut down and marks the node available again. Does not migrate anything back onto it.",
     icon: PlugIcon,
     group: "mode" as const,
   },
@@ -39,7 +31,7 @@ const ACTIONS = [
     id: "reboot-node",
     key: "host-reboots",
     label: "Reboot Node",
-    description: "Checks whether it's currently safe to reboot (quorum, active migrations, etc.) -- the node doesn't restart until you approve it.",
+    description: "Checks that the node is idle (no running guests, no active tasks) and the cluster keeps quorum -- the node doesn't restart until you approve it. To empty a node first, use Full Maintenance.",
     icon: ClockIcon,
     group: "mode" as const,
   },
@@ -71,15 +63,27 @@ const ACTIONS = [
     id: "full-maintenance",
     key: "maintenance-runs",
     label: "Full Maintenance",
-    description: "Evacuate, update, and reboot in one run -- each step is still reviewed and approved individually before it happens.",
-    caption: "One combined, reviewed cycle: enter maintenance mode, check for updates, apply them, reboot, exit maintenance mode -- then either restore every VM back to this node, or leave it empty (your choice below).",
+    description: "Move the guests off, update, reboot and bring the node back in one run -- each step is still reviewed and approved individually before it happens.",
+    caption: "One combined, reviewed cycle: evacuate the node, check for updates, apply them, reboot, bring it back into service -- then either restore every VM back to this node, or leave it empty (your choice below).",
     icon: ChecklistIcon,
     group: "action" as const,
   },
 ];
 
+export type BackupServerRow = {
+  id: string; name: string; hostname: string;
+  status: { reachable: boolean; version?: string; cpu?: number | null; memory?: { used: number; total: number } | null;
+            datastores?: { name: string; used: number; total: number }[] | null; updates?: { count: number } | null; reboot_required?: boolean | null } | null;
+  ssh: { generated: boolean; host_key_pinned: boolean; wrapper_version: string | null };
+};
+
+type PbsRow = BackupServerRow & { __pbs: true };
+type Row = Node | PbsRow;
+const isPbs = (r: Row): r is PbsRow => "__pbs" in r;
+
 export default function NodeActionsForm({
   nodes,
+  backupServers = [],
   hostMaintenanceByNode: hostMaintenance,
   storage,
   defaultStorageByNode,
@@ -97,6 +101,7 @@ export default function NodeActionsForm({
   // page both independently fetching it) means it fetches exactly once,
   // client-side, non-blocking, after the page shell has already painted.
   nodes: Node[];
+  backupServers?: BackupServerRow[];
   hostMaintenanceByNode: Record<string, HostMaintenanceStatus | null>;
   storage: StorageItem[];
   defaultStorageByNode: Record<string, string | null>;
@@ -142,6 +147,11 @@ export default function NodeActionsForm({
   // reboot in this same reviewed evacuate/patch/reboot/restore cycle --
   // an operator may want to force a reboot in a Full Maintenance run
   // even when the kernel wasn't updated.
+  const [selectedPbsIds, setSelectedPbsIds] = useState<string[]>([]);
+  const allRows: Row[] = useMemo(() => [...nodes, ...backupServers.map((p) => ({ ...p, __pbs: true as const }))], [nodes, backupServers]);
+  const anyInMaintenance = nodes.some((n) => n.maintenance_mode);
+  const noSelection = selectedNodeIds.length === 0 && selectedPbsIds.length === 0;
+  const togglePbs = (id: string) => setSelectedPbsIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   const [forceReboot, setForceReboot] = useState(false);
   // Full Maintenance only -- the existing behavior migrates every
   // live-migrated VM back to this node and powers the shutdown-in-place
@@ -166,6 +176,10 @@ export default function NodeActionsForm({
     setOps([]);
   }
 
+  function toggleAllPbs() {
+    setSelectedPbsIds((cur) => (cur.length === backupServers.length ? [] : backupServers.map((p) => p.id)));
+  }
+
   function toggleAll() {
     setSelectedNodeIds(allSelected ? [] : nodes.map((n) => n.id));
     setOps([]);
@@ -180,13 +194,25 @@ export default function NodeActionsForm({
   // blocked is left alone, same as every other action -- auto-approving
   // past a real safety block would defeat the point of having one.
   async function runPreview(actionKey: string, autoApprove: boolean = false) {
-    if (selectedNodeIds.length === 0) return;
+    const pbsIds = ["host-updates", "host-reboots", "maintenance-runs"].includes(actionKey) ? selectedPbsIds : [];
+    if (selectedNodeIds.length === 0 && pbsIds.length === 0) return;
     setPending(true);
     setError(null);
     setOps([]);
     notifyOperationsChanged(); // the Task Panel can now show "in progress" the moment this fires, not just once it resolves
     try {
-      const results = await Promise.all(
+      const pbsResults = await Promise.all(
+        pbsIds.map(async (id) => {
+          // A backup server is patched like a node: same buttons, same preview and approval, its own operation type.
+          const path = actionKey === "host-reboots" ? "reboot/dry-run" : actionKey === "maintenance-runs" ? "maintenance/dry-run" : "update/dry-run";
+          const res = await fetch(`/api/pbs/servers/${id}/${path}`, { method: "POST", body: JSON.stringify({ check_only: !autoApprove }) });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Preview failed");
+          const op = await (await fetch(`/api/operations/${data.id}`)).json();
+          return op as Operation;
+        })
+      );
+      const nodeResults = await Promise.all(
         selectedNodeIds.map(async (nodeId) => {
           const res = await fetch(`/api/operations/${actionKey}/dry-run`, {
             method: "POST",
@@ -205,6 +231,7 @@ export default function NodeActionsForm({
           return data as Operation;
         })
       );
+      const results = [...nodeResults, ...pbsResults];
       const final = autoApprove
         ? await Promise.all(
             results.map(async (op) => {
@@ -315,8 +342,6 @@ export default function NodeActionsForm({
     }
   }
 
-  const modeActions = ACTIONS.filter((a) => a.group === "mode");
-  const jobActions = ACTIONS.filter((a) => a.group === "action");
 
   function ActionButton({ a, variant }: { a: (typeof ACTIONS)[number]; variant: "mode" | "action" | "full" }) {
     if (!isAdmin) return null;
@@ -330,7 +355,7 @@ export default function NodeActionsForm({
     return (
       <button
         onClick={() => runPreview(a.key, a.id === "apply-updates")}
-        disabled={selectedNodeIds.length === 0 || pending}
+        disabled={(selectedNodeIds.length === 0 && selectedPbsIds.length === 0) || pending}
         title={a.description}
         className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border disabled:opacity-50 ${styles}`}
       >
@@ -340,31 +365,37 @@ export default function NodeActionsForm({
     );
   }
 
-  return (
-    <div className="space-y-4">
-      <div>
-        <label className="flex items-center gap-2 text-sm mb-1.5 cursor-pointer">
-          <input type="checkbox" checked={allSelected} onChange={toggleAll} />
-          <span className="font-medium">All nodes</span>
-        </label>
-        <Table
-          rows={nodes}
-          emptyMessage="No nodes discovered yet."
-          storageKey="maintenance-nodes"
+  const renderTable = (rows: Row[], storageKey: string) => (
+      <Table
+          rows={rows}
+          emptyMessage={storageKey === "maintenance-pbs" ? "No backup servers." : "No nodes discovered yet."}
+          storageKey={storageKey}
           columns={[
             {
               header: "Select",
-              render: (n) => (
+              render: (n) => isPbs(n) ? (
+                <input type="checkbox" checked={selectedPbsIds.includes(n.id)} onChange={() => togglePbs(n.id)} />
+              ) : (
                 <input type="checkbox" checked={selectedNodeIds.includes(n.id)} onChange={() => toggleNode(n.id)} />
               ),
             },
             {
               header: "Name",
-              render: (n) => (
+              render: (n) => isPbs(n) ? (
+                <span className="flex items-center gap-1.5 flex-wrap">
+                  <Link href={`/operations/protection/servers/${n.id}`} className="text-accent hover:underline" title="Open the backup server">{n.name}</Link>
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-accent/20 text-accent uppercase tracking-wide" title="Proxmox Backup Server">PBS</span>
+                  {n.status?.reboot_required && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-bad/20 text-bad uppercase tracking-wide" title="A newer kernel is installed but not yet running -- this server needs a reboot.">Reboot Required</span>}
+                  {!!n.status?.updates?.count && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-accent/20 text-accent uppercase tracking-wide" title={`${n.status.updates.count} package update(s) available`}>{n.status.updates.count} Updates</span>}
+                  {!(n.ssh.generated && n.ssh.host_key_pinned && n.ssh.wrapper_version) && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-warn/20 text-warn uppercase tracking-wide" title="Host access is not set up, so PyXie can list updates but not install them. See Settings, Credentials.">Not connected for patching</span>}
+                  {n.status && !n.status.reachable && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-bad/20 text-bad uppercase tracking-wide">Unreachable</span>}
+                </span>
+              ) : (
                 <span className="flex items-center gap-1.5 flex-wrap">
                   <Link href={`/infrastructure/nodes/${n.id}`} className="text-accent hover:underline" title="Open on Hosts & Clusters">
                     {n.name}
                   </Link>
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-proxmox/15 text-proxmox uppercase tracking-wide" title="Proxmox VE node">PVE</span>
                   {n.maintenance_mode && (
                     <span
                       className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-warn/20 text-warn uppercase tracking-wide"
@@ -403,19 +434,21 @@ export default function NodeActionsForm({
             },
             {
               header: "CPU",
-              render: (n) => <Meter value={n.cpu_usage_pct} width={56} />,
-              sortValue: (n) => n.cpu_usage_pct,
+              render: (n) => <Meter value={isPbs(n) ? (n.status?.cpu != null ? n.status.cpu * 100 : null) : n.cpu_usage_pct} width={56} />,
+              sortValue: (n) => (isPbs(n) ? (n.status?.cpu ?? 0) * 100 : n.cpu_usage_pct),
             },
             {
               header: "RAM",
-              render: (n) => <Meter value={n.mem_usage_pct} width={56} />,
-              sortValue: (n) => n.mem_usage_pct,
+              render: (n) => <Meter value={isPbs(n) ? (n.status?.memory ? (100 * n.status.memory.used) / n.status.memory.total : null) : n.mem_usage_pct} width={56} />,
+              sortValue: (n) => (isPbs(n) ? (n.status?.memory ? n.status.memory.used / n.status.memory.total : 0) * 100 : n.mem_usage_pct),
             },
             {
               header: "Storage",
               tooltip:
                 "Which storage a migration should target on this node -- one of its own local pools, or the cluster-shared storage. 'auto' picks whichever local pool has the most free space; pin a specific one (local or shared) for a consistent, standing choice instead. Same setting as the Nodes page.",
-              render: (n) => (
+              render: (n) => isPbs(n) ? (
+                n.status?.datastores?.length ? <span className="text-xs text-muted" title="Fullest datastore">{Math.max(...n.status.datastores.map((d) => (d.total ? (100 * d.used) / d.total : 0))).toFixed(0)}% full</span> : <span className="text-muted text-xs">—</span>
+              ) : (
                 <DefaultStorageSelect
                   nodeId={n.id}
                   value={defaultStorage[n.id] ?? null}
@@ -431,30 +464,43 @@ export default function NodeActionsForm({
             },
           ]}
         />
+  );
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <label className="flex items-center gap-2 text-sm mb-1.5 cursor-pointer">
+          <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+          <span className="font-medium">All nodes</span>
+        </label>
+        <div className="[&_table]:table-fixed [&_th:nth-child(1)]:w-[12%] [&_th:nth-child(2)]:w-[28%] [&_th:nth-child(3)]:w-[16%] [&_th:nth-child(4)]:w-[16%] [&_th:nth-child(5)]:w-[28%]">{renderTable(nodes, "maintenance-nodes")}</div>
       </div>
 
-      <div>
-        <label className="block text-xs text-muted mb-1.5">Maintenance mode</label>
-        <div className="flex flex-wrap gap-2">
-          {modeActions.map((a) => (
-            <ActionButton key={a.id} a={a} variant="mode" />
-          ))}
+      {backupServers.length > 0 && (
+        <div>
+          <label className="flex items-center gap-2 text-sm mb-1.5 cursor-pointer">
+            <input type="checkbox" checked={selectedPbsIds.length === backupServers.length} onChange={toggleAllPbs} />
+            <span className="font-medium">Backup servers</span>
+            <span className="text-xs text-muted">(Proxmox Backup Server)</span>
+          </label>
+          <div className="[&_table]:table-fixed [&_th:nth-child(1)]:w-[12%] [&_th:nth-child(2)]:w-[28%] [&_th:nth-child(3)]:w-[16%] [&_th:nth-child(4)]:w-[16%] [&_th:nth-child(5)]:w-[28%]">{renderTable(backupServers.map((p) => ({ ...p, __pbs: true as const })), "maintenance-pbs")}</div>
         </div>
-        {isAdmin && selectedNodeIds.length === 0 && (
-          <p className="text-xs text-muted mt-1.5">Select one or more nodes above to enable these actions.</p>
-        )}
-      </div>
+      )}
+
       <div>
         <label className="block text-xs text-muted mb-1.5">Actions</label>
         <div className="flex flex-wrap gap-2">
-          {jobActions.map((a) => (
-            <ActionButton key={a.id} a={a} variant={a.key === "maintenance-runs" ? "full" : "action"} />
-          ))}
+          {(["check-updates", "apply-updates", "full-maintenance", "reboot-node"] as const).map((id) => {
+            const a = ACTIONS.find((x) => x.id === id)!;
+            return <ActionButton key={a.id} a={a} variant={a.id === "full-maintenance" ? "full" : a.id === "reboot-node" ? "mode" : "action"} />;
+          })}
+          {anyInMaintenance && <ActionButton a={ACTIONS.find((x) => x.id === "exit-maintenance")!} variant="mode" />}
         </div>
-        {isAdmin && selectedNodeIds.length === 0 && (
-          <p className="text-xs text-muted mt-1.5">Select one or more nodes above to enable these actions.</p>
+        {isAdmin && noSelection && (
+          <p className="text-xs text-muted mt-1.5">Select one or more nodes or backup servers above to enable these actions.</p>
         )}
-        {jobActions.map((a) =>
+        {anyInMaintenance && <p className="text-xs text-muted mt-1.5">A node is in maintenance mode (left by a Full Maintenance run): Exit Maintenance Mode brings it back into service.</p>}
+        {ACTIONS.map((a) =>
           "caption" in a ? (
             <p key={a.id} className="text-xs text-muted mt-1.5">
               <span className="font-medium text-text">{a.label}:</span> {a.caption}
@@ -474,20 +520,12 @@ export default function NodeActionsForm({
             <span className="text-text/70">(Full Maintenance only)</span>
           </span>
         </label>
+        <p className="text-xs text-muted mt-1.5">Apply Updates and Reboot Node only need the host or server to be idle (no backup, migration or other task running; Reboot Node on a Proxmox node also needs no running guests). Full Maintenance moves a node's guests off first; on a backup server it installs updates, reboots and checks it is back.</p>
       </div>
-      <div>
-        <label className="block text-xs text-muted mb-1.5">Balance</label>
-        <Link
-          href={selectedNodeIds.length === 1 ? `/operations/balance?node=${selectedNodeIds[0]}` : "/operations/balance"}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10"
-        >
-          <MigrateIcon className="w-4 h-4" />
-          Balance Load
-        </Link>
-        <p className="text-xs text-muted mt-1.5">
-          <span className="font-medium text-text">Balance Load</span> has its own page now: preview which VMs would move where, with memory per node before and after.
-        </p>
-      </div>
+      <p className="text-xs text-muted">
+        Moving guests to even out load is on its own page:{" "}
+        <Link href={selectedNodeIds.length === 1 ? `/operations/balance?node=${selectedNodeIds[0]}` : "/operations/balance"} className="text-accent hover:underline">Balance Load</Link>.
+      </p>
       <p className="text-xs text-muted">
         Every action previews first -- current state, blockers if any. Nothing installs, migrates, or
         reboots until you review the result below and click Approve, individually, for each node --

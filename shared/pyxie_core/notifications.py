@@ -36,6 +36,7 @@ CATEGORIES = [
     {"key": "balance", "label": "Automatic balancing", "description": "Automatic balancing has prepared a Balance Load plan that is waiting for review. Use a rule with minimum severity Warning to get these by email."},
     {"key": "liveness", "label": "VM not responding", "description": "A running VM's QEMU has stopped answering: PVE still shows it as running, but live migration of it will hang."},
     {"key": "host_wrapper", "label": "Host wrapper", "description": "A node's host wrapper (what lets PyXie apply updates and reboot it) is older than this PyXie's. You must run the host script on that node."},
+    {"key": "backup_server", "label": "Backup server", "description": "A Proxmox Backup Server cannot be reached, is nearly full, has failed tasks, has package updates waiting, or runs an old host wrapper."},
     {"key": "operation", "label": "Operation failed or stopped", "description": "An operation you (or automatic balancing) approved failed, or a safety check stopped it just before it ran. Previews that were refused are not reported."},
     {"key": "snapshot", "label": "Old snapshots", "description": "A VM has snapshots older than 7 days (warning) or 30 days (critical): a long snapshot chain slows the disk and holds space."},
     {"key": "connectivity", "label": "Proxmox connectivity", "description": "PyXie cannot reach a Proxmox target, or has had to fall back to another cluster member."},
@@ -82,7 +83,7 @@ def rule_matches(rule: NotificationRule, *, category: str, severity: str, recove
 
 
 OPERATION_LABELS = {
-    "vm.live_migrate": "Live migration", "node.evacuate": "Evacuation", "host.update": "Host update", "host.reboot": "Host reboot", "maintenance.run": "Maintenance run",
+    "vm.live_migrate": "Live migration", "node.evacuate": "Evacuation", "host.update": "Host update", "pbs.update": "Backup server update", "pbs.reboot": "Backup server reboot", "pbs.maintenance": "Backup server maintenance", "pbs.job_change": "Backup server job change", "host.reboot": "Host reboot", "maintenance.run": "Maintenance run",
     "cluster.rebalance": "Balance Load", "workload.shutdown": "Shut down", "workload.start": "Start", "workload.force_stop": "Force stop", "workload.reboot": "Restart",
     "workload.resize": "Resize", "workload.move_storage": "Change storage", "workload.snapshot_create": "Take snapshot", "workload.snapshot_delete": "Delete snapshot",
     "workload.snapshot_rollback": "Roll back snapshot", "workload.tags_change": "Change tags", "cluster.tag_colors": "Change tag colors", "workload.disk_grow": "Grow disk",
