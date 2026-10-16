@@ -50,13 +50,19 @@ rush it.
 create. `maintenance` needs a custom role that doesn't exist by default:
 
 **Datacenter -> Permissions -> Roles -> Add**, name `PyXieAdmin`,
-privileges (check all 11):
+privileges (check all 24):
 
 ```
-Datastore.Allocate, Datastore.AllocateSpace, Sys.Audit, Sys.Modify,
-Sys.PowerMgmt, VM.Audit, VM.Config.CPU, VM.Config.Disk,
-VM.Config.Memory, VM.Migrate, VM.PowerMgmt
+Datastore.Allocate, Datastore.AllocateSpace, Datastore.AllocateTemplate,
+Pool.Allocate, Pool.Audit, SDN.Use, Sys.Audit, Sys.Modify, Sys.PowerMgmt, VM.Allocate, VM.Audit,
+VM.Backup, VM.Clone, VM.Config.CDROM, VM.Config.CPU, VM.Config.Disk, VM.Config.HWType,
+VM.Config.Memory, VM.Config.Network, VM.Config.Options, VM.Migrate,
+VM.PowerMgmt, VM.Snapshot, VM.Snapshot.Rollback
 ```
+
+An install set up before v0.37 adds the new ones on a node with
+`pveum role modify PyXieAdmin --privs Datastore.AllocateTemplate,Pool.Allocate,Pool.Audit,SDN.Use,VM.Allocate,VM.Backup,VM.Clone,VM.Config.CDROM,VM.Config.HWType,VM.Config.Network,VM.Config.Options,VM.Snapshot,VM.Snapshot.Rollback --append 1`.
+See [`guest-management.md`](guest-management.md) for what each is used for.
 
 This is deliberately narrower than PVE's built-in `PVEAdmin` role --
 scoped to exactly what PyXie's write-capable code paths actually call,

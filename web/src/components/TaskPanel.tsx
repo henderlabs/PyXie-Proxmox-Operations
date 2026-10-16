@@ -128,7 +128,7 @@ function subjectFor(op: Operation): string {
   if (op.operation_type_id === "vm.live_migrate") {
     return r?.workload_name || (r?.vmid ? `vmid ${r.vmid}` : r?.node || "?");
   }
-  if (["workload.shutdown", "workload.start", "workload.force_stop", "workload.resize", "workload.network_vlan_change", "workload.move_storage"].includes(op.operation_type_id)) {
+  if (["workload.shutdown", "workload.start", "workload.force_stop", "workload.resize", "workload.network_vlan_change", "workload.move_storage", "workload.snapshot_create", "workload.snapshot_delete", "workload.snapshot_rollback", "workload.tags_change", "workload.disk_grow", "workload.hw_change", "workload.nic_change", "workload.create", "workload.delete", "workload.clone", "workload.cdrom_change", "workload.ct_create", "workload.ct_resize", "workload.ct_nic_change"].includes(op.operation_type_id)) {
     return r?.workload_name || (r?.vmid ? `vmid ${r.vmid}` : r?.node || "?");
   }
   if (op.operation_type_id === "cluster.rebalance") {

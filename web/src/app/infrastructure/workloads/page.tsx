@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import type { Finding, Node, Recommendation, RightsizingAssessment, StorageItem, Workload } from "@/lib/api";
+import Link from "next/link";
 import { PageHeader, StatTile } from "@/components/Card";
 import WorkloadsTable from "@/components/tables/WorkloadsTable";
 import { WorkloadIcon } from "@/components/Icons";
@@ -38,6 +39,7 @@ export default async function WorkloadsPage({
         <FilterLink href="/infrastructure/workloads" active={!searchParams.type} label="All" />
         <FilterLink href="/infrastructure/workloads?type=vm" active={searchParams.type === "vm"} label="VMs" />
         <FilterLink href="/infrastructure/workloads?type=lxc" active={searchParams.type === "lxc"} label="Containers" />
+        <span className="ml-auto flex gap-2"><Link href="/infrastructure/workloads/pools" className="px-3 py-1 rounded border border-border text-muted hover:text-text">Pools</Link><Link href="/infrastructure/workloads/new" className="px-3 py-1 rounded border border-proxmox text-text hover:bg-proxmox/10">+ New VM</Link><Link href="/infrastructure/workloads/new?kind=ct" className="px-3 py-1 rounded border border-proxmox text-text hover:bg-proxmox/10">+ New container</Link></span>
       </div>
       <div className="grid grid-cols-4 gap-3 mb-5">
         <StatTile label="VMs" value={vmCount} />

@@ -137,6 +137,10 @@ def execute_operation_job(operation_id: str):
         op = db.query(Operation).filter(Operation.id == operation_id).one_or_none()
         if op is None:
             return {"error": f"operation {operation_id} not found"}
+        if op.status == "revalidating":
+            # the worker stopped while re-checking: re-checking changes nothing, so start that stage over instead of failing the operation
+            op.status = "approved"
+            db.commit()
         if op.operation_type_id == "vm.live_migrate":
             from pyxie_core.migration_workflow import execute_migration
             result = execute_migration(db, operation_id)
@@ -152,6 +156,57 @@ def execute_operation_job(operation_id: str):
         elif op.operation_type_id == "workload.move_storage":
             from pyxie_core.storage_move_workflow import execute_storage_move
             result = execute_storage_move(db, operation_id)
+        elif op.operation_type_id in ("workload.snapshot_create", "workload.snapshot_delete", "workload.snapshot_rollback"):
+            from pyxie_core.snapshot_workflow import execute_snapshot
+            result = execute_snapshot(db, operation_id)
+        elif op.operation_type_id == "workload.tags_change":
+            from pyxie_core.tags_workflow import execute_tags_change
+            result = execute_tags_change(db, operation_id)
+        elif op.operation_type_id in ("pool.create", "pool.delete", "pool.members"):
+            from pyxie_core.pool_workflow import execute_pool_op
+            result = execute_pool_op(db, operation_id)
+        elif op.operation_type_id in ("storage.create", "storage.remove"):
+            from pyxie_core.storage_workflow import execute_storage_op
+            result = execute_storage_op(db, operation_id)
+        elif op.operation_type_id in ("workload.ct_resize", "workload.ct_nic_change"):
+            from pyxie_core.ct_edit_workflow import execute_ct_edit
+            result = execute_ct_edit(db, operation_id)
+        elif op.operation_type_id in ("workload.ct_create", "storage.ct_template_download", "storage.ct_template_delete"):
+            from pyxie_core.ct_workflow import execute_ct_op
+            result = execute_ct_op(db, operation_id)
+        elif op.operation_type_id == "workload.cdrom_change":
+            from pyxie_core.cdrom_workflow import execute_cdrom
+            result = execute_cdrom(db, operation_id)
+        elif op.operation_type_id == "workload.clone":
+            from pyxie_core.clone_workflow import execute_clone
+            result = execute_clone(db, operation_id)
+        elif op.operation_type_id == "workload.delete":
+            from pyxie_core.delete_workflow import execute_delete
+            result = execute_delete(db, operation_id)
+        elif op.operation_type_id in ("storage.iso_download", "storage.iso_delete", "storage.iso_enable"):
+            from pyxie_core.iso_workflow import execute_iso_op
+            result = execute_iso_op(db, operation_id)
+        elif op.operation_type_id == "workload.create":
+            from pyxie_core.vm_create_workflow import execute_vm_create
+            result = execute_vm_create(db, operation_id)
+        elif op.operation_type_id == "backup.policy_change":
+            from pyxie_core.backup_policy_workflow import execute_policy_change
+            result = execute_policy_change(db, operation_id)
+        elif op.operation_type_id == "workload.disk_change":
+            from pyxie_core.disk_workflow import execute_disk_change
+            result = execute_disk_change(db, operation_id)
+        elif op.operation_type_id == "workload.nic_change":
+            from pyxie_core.nic_workflow import execute_nic_change
+            result = execute_nic_change(db, operation_id)
+        elif op.operation_type_id == "workload.disk_grow":
+            from pyxie_core.hw_edit_workflow import execute_disk_grow
+            result = execute_disk_grow(db, operation_id)
+        elif op.operation_type_id == "workload.hw_change":
+            from pyxie_core.hw_edit_workflow import execute_hw_change
+            result = execute_hw_change(db, operation_id)
+        elif op.operation_type_id == "cluster.tag_colors":
+            from pyxie_core.tag_colors_workflow import execute_tag_colors
+            result = execute_tag_colors(db, operation_id)
         elif op.operation_type_id == "host.reboot":
             from pyxie_core.reboot_workflow import execute_reboot
             result = execute_reboot(db, operation_id)
@@ -206,6 +261,34 @@ def resume_inflight_operations():
         "workload.force_stop": 300,
         "workload.reboot": 600,
         "workload.move_storage": 21600,
+        "workload.snapshot_create": 2400,
+        "workload.snapshot_delete": 2400,
+        "workload.snapshot_rollback": 2400,
+        "workload.tags_change": 120,
+        "cluster.tag_colors": 120,
+        "workload.resize": 600,
+        "workload.disk_grow": 1200,
+        "workload.nic_change": 300,
+        "workload.disk_change": 1200,
+        "backup.policy_change": 300,
+        "workload.create": 1800,
+        "storage.iso_download": 7800,
+        "storage.iso_delete": 900,
+        "storage.iso_enable": 120,
+        "workload.delete": 2400,
+        "workload.clone": 8400,
+        "workload.cdrom_change": 300,
+        "workload.ct_create": 1800,
+        "workload.ct_resize": 300,
+        "pool.create": 600,
+        "pool.delete": 600,
+        "pool.members": 600,
+        "storage.create": 600,
+        "storage.remove": 600,
+        "workload.ct_nic_change": 300,
+        "storage.ct_template_download": 3900,
+        "storage.ct_template_delete": 900,
+        "workload.hw_change": 3600,
         "host.reboot": 1800,
         "host.update": 3900,
         "maintenance.run": 21600,

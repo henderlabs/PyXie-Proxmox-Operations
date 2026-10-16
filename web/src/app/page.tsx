@@ -14,19 +14,25 @@ import { BalanceGauge, NodeBalanceStrip } from "@/components/ClusterBalance";
 import { ServerIcon, ClusterIcon, StorageIcon, CpuIcon, MemoryIcon, DashboardIcon, ShieldIcon, HealthIcon, WrenchIcon } from "@/components/Icons";
 import { formatBytes } from "@/lib/format";
 
+type SnapshotsSummary = {
+  total: number; workloads: number; oldest_days: number | null; warn_days: number; crit_days: number; aged: number; aged_critical: number;
+  oldest: { workload_id: string; vmid: number; workload_name: string | null; snapshot: string; age_days: number | null }[];
+};
+
 export default async function DashboardPage() {
   // Deliberately only cheap DB reads here. reboot-required (RebootBanner,
   // below) used to be fetched server-side too -- a real SSH probe per node
   // (1-3+ seconds each, measured 2026-09-12), blocking the entire
   // Dashboard on it. Isolated into its own client component instead, same
   // fix already applied to Nodes/Maintenance.
-  const [summary, findings, activity, recommendations, protectionResults, autoBalance] = await Promise.all([
+  const [summary, findings, activity, recommendations, protectionResults, autoBalance, snapshots] = await Promise.all([
     apiFetch<DashboardSummary>("/api/dashboard/summary"),
     apiFetch<Finding[]>("/api/findings?active=true"),
     apiFetch<AuditEvent[]>("/api/audit-events?limit=8"),
     apiFetch<Recommendation[]>("/api/recommendations"),
     apiFetch<ProtectionResultRow[]>("/api/protection/results"),
     apiFetch<AutoBalanceView[]>("/api/auto-balance").catch(() => [] as AutoBalanceView[]),
+    apiFetch<SnapshotsSummary>("/api/workloads/snapshots-summary").catch(() => null),
   ]);
 
   const wrapperFindings = findings.filter((f) => f.category === "host_wrapper" && f.triage !== "dismissed");
@@ -144,29 +150,91 @@ export default async function DashboardPage() {
       </Card>
       </div>
 
-      <Card
-        className={`mb-4 ${summary.cluster_status === "critical" ? "border-bad/50" : summary.cluster_status === "warning" ? "border-warn/40" : ""}`}
-      >
-        <div className="flex flex-wrap items-center gap-x-10 gap-y-2 text-sm">
-          <div className="flex items-center gap-2">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+        <Card
+          className={`${summary.cluster_status === "critical" ? "border-bad/50" : summary.cluster_status === "warning" ? "border-warn/40" : ""}`}
+        >
+          <div className="flex items-center gap-2 mb-3">
             <HealthIcon className="w-4 h-4 text-proxmox/70" />
             <span className="text-xs font-semibold uppercase tracking-wider text-muted">Health</span>
             <StatusBadge status={summary.cluster_status} />
           </div>
-          <Link href="/operations/maintenance" className="hover:underline">
-            <span className="text-muted">Updates </span>
-            <span className={summary.nodes_with_updates > 0 ? "font-semibold text-warn" : "font-semibold text-text"}>
-              {summary.nodes_with_updates}
-            </span>
-            <span className="text-muted text-xs"> {summary.nodes_with_updates === 1 ? "node has" : "nodes have"} updates</span>
-          </Link>
-          <Link href="/operations/health" className="hover:underline">
-            <span className="text-muted">Active findings </span>
-            <span className={`font-semibold ${criticalCount > 0 ? "text-bad" : issueCount > 0 ? "text-warn" : "text-text"}`}>{issueCount}</span>
-            <span className="text-muted text-xs"> critical + warning</span>
-          </Link>
-        </div>
+          <div className="grid grid-cols-2 gap-4 text-center">
+            <Link href="/operations/maintenance" className="hover:underline">
+              <div className="text-xs text-muted mb-1">Updates</div>
+              <div className={`text-xl font-semibold ${summary.nodes_with_updates > 0 ? "text-warn" : "text-text"}`}>{summary.nodes_with_updates}</div>
+              <div className="text-xs text-muted">{summary.nodes_with_updates === 1 ? "node has" : "nodes have"} updates</div>
+            </Link>
+            <Link href="/operations/health" className="hover:underline">
+              <div className="text-xs text-muted mb-1">Active findings</div>
+              <div className={`text-xl font-semibold ${criticalCount > 0 ? "text-bad" : issueCount > 0 ? "text-warn" : "text-text"}`}>{issueCount}</div>
+              <div className="text-xs text-muted">critical + warning</div>
+            </Link>
+          </div>
+        </Card>
+      <Card>
+        <CardTitle>Protection</CardTitle>
+        {hasProtectionData ? (
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
+                <ShieldIcon className="w-4 h-4 text-good/70" />
+                Protected
+              </div>
+              <div className="text-xl font-semibold text-good">{protectedCount}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
+                <ShieldIcon className="w-4 h-4 text-bad/70" />
+                Unprotected
+              </div>
+              <div className="text-xl font-semibold text-bad">{unprotectedCount}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
+                <ShieldIcon className="w-4 h-4 text-muted/70" />
+                Unknown
+              </div>
+              <div className="text-xl font-semibold text-muted">{unknownCount}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-sm text-muted py-2">No protection provider configured yet -- see Operations → Protection.</div>
+        )}
       </Card>
+        {snapshots && (
+            <Card className={`${snapshots.aged_critical > 0 ? "border-bad/40" : snapshots.aged > 0 ? "border-warn/40" : ""}`}>
+              <CardTitle>Snapshots</CardTitle>
+              <div className="grid grid-cols-3 gap-4 text-center mb-3">
+                <div>
+                  <div className="text-xs text-muted mb-1">Total</div>
+                  <div className="text-xl font-semibold text-text">{snapshots.total}</div>
+                  <div className="text-xs text-muted">on {snapshots.workloads} VM{snapshots.workloads === 1 ? "" : "s"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted mb-1">Oldest</div>
+                  <div className={`text-xl font-semibold ${snapshots.oldest_days != null && snapshots.oldest_days >= snapshots.crit_days ? "text-bad" : snapshots.oldest_days != null && snapshots.oldest_days >= snapshots.warn_days ? "text-warn" : "text-text"}`}>
+                    {snapshots.oldest_days != null ? `${snapshots.oldest_days} d` : "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted mb-1">{`Older than ${snapshots.warn_days} d`}</div>
+                  <div className={`text-xl font-semibold ${snapshots.aged_critical > 0 ? "text-bad" : snapshots.aged > 0 ? "text-warn" : "text-good"}`}>{snapshots.aged}</div>
+                </div>
+              </div>
+              {snapshots.oldest.length > 0 && (
+                <ul className="text-sm divide-y divide-border">
+                  {snapshots.oldest.slice(0, 2).map((s) => (
+                    <li key={`${s.workload_id}-${s.snapshot}`} className="py-1 flex justify-between gap-3">
+                      <Link href={`/infrastructure/workloads/${s.workload_id}?tab=snapshots`} className="text-accent hover:underline truncate">{s.workload_name || `VMID ${s.vmid}`} · {s.snapshot}</Link>
+                      <span className="text-muted whitespace-nowrap">{s.age_days != null ? `${s.age_days} d old` : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
         <Card className={topFindings.length > 0 ? "border-warn/40" : ""}>
@@ -215,36 +283,6 @@ export default async function DashboardPage() {
         </Card>
       </div>
 
-      <Card className="mb-4">
-        <CardTitle>Protection</CardTitle>
-        {hasProtectionData ? (
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div>
-              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
-                <ShieldIcon className="w-4 h-4 text-good/70" />
-                Protected
-              </div>
-              <div className="text-xl font-semibold text-good">{protectedCount}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
-                <ShieldIcon className="w-4 h-4 text-bad/70" />
-                Unprotected
-              </div>
-              <div className="text-xl font-semibold text-bad">{unprotectedCount}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
-                <ShieldIcon className="w-4 h-4 text-muted/70" />
-                Unknown
-              </div>
-              <div className="text-xl font-semibold text-muted">{unknownCount}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-sm text-muted py-2">No protection provider configured yet -- see Operations → Protection.</div>
-        )}
-      </Card>
 
       <Card className="mb-4">
         <CardTitle>Nodes</CardTitle>

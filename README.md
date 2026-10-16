@@ -10,8 +10,11 @@ write capability added; the app now includes a full staged
 maintenance/migration/placement engine covering guest lifecycle, resize,
 node reboot, host package updates, node/full maintenance runs, cluster
 rebalancing, per-workload NIC VLAN reassignment, and PBS backup-job
-membership -- see the Safety Contract section below for exactly how every
-one of those is gated.
+membership -- and, since v0.37, creating, changing, cloning and deleting
+VMs and containers, snapshots, tags (with Proxmox's own colors), defaults
+and templates, resource pools, an ISO library and NFS storage setup (see
+[`docs/guest-management.md`](docs/guest-management.md)), and backup policies with per-cluster, per-tag and per-VM retention ([`docs/backup-policies.md`](docs/backup-policies.md)). See the Safety
+Contract section below for exactly how every one of those is gated.
 
 ## Installation
 
@@ -60,6 +63,10 @@ Captured from the running app against a fictional demo dataset (no real hostname
 ![Affinity Rules](docs/screenshots/affinity-rules.png)
 
 **Affinity & Pinning** -- affinity rules (keep apart / keep together) on the left, host pins on the right (a guest or every guest with a tag pinned to one or more hosts, soft or hard), all drawn on a full-width "where the guests sit now" card. **Change storage** on a workload moves a VM's disks to another storage while it runs ([docs/storage-change.md](docs/storage-change.md)).
+
+**Workloads** -- every VM and container with its tags in Proxmox's own colors, tick several to change their tags together, and buttons to create a VM or container or manage pools. Each guest's page adds Snapshots and Hardware tabs, a guarded Delete, Clone and CD/DVD actions ([docs/guest-management.md](docs/guest-management.md)):
+
+![Workloads](docs/screenshots/workloads.png)
 
 The screenshots above are from the fictional demo dataset and are refreshed when the layouts change; the text next to each one describes the current behaviour.
 

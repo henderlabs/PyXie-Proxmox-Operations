@@ -17,7 +17,6 @@ shutdown. The same is true of reboot's own timeout: it never escalates to
 force_stop either.
 """
 
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -35,6 +34,7 @@ from .operations_engine import (
     fail_operation,
 )
 from .pve_write_client import MutationsDisabledError, PveMaintenanceClient, SelfProtectionError, TaskTimeoutError, self_vmid_from_env
+from . import guest_kind as gk
 from . import rollback
 
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 120
@@ -56,9 +56,6 @@ def _dry_run(
     require_status: str, shutdown_timeout: int | None = None, justification: str | None = None,
     parent_operation_id=None, correlation_id=None,
 ) -> Operation:
-    if workload.type != "vm":
-        raise LifecycleWorkflowError(f"only VM (qemu) lifecycle actions are implemented, not LXC")
-
     node, cluster, target = _load_context(db, workload)
     context = {"node_id": str(node.id), "node": node.name, "vmid": workload.vmid}
     if shutdown_timeout is not None:
@@ -167,7 +164,7 @@ def execute_lifecycle_action(db: Session, operation_id) -> Operation:
             op = enter_stage(db, op, status="revalidating", stage="revalidating")
             read_client, _cred = build_pve_client(db, target)
             with read_client:
-                live_vms = read_client.qemu_list(node.name)
+                live_vms = gk.live_list(read_client, workload, node.name)
             live = next((v for v in live_vms if int(v.get("vmid", -1)) == workload.vmid), None)
             if live is None:
                 release_locks_for_operation(db, op.id)
@@ -192,7 +189,7 @@ def execute_lifecycle_action(db: Session, operation_id) -> Operation:
 
         if op.status == "executing" and not op.pve_upid:
             maintenance_creds = load_pve_credentials(db, target, "maintenance")
-            with PveMaintenanceClient(maintenance_creds) as write_client:
+            with PveMaintenanceClient(maintenance_creds).for_guest(gk.kind(workload)) as write_client:
                 if op.operation_type_id == "workload.shutdown":
                     upid = write_client.shutdown_vm(node.name, workload.vmid, timeout=ctx.get("shutdown_timeout_seconds", DEFAULT_SHUTDOWN_TIMEOUT_SECONDS))
                 elif op.operation_type_id == "workload.start":
@@ -212,7 +209,7 @@ def execute_lifecycle_action(db: Session, operation_id) -> Operation:
             # Shutdown needs enough wall-clock budget to cover the guest's
             # own ACPI timeout, not just PVE's task-poll interval.
             wait_timeout = max(ctx.get("shutdown_timeout_seconds", 0) + 60, 300)
-            with PveMaintenanceClient(maintenance_creds) as write_client:
+            with PveMaintenanceClient(maintenance_creds).for_guest(gk.kind(workload)) as write_client:
                 task_result = write_client.wait_for_task(node.name, op.pve_upid, timeout=wait_timeout)
             op.pve_task_result = task_result.raw
             db.commit()
@@ -225,7 +222,7 @@ def execute_lifecycle_action(db: Session, operation_id) -> Operation:
         if op.status == "verifying":
             read_client, _cred = build_pve_client(db, target)
             with read_client:
-                live_vms = read_client.qemu_list(node.name)
+                live_vms = gk.live_list(read_client, workload, node.name)
             live = next((v for v in live_vms if int(v.get("vmid", -1)) == workload.vmid), None)
             op.verification_result = {"vm_state": live}
             db.commit()

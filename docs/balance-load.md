@@ -112,3 +112,5 @@ The single-host pin on the workload page still works: it is shown here as a soft
 
 
 **Dashboard.** While automatic balancing is on for a cluster the Dashboard shows a banner: a warning ("Automatic balancing is ON ... PyXie moves guests on its own", amber) in auto-approve mode, a quiet note in recommend-only mode, and a muted one while paused, each with the last check's result and the check schedule, linking to Balance Load.
+
+**How a host's memory is judged (v0.37).** The memory figure Balance Load uses for a host, including the 80% ceiling, is built from its guests rather than the host's own reading: each running guest counts at its recent busy level (its live use when it has no history yet), plus the host's own overhead (what the host uses beyond its guests' live use), divided by the host's memory. A host full of Linux file cache therefore no longer looks full: on the lab one host read 57% from its own history and 23% by this measure. CPU is unchanged.

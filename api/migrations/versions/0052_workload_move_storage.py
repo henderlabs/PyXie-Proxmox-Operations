@@ -34,4 +34,6 @@ def upgrade():
 
 
 def downgrade():
+    op.execute("DELETE FROM resource_locks WHERE operation_id IN (SELECT id FROM operations WHERE operation_type_id = 'workload.move_storage')")
+    op.execute("DELETE FROM operations WHERE operation_type_id = 'workload.move_storage'")
     op.execute("DELETE FROM operation_types WHERE id = 'workload.move_storage'")

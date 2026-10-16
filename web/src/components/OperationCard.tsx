@@ -105,6 +105,28 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "cluster.rebalance": "Balance Load",
   "workload.network_vlan_change": "Network VLAN Change",
   "workload.move_storage": "Change Storage",
+  "workload.snapshot_create": "Take Snapshot",
+  "workload.snapshot_delete": "Delete Snapshot",
+  "workload.snapshot_rollback": "Roll Back Snapshot",
+  "workload.tags_change": "Change Tags",
+  "cluster.tag_colors": "Change Tag Colors",
+  "workload.disk_grow": "Grow Disk",
+  "workload.nic_change": "Change Network Device",
+  "workload.create": "Create VM",
+  "workload.delete": "Delete Guest",
+  "workload.clone": "Clone VM",
+  "workload.cdrom_change": "Change CD/DVD",
+  "workload.ct_create": "Create Container",
+  "workload.ct_resize": "Resize Container",
+  "storage.create": "Add Storage",
+  "storage.remove": "Remove Storage",
+  "workload.ct_nic_change": "Change Container Network",
+  "storage.ct_template_download": "Download CT Template",
+  "storage.ct_template_delete": "Delete CT Template",
+  "storage.iso_download": "Download ISO",
+  "storage.iso_delete": "Delete ISO",
+  "storage.iso_enable": "Enable ISO Images",
+  "workload.hw_change": "Change Machine / CPU Type",
 };
 
 /** Bulk Migrate is a cluster.rebalance whose plan was built from ticked VMs
@@ -119,6 +141,38 @@ function operationSummary(op: Operation): string {
   const r = op.dry_run_result;
   if (op.operation_type_id === "workload.move_storage") {
     return `${r?.workload_name || `vmid ${r?.vmid}`} — disks → ${r?.target_storage}`;
+  }
+  if (op.operation_type_id.startsWith("workload.snapshot_")) {
+    return `${r?.workload_name || `vmid ${r?.vmid}`} — snapshot ${r?.snapshot_name}`;
+  }
+  if (op.operation_type_id === "storage.create" || op.operation_type_id === "storage.remove") return String(r?.storage ?? "storage");
+  if (op.operation_type_id === "workload.ct_resize") return `${r?.workload_name || `vmid ${r?.vmid}`} — resources`;
+  if (op.operation_type_id === "workload.ct_nic_change") return `${r?.workload_name || `vmid ${r?.vmid}`} — ${r?.action} ${r?.net_id ?? ""}`;
+  if (op.operation_type_id === "workload.ct_create") return `${r?.name ?? "new container"} on ${r?.node ?? "?"}${r?.vmid ? ` (CT ${r.vmid})` : ""}`;
+  if (op.operation_type_id === "storage.ct_template_download") return `${r?.template ?? "template"} → ${r?.storage ?? "?"} (${r?.node ?? "?"})`;
+  if (op.operation_type_id === "storage.ct_template_delete") return String(r?.volid ?? "template");
+  if (op.operation_type_id === "workload.cdrom_change") return `${r?.workload_name || `vmid ${r?.vmid}`} — ${r?.slot ?? "new drive"}: ${r?.volid ?? "eject"}`;
+  if (op.operation_type_id === "workload.clone") return `${r?.source ?? "VM"} → ${r?.name ?? "?"} (${r?.node ?? "?"})`;
+  if (op.operation_type_id === "storage.iso_download") return `${r?.filename ?? "ISO"} → ${r?.storage ?? "?"} (${r?.node ?? "?"})`;
+  if (op.operation_type_id === "storage.iso_delete") return `${String(r?.volid ?? "ISO")}`;
+  if (op.operation_type_id === "storage.iso_enable") return `ISO images on ${r?.storage ?? "?"}`;
+  if (op.operation_type_id === "workload.create") {
+    return `${r?.name || "new VM"} on ${r?.node ?? "?"}${r?.vmid ? ` (VM ${r.vmid})` : ""}`;
+  }
+  if (op.operation_type_id === "workload.nic_change") {
+    return `${r?.workload_name || `vmid ${r?.vmid}`} — ${r?.action} ${r?.net_id ?? ""}`;
+  }
+  if (op.operation_type_id === "workload.disk_grow") {
+    return `${r?.workload_name || `vmid ${r?.vmid}`} — ${r?.disk} → ${r?.new_bytes ? Math.round(Number(r.new_bytes) / 1073741824) : "?"} GiB`;
+  }
+  if (op.operation_type_id === "workload.hw_change") {
+    return `${r?.workload_name || `vmid ${r?.vmid}`} — ${[r?.new_machine && `machine ${r.new_machine}`, r?.new_cpu && `CPU ${r.new_cpu}`].filter(Boolean).join(", ")}`;
+  }
+  if (op.operation_type_id === "cluster.tag_colors") {
+    return `cluster ${r?.cluster ?? ""} — ${((r?.changes as { tag: string }[] | undefined) || []).map((c) => c.tag).join(", ")}`;
+  }
+  if (op.operation_type_id === "workload.tags_change") {
+    return `${r?.workload_name || `vmid ${r?.vmid}`} — tags: ${((r?.wanted as string[] | undefined) || []).join(", ") || "none"}`;
   }
   if (op.operation_type_id === "vm.live_migrate") {
     const storagePart = r?.target_storage

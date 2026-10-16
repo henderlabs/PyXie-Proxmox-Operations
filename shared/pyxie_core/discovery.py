@@ -236,6 +236,11 @@ def _run_discovery_inner(db: Session, target: PveTarget, actor: str = "system") 
                 apt_client = None
 
             pve_nodes = client.nodes()
+            # a guest's pool is only reported by the cluster-wide resource list, not by the per-host guest lists
+            try:
+                pool_by_vmid = {int(r["vmid"]): (r.get("pool") or None) for r in client.cluster_resources("vm") if r.get("vmid") is not None}
+            except Exception:  # noqa: BLE001 -- keep the last known pools rather than wiping them
+                pool_by_vmid = None
             for pn in pve_nodes:
                 node_name = pn["node"]
                 node = (
@@ -309,7 +314,7 @@ def _run_discovery_inner(db: Session, target: PveTarget, actor: str = "system") 
                         os_type = client.qemu_config(node_name, vm["vmid"]).get("ostype")
                     except Exception:
                         pass  # config fetch failing shouldn't break discovery of everything else about this VM
-                    wl = _upsert_workload(db, cluster, node, vm, "vm", os_type=os_type)
+                    wl = _upsert_workload(db, cluster, node, vm if pool_by_vmid is None else {**vm, "pool": pool_by_vmid.get(vm["vmid"])}, "vm", os_type=os_type)
                     seen_workload_ids.add(wl.id)
                     summary["workloads"] += 1
                 try:
@@ -319,7 +324,7 @@ def _run_discovery_inner(db: Session, target: PveTarget, actor: str = "system") 
                     degraded_node_ids.add(node.id)
                     degraded_reasons.append(f"{node_name}: lxc list failed ({e})")
                 for ct in lxc_entries:
-                    wl = _upsert_workload(db, cluster, node, ct, "lxc")
+                    wl = _upsert_workload(db, cluster, node, ct if pool_by_vmid is None else {**ct, "pool": pool_by_vmid.get(ct["vmid"])}, "lxc")
                     seen_workload_ids.add(wl.id)
                     summary["workloads"] += 1
 
@@ -626,6 +631,7 @@ def _upsert_workload(db: Session, cluster: Cluster, node: Node, data: dict, wtyp
         db.add(wl)
         db.flush()
     wl.node_id = node.id
+    wl.type = wtype  # an ID can be reused by a different kind of guest (a VM deleted, a container made with the same ID)
     wl.name = data.get("name")
     wl.status = data.get("status", "unknown")
     wl.cpu_cores = data.get("cpus")
@@ -634,6 +640,9 @@ def _upsert_workload(db: Session, cluster: Cluster, node: Node, data: dict, wtyp
         wl.os_type = os_type
     tags = data.get("tags")
     wl.tags = tags.split(";") if tags else []
+    if "pool" in data:
+        wl.pool = data.get("pool") or None
+    wl.is_template = bool(data.get("template")) and str(data.get("template")) not in ("0", "False")
     wl.ha_state = (data.get("hastate") or None)
     wl.last_seen = now()
     wl.is_missing = False

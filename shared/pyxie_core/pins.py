@@ -48,6 +48,16 @@ def compute_pin_info(rules, workload) -> PinInfo:
     return info
 
 
+def restrict_to_hard_pin(destinations: list[dict], hard_names: set | None, source_name: str) -> tuple[list[dict], str | None]:
+    """Keep only the destinations a hard pin allows. Returns (allowed destinations, why nothing is left or None). Destinations are dicts with a "node" name. Pure."""
+    if hard_names is None or not destinations:
+        return destinations, None  # nothing was eligible to begin with: whatever blocked that (memory, CPU...) is the reason, not the pin
+    allowed = [d for d in destinations if d["node"] in hard_names]
+    if allowed:
+        return allowed, None
+    return [], f"hard pin: this guest may only run on {', '.join(sorted(hard_names))}, so it cannot be moved off {source_name}"
+
+
 def load_pin_rules(db: Session) -> list:
     return db.query(PlacementPinRule).all()
 

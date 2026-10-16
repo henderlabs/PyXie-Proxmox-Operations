@@ -347,6 +347,7 @@ def evaluate_findings(db: Session) -> dict:
     current.extend(_protection_findings(db))
     current.extend(_affinity_violation_findings(db))
     current.extend(_liveness_findings(db))
+    current.extend(_snapshot_findings(db))
     current.extend(_wrapper_findings(db))
     current.extend(_stale_inventory_findings(db))
     current.extend(_edge_findings(db))
@@ -493,6 +494,46 @@ def _wrapper_findings(db: Session) -> list[dict]:
                     "fix": "Integrations > Host wrapper: generate the host script and run it as root on this node. "
                            "Updates still work meanwhile; live host output needs the new wrapper.",
                 },
+            }
+        )
+    return out
+
+
+def snapshot_age_summary(ages_days: list[int], warn_days: int, crit_days: int) -> tuple[str, int, int] | None:
+    """(severity, how many are past the warning age, the oldest age in days) for one VM's snapshots, or None when none is old. Pure."""
+    aged = [a for a in ages_days if a >= warn_days]
+    if not aged:
+        return None
+    return ("critical" if max(aged) >= crit_days else "warning", len(aged), max(aged))
+
+
+def _snapshot_findings(db: Session) -> list[dict]:
+    """One finding per VM that holds snapshots older than the warning age (7 days; critical at 30). It clears by itself when the snapshots are removed."""
+    from .reports import SNAPSHOT_CRIT_DAYS, SNAPSHOT_WARN_DAYS
+    from .models import WorkloadSnapshot
+
+    now = datetime.now(timezone.utc)
+    by_wl: dict = {}
+    for snap, wl, node in (db.query(WorkloadSnapshot, Workload, Node).join(Workload, Workload.id == WorkloadSnapshot.workload_id).join(Node, Node.id == Workload.node_id)
+                           .filter(Workload.is_missing.is_(False), WorkloadSnapshot.snapshot_time.isnot(None)).all()):
+        by_wl.setdefault(wl.id, (wl, node, []))[2].append((snap.name, (now - snap.snapshot_time).days))
+    out: list[dict] = []
+    for wl, node, snaps in by_wl.values():
+        s = snapshot_age_summary([a for _, a in snaps], SNAPSHOT_WARN_DAYS, SNAPSHOT_CRIT_DAYS)
+        if s is None:
+            continue
+        severity, count, oldest = s
+        old_names = [n for n, a in sorted(snaps, key=lambda x: -x[1]) if a >= SNAPSHOT_WARN_DAYS]
+        out.append(
+            {
+                "dedupe_key": f"snapshot.aged:{wl.id}",
+                "object_type": "workload",
+                "object_id": wl.id,
+                "category": "snapshot",
+                "severity": severity,
+                "title": f"{'VM' if wl.type == 'vm' else 'Container'} '{wl.name or wl.vmid}' ({wl.vmid}) on {node.name} has {count} snapshot{'s' if count != 1 else ''} older than {SNAPSHOT_WARN_DAYS} days (oldest {oldest} days)",
+                "evidence": {"vmid": wl.vmid, "name": wl.name, "node": node.name, "snapshots": old_names, "oldest_days": oldest, "workload_ids": [str(wl.id)],
+                             "fix": "Delete the snapshots you no longer need on the workload's Snapshots tab: a long snapshot chain slows the disk and holds space."},
             }
         )
     return out

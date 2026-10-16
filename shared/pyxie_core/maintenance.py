@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from .pins import compute_pin_info, load_pin_rules, node_names, restrict_to_hard_pin
 from .discovery import build_pve_client  # reuse the exact same credential-loading path as discovery
 from .models import (
     Cluster,
@@ -319,6 +320,7 @@ def generate_plan(db: Session, node: Node, actor: str = "user") -> MaintenancePl
     workload_rows = []
     classification_counts = {"live_migratable": 0, "offline_migration_required": 0, "shutdown_in_place": 0, "blocked": 0, "unknown": 0}
 
+    pin_rules = load_pin_rules(db)
     client = None
     try:
         client, _cred = build_pve_client(db, target)
@@ -377,6 +379,13 @@ def generate_plan(db: Session, node: Node, actor: str = "user") -> MaintenancePl
             else:
                 destinations = _destination_candidates(db, cluster, node, wl.memory_bytes)
                 eligible = [d for d in destinations if d["fits"]]
+                # A hard pin allows only the hosts it names, maintenance included: a guest hard-pinned to the host being drained cannot be moved off it
+                pin = compute_pin_info(pin_rules, wl)
+                hard_names = set(node_names(db, pin.hard_nodes)) if pin.hard_nodes is not None else None
+                eligible, pin_why = restrict_to_hard_pin(eligible, hard_names, node.name)
+                if pin_why:
+                    blocking_rules.append("SAFE-PIN-001")
+                    reasons.append(pin_why)
                 if client and eligible:
                     crs_reasons = check_crs_affinity(client, wl, [d["node"] for d in eligible])
                     if crs_reasons:
@@ -394,7 +403,7 @@ def generate_plan(db: Session, node: Node, actor: str = "user") -> MaintenancePl
                     classification = "blocked"
                 else:
                     classification = "blocked"
-                    if "SAFE-CRS-001" not in blocking_rules:
+                    if "SAFE-CRS-001" not in blocking_rules and "SAFE-PIN-001" not in blocking_rules:
                         blocking_rules.append("SAFE-MIGRATE-001")
                         reasons.append("no destination node has sufficient memory headroom")
 

@@ -12,9 +12,20 @@ import WorkloadLifecycleButtons from "@/components/WorkloadLifecycleButtons";
 import MigrateWorkloadAction from "@/components/MigrateWorkloadAction";
 import ChangeStorageAction from "@/components/ChangeStorageAction";
 import ConsoleViewer, { useConsoleInfo } from "@/components/ConsoleViewer";
+import SnapshotsTab from "@/components/SnapshotsTab";
+import DeleteWorkloadAction from "@/components/DeleteWorkloadAction";
+import CloneWorkloadAction from "@/components/CloneWorkloadAction";
+import CdromAction from "@/components/CdromAction";
+import { CtNicPanel, CtResizeAction, type CtNicRequest } from "@/components/CtEdit";
+import { GrowDiskAction, MachineCpuAction } from "@/components/HardwareEdit";
+import DiskPanel, { type DiskRequest } from "@/components/DiskPanel";
+import BackupTab from "@/components/BackupTab";
+import NicEditPanel, { type NicEditRequest } from "@/components/NicEdit";
+import { useMe } from "@/lib/useMe";
+import TagsEditor from "@/components/TagsEditor";
 import { DoNotMoveToggle, PreferredHostSelect, ProfileSelect, StoragePreferenceSelect } from "@/components/ProfileSelect";
-import { formatBytes, formatUptime, formatRelativeTime } from "@/lib/format";
-import { onOperationsChanged } from "@/lib/operationsBus";
+import { formatBytes, formatUptime, formatRelativeTime, formatMemoryGb } from "@/lib/format";
+import { notifyOperationsChanged, onOperationsChanged } from "@/lib/operationsBus";
 import {
   TIMEFRAMES,
   type ConfigSummary,
@@ -25,11 +36,13 @@ import {
   type WorkloadTask,
 } from "@/lib/workloadDetail";
 
-export type TabId = "summary" | "statistics" | "hardware" | "tasks" | "console";
+export type TabId = "summary" | "statistics" | "hardware" | "snapshots" | "backup" | "tasks" | "console";
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "statistics", label: "Statistics" },
   { id: "hardware", label: "Hardware" },
+  { id: "snapshots", label: "Snapshots" },
+  { id: "backup", label: "Backup" },
   { id: "tasks", label: "Tasks" },
   { id: "console", label: "Console" },
 ];
@@ -172,6 +185,10 @@ function Charts({ rows, which, loading }: { rows: RrdRow[]; which: "summary" | "
   );
 }
 
+function nodeNameOf(w: Workload, nodes: Node[]): string {
+  return nodes.find((n) => n.id === w.node_id)?.name ?? "";
+}
+
 function IpRow({ workloadId, running }: { workloadId: string; running: boolean }) {
   const [ips, setIps] = useState<string[] | null>(null);
   const [err, setErr] = useState(false);
@@ -273,6 +290,11 @@ export function WorkloadDetailPanel({
         ))}
       </div>
 
+      {tab === "backup" && <BackupTab workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} canEdit={!w.is_missing} />}
+      {tab === "snapshots" && (
+        <SnapshotsTab workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} running={status === "running" && !lxc} disabled={w.is_missing} container={lxc} />
+      )}
+
       {tab === "summary" && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           <div className="space-y-4">
@@ -285,7 +307,7 @@ export function WorkloadDetailPanel({
                 {!lxc && <Row label="Guest agent" value={cfg ? (cfg.agent_enabled ? "Enabled" : "Not enabled") : "—"} />}
                 <Row label="Uptime" value={formatUptime(st?.uptime)} />
                 <IpRow workloadId={w.id} running={status === "running" && !w.is_missing} />
-                <Row label="Tags" value={(cfg?.tags?.length ? cfg.tags : w.tags || []).join(", ") || "—"} />
+                <Row label="Tags" value={<TagsEditor workloadId={w.id} clusterId={w.cluster_id} tags={Array.isArray(cfg?.tags) ? cfg!.tags : w.tags || []} />} />
                 {(st?.lock || cfg?.lock) && <Row label="Lock" value={<span className="text-warn">{st?.lock || cfg?.lock}</span>} />}
                 {cfg?.protection && <Row label="Protection" value="On (cannot be deleted)" />}
                 {st?.["running-qemu"] && <Row label="QEMU / machine" value={`${st["running-qemu"]} / ${st["running-machine"] ?? "—"}`} />}
@@ -299,9 +321,9 @@ export function WorkloadDetailPanel({
             </Card>
             {cfg && (
               <Card>
-                <div className="flex items-center justify-between"><CardTitle>Hardware</CardTitle><button type="button" onClick={() => onTabChange("hardware")} className="text-xs text-accent hover:underline">Details</button></div>
+                <div className="flex items-center justify-between"><CardTitle>Hardware</CardTitle><button type="button" onClick={() => onTabChange("hardware")} className="px-2 py-0.5 rounded border border-border text-xs text-accent hover:bg-surface2">Edit hardware</button></div>
                 <dl>
-                  <Row label="CPU / RAM" value={`${cfg.vcpus ?? "—"} vCPU · ${cfg.memory_mb ? formatBytes(cfg.memory_mb * 1048576) : "—"}`} />
+                  <Row label="CPU / RAM" value={`${cfg.vcpus ?? "—"} vCPU · ${formatMemoryGb(cfg.memory_mb)}`} />
                   <Row label="Disks" value={cfg.disks.filter((d) => d.kind === "disk").map((d) => `${d.size ?? "?"} on ${d.storage ?? "?"}`).join(", ") || "—"} />
                   <Row label="Network" value={cfg.nets.map((n) => `${n.bridge ?? "?"}${n.vlan_tag ? ` (VLAN ${n.vlan_tag})` : ""}`).join(", ") || "—"} />
                   {!lxc && <Row label="BIOS" value={cfg.bios || "—"} />}
@@ -358,7 +380,7 @@ export function WorkloadDetailPanel({
         </div>
       )}
 
-      {tab === "hardware" && <Hardware cfg={cfg} lxc={lxc} loading={live === null} />}
+      {tab === "hardware" && <Hardware cfg={cfg} lxc={lxc} loading={live === null} workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} running={status === "running"} canEdit={!w.is_missing} clusterId={w.cluster_id} nodeName={nodeNameOf(w, clusterNodes)} />}
 
       {tab === "tasks" && (
         <Card>
@@ -455,6 +477,7 @@ export default function WorkloadDetail({
             <h1 className="text-xl font-semibold text-text">{name}</h1>
             <StatusBadge status={w.is_missing ? "unknown" : status} />
             {!w.is_missing && <CheckBadge check={live?.check ?? null} />}
+            {(live?.config?.template ?? w.is_template) && <span className="text-xs px-1.5 py-0.5 rounded border border-border text-muted">Template</span>}
             {w.is_missing && <span className="text-xs text-warn">Not currently visible to PVE</span>}
           </div>
           <div className="text-sm text-muted mt-1">
@@ -469,8 +492,8 @@ export default function WorkloadDetail({
             workloadId={w.id}
             workloadName={name}
             status={status}
-            disabled={lxc || w.is_missing}
-            disabledReason={w.is_missing ? "Not currently visible to PVE" : "Guest lifecycle actions are only implemented for VMs, not containers"}
+            disabled={w.is_missing}
+            disabledReason="Not currently visible to PVE"
           />
           {!lxc && !w.is_missing && (
             <>
@@ -484,6 +507,8 @@ export default function WorkloadDetail({
           <button type="button" onClick={() => setTab("console")} disabled={w.is_missing || status !== "running"} className="px-2.5 py-1 rounded border border-border text-sm text-muted hover:text-text disabled:opacity-50 disabled:cursor-not-allowed" title="Open the console tab">
             Console
           </button>
+          {!w.is_missing && <CloneWorkloadAction workloadId={w.id} workloadName={name} clusterId={w.cluster_id} nodeName={overview.node.name} isTemplate={!!(live?.config?.template ?? w.is_template)} tags={w.tags || []} autoOpen={search.get("clone") === "1"} />}
+          {!w.is_missing && <DeleteWorkloadAction workloadId={w.id} workloadName={name} status={status} />}
           {consoleInfo && !w.is_missing && (
             <a href={consoleInfo.pve_url} target="_blank" rel="noopener noreferrer" className="px-2.5 py-1 rounded border border-border text-sm text-muted hover:text-text" title="Opens PVE's own console in a new window (sign in to PVE there)">
               Open in PVE
@@ -497,7 +522,16 @@ export default function WorkloadDetail({
   );
 }
 
-function Hardware({ cfg, lxc, loading }: { cfg: ConfigSummary | null; lxc: boolean; loading: boolean }) {
+function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdit, clusterId, nodeName }: { cfg: ConfigSummary | null; lxc: boolean; loading: boolean; workloadId: string; workloadName: string; running: boolean; canEdit: boolean; clusterId: string; nodeName: string }) {
+  const me = useMe();
+  const admin = me === undefined || me?.is_admin === true;
+  const [nicEdit, setNicEdit] = useState<NicEditRequest | null>(null);
+  const [diskReq, setDiskReq] = useState<DiskRequest | null>(null);
+  const [defs, setDefs] = useState<{ deviations: { field: string; label: string; actual: unknown; default: unknown; source: string }[] } | null>(null);
+  useEffect(() => {
+    if (lxc || !canEdit) return;
+    fetch(`/api/workloads/${workloadId}/defaults`).then((r) => (r.ok ? r.json() : null)).then(setDefs).catch(() => {});
+  }, [workloadId, lxc, canEdit, cfg?.machine, cfg?.cpu_type]);
   if (!cfg) {
     return (
       <Card>
@@ -510,42 +544,59 @@ function Hardware({ cfg, lxc, loading }: { cfg: ConfigSummary | null; lxc: boole
   return (
     <div className="space-y-4">
       <Card>
-        <CardTitle>Compute</CardTitle>
+        <div className="flex flex-wrap items-start justify-between"><CardTitle>Compute</CardTitle>{!lxc && canEdit && <MachineCpuAction workloadId={workloadId} workloadName={workloadName} running={running} onDone={notifyOperationsChanged} />}{lxc && canEdit && <CtResizeAction workloadId={workloadId} cores={cfg.cores} memoryMb={cfg.memory_mb} swapMb={cfg.swap_mb ?? null} onDone={notifyOperationsChanged} />}</div>
+        {defs && defs.deviations.length > 0 && (
+          <div className="mb-3 px-3 py-2 rounded border border-warn/40 bg-warn/10 text-warn text-xs">
+            Differs from your defaults: {defs.deviations.map((d) => `${d.label} is ${Array.isArray(d.actual) ? (d.actual as string[]).join(", ") : d.actual === null || d.actual === undefined ? "default" : String(d.actual)}, the default is ${String(d.default ?? "default")} (${d.source})`).join("; ")}. Settings &gt; Defaults &amp; templates changes the defaults; Edit machine &amp; CPU type changes this VM.
+          </div>
+        )}
         <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-8">
           <Row label="vCPUs" value={cfg.vcpus ? `${cfg.vcpus} (${cfg.sockets} socket × ${cfg.cores ?? "?"} cores)` : "—"} />
-          <Row label="Memory" value={cfg.memory_mb ? `${formatBytes(cfg.memory_mb * 1048576)}` : "—"} />
+          <Row label="Memory" value={formatMemoryGb(cfg.memory_mb)} />
           {!lxc && <Row label="CPU type" value={cfg.cpu_type || "default"} />}
-          {!lxc && <Row label="Ballooning minimum" value={cfg.balloon_min_mb === 0 ? "Off" : cfg.balloon_min_mb ? formatBytes(cfg.balloon_min_mb * 1048576) : "Not set"} />}
+          {!lxc && <Row label="Ballooning minimum" value={cfg.balloon_min_mb === 0 ? "Off" : cfg.balloon_min_mb ? formatMemoryGb(cfg.balloon_min_mb) : "Not set"} />}
           {!lxc && <Row label="BIOS" value={cfg.bios || "—"} />}
           {!lxc && <Row label="Machine" value={cfg.machine || "default"} />}
           {!lxc && <Row label="SCSI controller" value={cfg.scsihw || "—"} />}
           {!lxc && <Row label="Boot order" value={cfg.boot || "—"} />}
           <Row label="OS type" value={cfg.ostype || "—"} />
-          {lxc && <Row label="Swap" value={cfg.swap_mb != null ? formatBytes(cfg.swap_mb * 1048576) : "—"} />}
+          {lxc && <Row label="Swap" value={formatMemoryGb(cfg.swap_mb)} />}
           {lxc && <Row label="Unprivileged" value={cfg.unprivileged ? "Yes" : "No"} />}
         </dl>
       </Card>
       <Card>
         <CardTitle>Disks</CardTitle>
         <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs text-muted uppercase"><th className="py-1 pr-3">Device</th><th className="pr-3">Storage</th><th className="pr-3">Size</th><th>Volume and options</th></tr></thead>
+          <thead><tr className="text-left text-xs text-muted uppercase"><th className="py-1 pr-3">Device</th><th className="pr-3">Storage</th><th className="pr-3">Size</th><th>Volume and options</th><th /></tr></thead>
           <tbody>
             {cfg.disks.map((d) => (
               <tr key={d.key} className="border-t border-border">
                 <td className="py-1.5 pr-3">{d.key}{d.kind !== "disk" ? <span className="text-muted text-xs ml-1">({d.kind})</span> : null}</td>
                 <td className="pr-3">{d.storage || "—"}</td>
-                <td className="pr-3">{d.empty ? "empty" : d.size || "—"}</td>
+                <td className="pr-3">{d.empty ? "empty" : d.size || "—"}{!lxc && canEdit && d.kind === "cdrom" ? <div><CdromAction workloadId={workloadId} clusterId={clusterId} nodeName={nodeName} slot={d.key} current={d.volume} label={d.empty ? "Insert ISO…" : "Change / eject…"} onDone={notifyOperationsChanged} /></div> : null}{canEdit && !d.empty && d.kind === "disk" && (lxc ? /^(rootfs|mp\d+)$/ : /^(scsi|virtio|sata|ide)\d+$/).test(d.key) ? <div><GrowDiskAction workloadId={workloadId} disk={d.key} sizeText={d.size} onDone={notifyOperationsChanged} /></div> : null}</td>
                 <td className="text-muted text-xs break-all">{d.empty ? "" : `${d.volume}${Object.keys(d.options).length ? " · " + Object.entries(d.options).map(([k, v]) => `${k}=${v}`).join(", ") : ""}`}</td>
+                <td className="text-right whitespace-nowrap text-xs">{canEdit && admin && !diskReq && (() => {
+                  const di = { key: d.key, volume: d.volume, size: d.size, options: d.options };
+                  const btn = (label: string, action: DiskRequest["action"], cls = "text-accent hover:underline mr-3") => <button key={action} type="button" onClick={() => setDiskReq({ action, disk: di })} className={cls}>{label}</button>;
+                  if (lxc) return d.kind === "disk" && d.key.startsWith("mp") ? btn("Detach", "detach", "text-accent hover:underline") : d.kind === "unused" ? <>{btn("Attach…", "attach")}{btn("Delete…", "delete_unused", "text-bad hover:underline")}</> : null;
+                  if (d.kind === "disk") return <>{btn("Options…", "edit_options")}{btn("Detach", "detach")}{btn("Move to VM…", "move_to_vm", "text-accent hover:underline")}</>;
+                  if (d.kind === "cdrom") return btn("Remove drive", "remove_cdrom", "text-bad hover:underline");
+                  if (d.kind === "unused") return <>{btn("Attach…", "attach")}{btn("Move to VM…", "move_to_vm")}{btn("Delete…", "delete_unused", "text-bad hover:underline")}</>;
+                  return null;
+                })()}</td>
               </tr>
             ))}
-            {cfg.disks.length === 0 && <tr><td colSpan={4} className="text-muted py-2">No disks.</td></tr>}
+            {cfg.disks.length === 0 && <tr><td colSpan={5} className="text-muted py-2">No disks.</td></tr>}
+            {lxc && canEdit && admin && !diskReq && <tr className="border-t border-border"><td colSpan={5} className="py-1.5"><button type="button" onClick={() => setDiskReq({ action: "add" })} className="text-xs text-accent hover:underline">+ Add mount point</button></td></tr>}
+            {!lxc && canEdit && <tr className="border-t border-border"><td colSpan={5} className="py-1.5">{admin && !diskReq && <button type="button" onClick={() => setDiskReq({ action: "add" })} className="text-xs text-accent hover:underline mr-4">+ Add disk</button>}<CdromAction workloadId={workloadId} clusterId={clusterId} nodeName={nodeName} slot={null} label="+ Add CD/DVD drive" onDone={notifyOperationsChanged} /></td></tr>}
           </tbody>
         </table>
+        {diskReq && <DiskPanel key={`${diskReq.action}-${diskReq.disk?.key ?? "new"}`} workloadId={workloadId} clusterId={clusterId} nodeName={nodeName} request={diskReq} lxc={lxc} onClose={() => { setDiskReq(null); notifyOperationsChanged(); }} />}
       </Card>
       <Card>
-        <CardTitle>Network</CardTitle>
+        <div className="flex items-center justify-between"><CardTitle>Network</CardTitle>{canEdit && admin && !nicEdit && <button type="button" onClick={() => setNicEdit({ action: "add" })} className="text-xs text-accent hover:underline">+ Add network device</button>}</div>
         <table className="w-full text-sm">
-          <thead><tr className="text-left text-xs text-muted uppercase"><th className="py-1 pr-3">Device</th><th className="pr-3">Bridge</th><th className="pr-3">VLAN</th><th className="pr-3">MAC</th><th>{lxc ? "IP" : "Model"}</th></tr></thead>
+          <thead><tr className="text-left text-xs text-muted uppercase"><th className="py-1 pr-3">Device</th><th className="pr-3">Bridge</th><th className="pr-3">VLAN</th><th className="pr-3">MAC</th><th className="pr-3">{lxc ? "IP" : "Model"}</th><th /></tr></thead>
           <tbody>
             {cfg.nets.map((n) => (
               <tr key={n.key} className="border-t border-border">
@@ -553,12 +604,14 @@ function Hardware({ cfg, lxc, loading }: { cfg: ConfigSummary | null; lxc: boole
                 <td className="pr-3">{n.bridge || "—"}</td>
                 <td className="pr-3">{n.vlan_tag || "—"}</td>
                 <td className="pr-3 text-muted">{n.mac || "—"}</td>
-                <td>{(lxc ? n.ip : n.model) || "—"}</td>
+                <td className="pr-3">{(lxc ? n.ip : n.model) || "—"}{n.link_down ? <span className="text-warn text-xs ml-1">(disconnected)</span> : null}</td>
+                <td className="text-right whitespace-nowrap">{canEdit && admin && !nicEdit && <><button type="button" onClick={() => setNicEdit({ action: "edit", nic: n })} className="text-xs text-accent hover:underline mr-3">Edit</button><button type="button" onClick={() => setNicEdit({ action: "remove", nic: n })} className="text-xs text-bad hover:underline">Remove</button></>}</td>
               </tr>
             ))}
-            {cfg.nets.length === 0 && <tr><td colSpan={5} className="text-muted py-2">No network devices.</td></tr>}
+            {cfg.nets.length === 0 && <tr><td colSpan={6} className="text-muted py-2">No network devices.</td></tr>}
           </tbody>
         </table>
+        {nicEdit && (lxc ? <CtNicPanel key={`${nicEdit.action}-${nicEdit.nic?.key ?? "new"}`} workloadId={workloadId} workloadName={workloadName} clusterId={clusterId} request={nicEdit as CtNicRequest} onClose={() => setNicEdit(null)} /> : <NicEditPanel key={`${nicEdit.action}-${nicEdit.nic?.key ?? "new"}`} workloadId={workloadId} workloadName={workloadName} running={running} request={nicEdit} onClose={() => setNicEdit(null)} />)}
       </Card>
     </div>
   );
