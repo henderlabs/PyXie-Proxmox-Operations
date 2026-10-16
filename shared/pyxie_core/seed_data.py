@@ -44,6 +44,4 @@ CAPABILITIES = [
 PROVIDER_TYPE_CATALOG = [
     ("pve", "pve", 1, True),
     ("pbs", "protection", 1, False),
-    ("veeam", "protection", 1, False),
-    ("commvault", "protection", 1, False),
 ]

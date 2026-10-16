@@ -8,7 +8,7 @@ Proxmox VE and Proxmox Backup Server (PBS) run the backups. PyXie reads what the
 
 - **Totals**: guests that meet 3-2-1, guests that are partly protected, and guests with no recent backup.
 - **Where the copies live**: the live guest plus each PBS datastore, with how many guests and backups it holds, its newest backup, what it keeps (the PBS prune job), whether a verify job checks it, and for offsite stores the sync job that feeds it. Warnings appear here, for example "no verify job: backups are never checked for corruption". "Open in PBS" jumps to the datastore.
-- **Every guest, gaps first**: the age of the newest backup on each datastore, which backup job covers the guest, and what is missing.
+- **Guests, gaps first**: open a guest to see all of its restore points and restore from one (see [restore.md](restore.md)). Columns: the age of the newest backup on each datastore, which backup job covers the guest, and what is missing.
 - **Backup jobs**: the Proxmox backup jobs that write to PBS, with "Open in Proxmox". Schedule, mode and retention are edited there.
 - **Which guests a job backs up**: the one thing PyXie edits. Add or remove a guest, switch a job to all guests, or use "Add every guest tagged ..." to tick all guests with a tag at once. Every change uses the Safety Contract: preview, approve, revalidate, write, read back, audit. Tag adds are one-time; they are not a standing rule, so a guest tagged later is not added automatically.
 

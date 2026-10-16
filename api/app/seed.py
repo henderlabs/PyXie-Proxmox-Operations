@@ -19,8 +19,6 @@ DEFAULT_POLICIES = [
 # page can show their real implementation/validation status rather than a
 # hardcoded frontend list.
 STRUCTURAL_ONLY_PROVIDERS = [
-    ("protection", "veeam", "Veeam Backup & Replication", "implemented", "not_tested"),
-    ("protection", "commvault", "Commvault", "implemented", "not_tested"),
 ]
 
 

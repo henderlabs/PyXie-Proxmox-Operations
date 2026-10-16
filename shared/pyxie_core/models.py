@@ -285,7 +285,7 @@ class Provider(Base):
 
     id = uuid_pk()
     category_id = Column(String, ForeignKey("provider_categories.id"), nullable=False)
-    provider_type = Column(String, nullable=False)  # 'pve', 'pbs', 'veeam', 'commvault', ...
+    provider_type = Column(String, nullable=False)  # 'pve', 'pbs'
     name = Column(String, nullable=False)
     instance_name = Column(String, nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
@@ -758,7 +758,7 @@ class SafetyRule(Base):
 
 class ProtectionTarget(Base):
     """A configured connection to a protection provider instance (one PBS
-    server, one Veeam server, one Commvault environment, ...)."""
+    server)."""
 
     __tablename__ = "protection_targets"
 
