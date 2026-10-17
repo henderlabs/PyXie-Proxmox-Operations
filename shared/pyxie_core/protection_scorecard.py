@@ -30,6 +30,14 @@ def build_scorecard(db: Session, now: float | None = None) -> dict:
         try:
             with PbsClient(creds) as client:
                 data = p321.read_pbs(client)
+                data["failed"] = []
+                try:  # failed backup runs of the last 7 days, to explain a guest that is late
+                    for tk in client.tasks(errors=True, limit=300, since=int(now - 7 * 86400)) or []:
+                        if tk.get("worker_type") == "backup" and "/" in str(tk.get("worker_id") or ""):
+                            tail = str(tk["worker_id"]).split(":")[-1]
+                            data["failed"].append({"key": (tail.split("/")[0], tail.split("/")[1]), "time": tk.get("endtime") or tk.get("starttime") or 0, "status": tk.get("status")})
+                except Exception:
+                    pass
             data["target"] = t.name
             data["host"] = t.hostname
             pbs_list.append(data)
@@ -82,14 +90,44 @@ def build_scorecard(db: Session, now: float | None = None) -> dict:
                 if m["included"] and j["enabled"]:
                     covered.setdefault(m["workload_id"], []).append(j["job_id"])
 
+    failed: dict = {}
+    for d in pbs_list:
+        for f in d.get("failed", []):
+            failed.setdefault(f["key"], []).append({"time": f["time"], "status": f["status"]})
+    for v in failed.values():
+        v.sort(key=lambda x: x["time"], reverse=True)
+
+    # which plan each guest follows (for the drop-down on its row), and the plans of each cluster
+    from .backup_policy import resolve_assignments
+    from .backup_policy_workflow import guests as plan_guests, load_state
+    resolved: dict = {}
+    plans: dict = {}
+    for cluster in db.query(Cluster).filter(Cluster.is_missing.is_(False)).all():
+        try:
+            pols, asg = load_state(db, cluster)
+            gs = plan_guests(db, cluster)
+            res = resolve_assignments([{"id": g["id"], "tags": g["tags"]} for g in gs], asg)
+        except Exception:
+            continue
+        default_id = next((a["policy_id"] for a in asg if a["scope_type"] == "cluster" and a.get("policy_id")), None)
+        plans[str(cluster.id)] = [{"id": x["id"], "name": x["name"], "is_default": x["id"] == default_id} for x in pols]
+        names = {x["id"]: x["name"] for x in pols}
+        for wid, r in res.items():
+            resolved[wid] = {"policy_id": r["policy_id"], "name": names.get(r["policy_id"]), "source": r["source"], "exempt": r["policy_id"] is None}
+
     rows = []
     type_map = {"vm": "vm", "lxc": "ct"}
     for w in db.query(Workload).filter(Workload.is_missing.is_(False), Workload.is_template.is_(False)).order_by(Workload.name).all():
         key = (type_map.get(w.type), str(w.vmid))
         row = p321.score_guest(last.get(key, {}), stores, covered.get(str(w.id), []), now)
         row.update({"workload_id": str(w.id), "vmid": w.vmid, "name": w.name, "type": w.type, "tags": getattr(w, "tags", None)})
+        plan = resolved.get(str(w.id)) or {"policy_id": None, "name": None, "source": None, "exempt": False}
+        row["plan"] = {**plan, "cluster_id": str(w.cluster_id)}
+        row["state"] = getattr(w, "status", None)
+        row["causes"] = p321.known_causes(state=row["state"], exempt=plan["exempt"], has_plan=plan["policy_id"] is not None, covered=bool(row["covered_by"]),
+                                          failures=failed.get(key, []), now=now) if row["status"] != "ok" else []
         rows.append(row)
     order = {"none": 0, "partial": 1, "ok": 2}
     rows.sort(key=lambda r: (order[r["status"]], r["name"] or ""))
-    return {"summary": p321.summarize(rows), "rows": rows, "stores": store_cards, "jobs": jobs, "errors": errors,
+    return {"summary": p321.summarize(rows), "rows": rows, "plans": plans, "stores": store_cards, "jobs": jobs, "errors": errors,
             "rules": {"offsite_by_schedule": True, "backup_max_age_h": p321.BACKUP_MAX_AGE_H, "offsite_max_age_h": p321.OFFSITE_MAX_AGE_H}}

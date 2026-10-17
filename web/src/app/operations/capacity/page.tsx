@@ -1,6 +1,7 @@
 import { apiFetch } from "@/lib/api";
 import type { ClusterCapacity } from "@/lib/api";
 import { Card, CardTitle, EmptyState, NoInfrastructureHint, PageHeader, StatTile } from "@/components/Card";
+import BackupStorage from "@/components/BackupStorage";
 import CapacityNodesTable from "@/components/tables/CapacityNodesTable";
 import { formatBytes } from "@/lib/format";
 import { Meter } from "@/components/Gauges";
@@ -50,6 +51,7 @@ export default async function CapacityPage() {
           </div>
         </Card>
       ))}
+      <BackupStorage title="Backup storage (backup servers)" />
     </div>
   );
 }

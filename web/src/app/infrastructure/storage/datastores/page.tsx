@@ -2,6 +2,7 @@ import { apiFetch } from "@/lib/api";
 import type { StorageDefinition, StorageItem } from "@/lib/api";
 import { PageHeader, StatTile } from "@/components/Card";
 import StorageTable from "@/components/tables/StorageTable";
+import BackupStorage from "@/components/BackupStorage";
 import { StorageIcon } from "@/components/Icons";
 import { formatBytes } from "@/lib/format";
 
@@ -28,6 +29,7 @@ export default async function DatastoresPage() {
         <StatTile label="Total Used" value={formatBytes(totalUsed)} />
         <StatTile label="Free" value={formatBytes(totalCapacity - totalUsed)} />
       </div>
+      <BackupStorage title="Backup server datastores" />
       <StorageTable storage={storage} defs={defs} nodeNames={Object.fromEntries(nodes.map((n) => [n.id, n.name]))} />
     </div>
   );

@@ -76,17 +76,63 @@ def merge_points(pve_points: list[dict], pbs_points: list[dict]) -> list[dict]:
     """One list, newest first. A point seen by Proxmox is restorable (has a volid). A PBS-only point is listed with why not."""
     out: dict = {}
     for p in pve_points:
-        out[(p.get("datastore") or p["storage"], p["time"])] = {**p, "restorable": True, "reason": None}
+        out[(p.get("datastore") or p["storage"], p.get("namespace") or "", p["time"])] = {**p, "restorable": True, "reason": None}
     for p in pbs_points:
-        key = (p["datastore"], p["time"])
+        key = (p["datastore"], p.get("namespace") or "", p["time"])
         if key in out:
             cur = out[key]
             cur.update({k: v for k, v in p.items() if v not in (None, "") and k not in ("volid", "storage")})
             cur["restorable"] = True
         else:
             out[key] = {**p, "volid": None, "storage": None, "restorable": False,
-                        "reason": "Proxmox has no storage for this datastore, so it cannot restore from it yet"}
+                        "reason": "Proxmox has no storage for this datastore" + (f" and namespace {p['namespace']}" if p.get("namespace") else "") + ", so it cannot restore from it yet"}
     return sorted(out.values(), key=lambda r: r["time"], reverse=True)
+
+
+def _job_applies(job: dict, store: str, ns: str) -> bool:
+    """Does a PBS prune job act on this datastore and namespace? A job at a namespace covers it and, up to its max-depth, the namespaces below it (no max-depth = all of them)."""
+    if job.get("disable") or job.get("store") != store:
+        return False
+    jns = job.get("ns") or ""
+    if jns and ns != jns and not ns.startswith(jns + "/"):
+        return False
+    depth = (len(ns.split("/")) if ns else 0) - (len(jns.split("/")) if jns else 0)
+    md = job.get("max-depth")
+    return depth == 0 or (depth > 0 and (md is None or depth <= int(md)))
+
+
+def annotate_retention(points: list[dict], servers: dict, pve_jobs: list[dict], vmid: int, all_vmids: set[int]) -> None:
+    """Gives every restore point a `retention`: kept (and as which rule), removed at the next prune (and by whom), protected, or unlimited (nothing prunes it).
+    Several things can prune the same backups, a Proxmox job's retention and a datastore prune job, and a backup survives only if all of them keep it. Edits `points`."""
+    from .backup_policy import covers
+    from .prune_sim import combine, simulate
+    from .retention_workflow import parse_prune
+    groups: dict[tuple, list[dict]] = {}
+    for p in points:
+        groups.setdefault((p.get("server_id"), p["datastore"], p.get("namespace") or ""), []).append(p)
+    for (sid, store, ns), pts in groups.items():
+        info = servers.get(sid) or {}
+        snaps = [{"time": q["time"], "protected": bool(q.get("protected"))} for q in pts]
+        results, sched = [], {}
+        for j in info.get("prune", []):
+            keeps = {k: j[k] for k in ("keep-last", "keep-hourly", "keep-daily", "keep-weekly", "keep-monthly", "keep-yearly") if j.get(k)}
+            if keeps and _job_applies(j, store, ns):
+                name = f"prune job {j['id']}"
+                results.append((name, simulate(snaps, keeps, info.get("offset", 0))))
+                sched[name] = f"runs {j.get('schedule')}" if j.get("schedule") else "runs on its schedule"
+        stores_here = {q.get("storage") for q in pts if q.get("storage")}
+        for jb in pve_jobs:
+            keeps = parse_prune(jb.get("prune-backups"))
+            if keeps and jb.get("storage") in stores_here and covers(jb, vmid, all_vmids):
+                name = f"backup job {jb.get('id')}"
+                results.append((name, simulate(snaps, keeps, info.get("offset", 0))))
+                sched[name] = "after each backup run"
+        res = combine(results, [q["time"] for q in pts])
+        for q in pts:
+            r = dict(res[q["time"]])
+            r["gc"] = (info.get("gc") or {}).get(store)
+            r["when"] = sched.get(r.get("source") or "")
+            q["retention"] = r
 
 
 def read_restore_points(db, workload) -> dict:
@@ -104,9 +150,14 @@ def read_restore_points(db, workload) -> dict:
     errors: list[str] = []
     pve_points: list[dict] = []
     storages: dict = {}
+    pve_jobs: list[dict] = []
     try:
         client, _cred = build_pve_client(db, target)
         with client, PveMaintenanceClient(load_pve_credentials(db, target, "maintenance")) as adm:
+            try:
+                pve_jobs = client.backup_jobs() or []
+            except Exception:  # noqa: BLE001
+                pve_jobs = []
             from .models import Node
             node = next((n.name for n in db.query(Node).filter(Node.cluster_id == cluster.id, Node.status == "online", Node.is_missing.is_(False)).order_by(Node.name)), None)
             if node is None:
@@ -117,7 +168,8 @@ def read_restore_points(db, workload) -> dict:
                         continue
                     name = row["storage"]
                     try:
-                        ds = (adm._get(f"/storage/{name}") or {}).get("datastore")  # the storage definition needs more than the read-only token holds
+                        sdef = adm._get(f"/storage/{name}") or {}  # the storage definition needs more than the read-only token holds
+                        ds, ns_of = sdef.get("datastore"), sdef.get("namespace") or ""
                         items = adm.backup_content(node, name, workload.vmid)
                     except Exception as exc:  # noqa: BLE001
                         errors.append(f"could not list backups on {name}: {str(exc)[:100]}")
@@ -129,20 +181,44 @@ def read_restore_points(db, workload) -> dict:
                             continue
                         pve_points.append({"storage": name, "datastore": ds or name, "volid": it["volid"], "time": int(it.get("ctime") or 0),
                                            "size": it.get("size"), "verified": (it.get("verification") or {}).get("state"),
-                                           "notes": it.get("notes"), "protected": bool(it.get("protected")), "offsite": False})
+                                           "notes": it.get("notes"), "protected": bool(it.get("protected")), "offsite": False, "namespace": ns_of})
     except Exception as exc:  # noqa: BLE001
         errors.append(f"could not read backups from Proxmox: {str(exc)[:120]}")
     pbs_points: list[dict] = []
+    servers: dict = {}
     for t, creds in _pbs_targets(db):
         try:
             with PbsClient(creds) as pc:
+                info = {"prune": [], "offset": 0, "gc": {}}
+                try:
+                    info["prune"] = pc.job_config("prune") or []
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    tm = pc._get("/nodes/localhost/time") or {}
+                    info["offset"] = int(tm.get("localtime", 0)) - int(tm.get("time", 0)) if tm.get("localtime") and tm.get("time") else 0
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    info["gc"] = {d["name"]: d.get("gc-schedule") for d in (pc._get("/config/datastore") or [])}
+                except Exception:  # noqa: BLE001
+                    pass
+                servers[str(t.id)] = info
                 for d in pc.datastores() or []:
                     name = d["store"]
                     store = {"name": name, "backend": d.get("backend-type") or "filesystem"}
-                    for s in pc.snapshots(name, kind, str(workload.vmid)) or []:
-                        pbs_points.append({"datastore": name, "time": int(s["backup-time"]), "size": s.get("size"),
-                                           "verified": (s.get("verification") or {}).get("state"), "protected": bool(s.get("protected")),
-                                           "notes": s.get("comment"), "offsite": is_offsite(store), "backend": store["backend"], "server": t.name, "server_id": str(t.id)})
+                    for ns in pc.namespaces(name):
+                        for s in pc.snapshots(name, kind, str(workload.vmid), ns) or []:
+                            pbs_points.append({"datastore": name, "namespace": ns, "time": int(s["backup-time"]), "size": s.get("size"),
+                                               "verified": (s.get("verification") or {}).get("state"), "protected": bool(s.get("protected")),
+                                               "notes": s.get("comment"), "offsite": is_offsite(store), "backend": store["backend"], "server": t.name, "server_id": str(t.id)})
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{t.name}: could not read its backups ({type(exc).__name__})")
-    return {"points": merge_points(pve_points, pbs_points), "errors": errors, "kind": kind}
+    points = merge_points(pve_points, pbs_points)
+    try:
+        from .models import Workload as _W
+        all_vmids = {w.vmid for w in db.query(_W).filter(_W.cluster_id == workload.cluster_id, _W.is_missing.is_(False), _W.is_template.isnot(True)).all()}
+        annotate_retention(points, servers, pve_jobs, workload.vmid, all_vmids)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"could not work out what pruning does to these backups ({type(exc).__name__})")
+    return {"points": points, "errors": errors, "kind": kind}
