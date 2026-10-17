@@ -88,6 +88,7 @@ export function Table<T extends { id: string }>({
   onRowClick,
   renderDetail,
   singleExpand,
+  defaultExpanded,
   defaultsVersion,
   controlledSort,
   onSortChange,
@@ -110,6 +111,8 @@ export function Table<T extends { id: string }>({
   renderDetail?: (row: T) => React.ReactNode;
   /** Opening one row's detail closes any other -- for heavy panels that fetch live data. */
   singleExpand?: boolean;
+  /** Row ids that start open (for example the rows that need attention). */
+  defaultExpanded?: string[];
   /** Bump when `defaultHidden` changes. A viewer who already saved column choices has those
    * honoured, but once per bump the new defaults are folded in (columns hidden by default
    * get hidden again), so a de-cluttering change reaches existing users too. Choices made
@@ -135,7 +138,7 @@ export function Table<T extends { id: string }>({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragging, setDragging] = useState<string | null>(null);
   const resizingHeader = useRef<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(defaultExpanded ?? []));
 
   function toggleExpanded(id: string) {
     setExpanded((prev) => {

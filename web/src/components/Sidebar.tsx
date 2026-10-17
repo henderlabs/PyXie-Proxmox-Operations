@@ -72,6 +72,7 @@ const SECTIONS: NavSection[] = [
         exact: true,
         children: [
           { label: "Datastores", href: "/infrastructure/storage/datastores", icon: <StorageIcon /> },
+          { label: "Backup namespaces", href: "/infrastructure/storage/namespaces", icon: <StorageIcon /> },
           { label: "ISO library", href: "/infrastructure/storage/iso", icon: <StorageIcon /> },
           { label: "Storage setup", href: "/infrastructure/storage/setup", icon: <StorageIcon /> },
         ],

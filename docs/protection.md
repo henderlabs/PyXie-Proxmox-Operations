@@ -4,16 +4,31 @@
 
 Proxmox VE and Proxmox Backup Server (PBS) run the backups. PyXie reads what they did and scores it. Nothing on this page changes a schedule, a retention rule or a datastore.
 
-## What the page shows
+## The pages
 
-- **Totals**: guests that meet 3-2-1, guests that are partly protected, and guests with no recent backup.
-- **Where the copies live**: the live guest plus each PBS datastore, with how many guests and backups it holds, its newest backup, what it keeps (the PBS prune job), whether a verify job checks it, and for offsite stores the sync job that feeds it. Warnings appear here, for example "no verify job: backups are never checked for corruption". "Open in PBS" jumps to the datastore.
-- **Guests, gaps first**: open a guest to see all of its restore points and restore from one (see [restore.md](restore.md)). Columns: the age of the newest backup on each datastore, which backup job covers the guest, and what is missing.
-- **Backup jobs**: the Proxmox backup jobs that write to PBS, with "Open in Proxmox". Schedule, mode and retention are edited there.
-- **Which guests a job backs up**: the one thing PyXie edits. Add or remove a guest, switch a job to all guests, or use "Add every guest tagged ..." to tick all guests with a tag at once. Every change uses the Safety Contract: preview, approve, revalidate, write, read back, audit. Tag adds are one-time; they are not a standing rule, so a guest tagged later is not added automatically.
+- **Backup plan & guests** (the first tab) is one page: the totals (guests that meet 3-2-1, partly protected, not protected), the **backup plan** in plain words (the default plan and any exceptions, each with Edit and a live diagram in its form; see [retention-policies.md](retention-policies.md)) and the **guests**. Every guest row has a **Plan** drop-down (*Automatic: <plan>*, *No backup*, or any plan); a change shows a preview of every job it touches before anything happens. Guests that need attention open by themselves (up to five) so the problem and the restore points are in front of you; open any other guest the same way. Search by name, ID, plan, result or what is missing.
+- **Backup servers** (the second tab): the backup servers, then one box per datastore with labelled rows as pills: *Used by plans* (click a plan name to open its settings), *Pruning* (the keep rules, schedule and last run of each prune job, editable), *Freeing space* (garbage collection schedule, last run, edit and run now), *Verifying*, and *Copies arriving here*. A last box lists the Proxmox backup jobs with the plan that manages each and the retention each prunes to. A plan sets all of this for you; use this page to see or adjust what exists.
+- **Storage > Backup namespaces**: folders inside a datastore that keep different retention apart ([backup-namespaces.md](backup-namespaces.md)).
+
+## What the guest table says is missing
+
+Each line names the place and the limit, for example *2-NAS_ST-Archive: newest backup is 3d old, should be under 2 days*, *3-OFFSITE_Wasabi (offsite): newest backup is 40d old, should be under 35 days* or *no backup yet*. A late **offsite** copy is judged against its sync job's schedule (35 days for monthly), a local one against 48 hours.
+
+## Storage used
+
+The space the backups really take (identical data is stored once) is shown on four pages: a tile on **Protection**, a full card with a 30 day trend, guest and backup counts, the estimated full date and the last garbage collection on **Backup servers**, and the same card on **Capacity** and on **Storage > Datastores**. A disk datastore shows used and free space and how full it is. Wasabi (S3) has no fixed capacity, so it shows what is stored, which is what you are billed for. Pruned backups give their space back only after garbage collection runs. There is no per-guest figure: backups share data, so one guest's share cannot be stated honestly.
+
+## What is wrong, and why
+
+The last column lists what is missing and, when PyXie already knows it, **why** (a red line starting *Why:*): the guest is powered off, backups of it failed in the last 7 days (with the count, the last time and the reason in words, for example *the backup ended without finishing, often a dropped connection, the backup server restarting, or a very busy guest*), no backup is chosen for the guest, or no plan applies to it.
+
+## Restore points: what pruning will do
+
+Under each guest every restore point has a **Retention** chip, worked out the way Proxmox Backup Server decides (newest first, the keep rules in order, each period keeping its newest backup): *kept · daily* (or weekly, monthly, yearly, newest) means a keep rule holds it, *will be pruned* means the next prune run deletes it and the next garbage collection frees its space (the tooltip names the job that does it, when it runs and when GC runs), *protected* means it is never pruned, *never pruned* means no rule applies. When a Proxmox job's retention and a datastore prune job both apply, a backup survives only if both keep it. The **Verified** chip shows whether the backup server has re-read the backup and matched its checksums.
 
 ## How a copy is scored
 
+- A copy that lives in a **namespace** still counts as a copy on its datastore.
 - A datastore is **offsite** when it is S3-backed or its name contains "offsite".
 - A backup counts when it is under 48 hours old. An offsite copy counts while it is within what its feeding job's schedule allows: 35 days for a monthly job, 9 days for a weekly one, 48 hours for a daily one. PyXie takes the schedule from the datastore's sync job, or its prune job if no sync job is visible.
 - 3-2-1 is met when there are at least 3 copies (the live guest plus two fresh backups), at least 2 kinds of storage (for example disk and S3), and a fresh offsite copy.
@@ -26,4 +41,4 @@ Read access to PBS through the "inventory" token on the PBS target (Audit on the
 
 ## Earlier versions
 
-v0.37.0 had a backup policy builder (named bundles of schedule, retention and mode that PyXie turned into jobs). It duplicated what Proxmox and PBS already own, so v0.37.1 removed it from the UI. Jobs it created are named `pyxie-...` and keep working; edit or delete them in Proxmox.
+v0.37.0 had a backup policy builder, v0.37.1 removed its UI, and it returns here as **Retention policies**, rebuilt around copies, namespaces and one default policy. Jobs named `pyxie-...` belong to policies; do not edit them by hand (a policy's preview shows what would be put back).
