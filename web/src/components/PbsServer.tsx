@@ -16,7 +16,7 @@ type Status = {
   memory?: { used: number; total: number } | null; root?: { used: number; total: number } | null;
   updates?: { count: number; packages: { package: string; current_version: string; new_version: string }[] } | null;
   tasks_running?: { type: string; id: string }[] | null; tasks_failed_24h?: { type: string; id: string; status: string; end: number }[] | null;
-  datastores?: { name: string; used: number; total: number; estimated_full: number | null }[] | null; checked_at?: string;
+  datastores?: { name: string; backend?: string; used: number; total: number | null; estimated_full: number | null }[] | null; checked_at?: string;
 };
 type Server = {
   id: string; name: string; hostname: string; status: Status | null; status_at: string | null;
@@ -119,6 +119,14 @@ function Overview({ s }: { s: Server }) {
         <CardTitle>Datastores</CardTitle>
         {st.datastores == null ? <div className="text-sm text-muted">Not readable with this token.</div> : st.datastores.map((d) => {
           const pct = d.total ? (100 * d.used) / d.total : 0;
+          if (d.backend === "s3" || d.total == null) {
+            return (
+              <div key={d.name} className="mb-3 text-sm">
+                <div className="flex justify-between"><span className="text-text">{d.name}</span><span className="text-muted text-xs">{gb(d.used)} stored · billed by usage</span></div>
+                <div className="text-xs text-muted mt-0.5">S3 storage has no fixed size here, so there is no percentage or full date.</div>
+              </div>
+            );
+          }
           return (
             <div key={d.name} className="mb-3 text-sm">
               <div className="flex justify-between"><span className="text-text">{d.name}</span><span className="text-muted text-xs">{gb(d.used)} of {gb(d.total)} ({pct.toFixed(0)}%)</span></div>

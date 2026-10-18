@@ -290,7 +290,7 @@ export function WorkloadDetailPanel({
         ))}
       </div>
 
-      {tab === "backup" && <BackupTab workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} canEdit={!w.is_missing} />}
+      {tab === "backup" && <BackupTab workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} canEdit={!w.is_missing} onOpenHardware={() => onTabChange("hardware")} />}
       {tab === "snapshots" && (
         <SnapshotsTab workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} running={status === "running" && !lxc} disabled={w.is_missing} container={lxc} />
       )}
@@ -571,7 +571,13 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
           <tbody>
             {cfg.disks.map((d) => (
               <tr key={d.key} className="border-t border-border">
-                <td className="py-1.5 pr-3">{d.key}{d.kind !== "disk" ? <span className="text-muted text-xs ml-1">({d.kind})</span> : null}</td>
+                <td className="py-1.5 pr-3">{d.key}{d.kind !== "disk" ? <span className="text-muted text-xs ml-1">({d.kind})</span> : null}
+                  {d.kind === "disk" && (() => {
+                    const left = d.options.backup === "0";
+                    const pill = <span className={`text-xs ml-2 ${left ? "text-warn" : "text-good"}`}>{left ? "Left out of backups" : "In backups"}</span>;
+                    return !lxc && canEdit && admin && !diskReq ? <button type="button" title="Change whether this disk is in backups" onClick={() => setDiskReq({ action: "edit_options", disk: { key: d.key, volume: d.volume, size: d.size, options: d.options } })} className="hover:underline">{pill}</button> : pill;
+                  })()}
+                </td>
                 <td className="pr-3">{d.storage || "—"}</td>
                 <td className="pr-3">{d.empty ? "empty" : d.size || "—"}{!lxc && canEdit && d.kind === "cdrom" ? <div><CdromAction workloadId={workloadId} clusterId={clusterId} nodeName={nodeName} slot={d.key} current={d.volume} label={d.empty ? "Insert ISO…" : "Change / eject…"} onDone={notifyOperationsChanged} /></div> : null}{canEdit && !d.empty && d.kind === "disk" && (lxc ? /^(rootfs|mp\d+)$/ : /^(scsi|virtio|sata|ide)\d+$/).test(d.key) ? <div><GrowDiskAction workloadId={workloadId} disk={d.key} sizeText={d.size} onDone={notifyOperationsChanged} /></div> : null}</td>
                 <td className="text-muted text-xs break-all">{d.empty ? "" : `${d.volume}${Object.keys(d.options).length ? " · " + Object.entries(d.options).map(([k, v]) => `${k}=${v}`).join(", ") : ""}`}</td>

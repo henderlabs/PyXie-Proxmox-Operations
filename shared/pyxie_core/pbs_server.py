@@ -97,8 +97,10 @@ def collect_status(client: PbsClient, at: float | None = None) -> dict:
             {"type": t.get("worker_type"), "id": t.get("worker_id"), "end": t.get("endtime"), "status": t.get("status")}
             for t in failed if t.get("status") not in (None, "OK") and not str(t.get("status")).startswith("WARNINGS")][:20],
         "datastores": None if usage is None else [
-            {"name": u.get("store"), "used": u.get("used"), "total": u.get("total"), "avail": u.get("avail"),
-             "estimated_full": u.get("estimated-full-date")} for u in usage],
+            # S3 datastores report the backup server's own disk as their size; their real limit is the bucket, which is billed by use
+            {"name": u.get("store"), "backend": "s3" if u.get("backend-type") == "s3" else "filesystem", "used": u.get("used"),
+             "total": None if u.get("backend-type") == "s3" else u.get("total"), "avail": None if u.get("backend-type") == "s3" else u.get("avail"),
+             "estimated_full": None if u.get("backend-type") == "s3" else u.get("estimated-full-date")} for u in usage],
         "checked_at": datetime.fromtimestamp(at or now().timestamp(), tz=timezone.utc).isoformat(),
     }
 

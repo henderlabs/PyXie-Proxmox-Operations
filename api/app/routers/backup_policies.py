@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from pyxie_core.backup_policy import covers, describe_retention, desired_membership, is_pyxie_job, plan_job_writes, resolve_assignments
 from pyxie_core.backup_policy_workflow import BackupPolicyError, dry_run_policy_change, guests, load_state
 from pyxie_core.credentials import load_pve_credentials
-from pyxie_core.models import Cluster, Node, PveTarget, Workload
+from pyxie_core.models import Cluster, DiskBackupException, Node, PveTarget, Workload, WorkloadDisk
 from pyxie_core.retention_workflow import advisories
 from pyxie_core.pbs_state import read_pbs_state, source_map
 from pyxie_core.policy_layers import describe_keep, three_two_one
@@ -126,6 +126,38 @@ def dry_run(p: ChangeIn, user=Depends(get_current_user), db: Session = Depends(g
         raise HTTPException(400, str(exc) or "bad request")
 
 
+def _disks_by_workload(db: Session) -> tuple[dict, dict]:
+    """({workload_id: [{slot, size_bytes, backup}]}, {workload_id: {slots left out on purpose}}) from the inventory. CD drives are not data disks."""
+    disks: dict = {}
+    for d in db.query(WorkloadDisk).filter(WorkloadDisk.is_cdrom.is_(False)).order_by(WorkloadDisk.slot).all():
+        disks.setdefault(str(d.workload_id), []).append({"slot": d.slot, "size_bytes": d.size_bytes, "backup": d.backup})
+    accepted: dict = {}
+    for e in db.query(DiskBackupException).all():
+        accepted.setdefault(str(e.workload_id), set()).add(e.slot)
+    return disks, accepted
+
+
+@router.get("/guest-summary")
+def guest_summary(db: Session = Depends(get_db)):
+    """For the Workloads list: each guest's backup plan (the same one Protection shows) and how many of its disks are left out of backups. Inventory only, no Proxmox calls."""
+    disks, accepted = _disks_by_workload(db)
+    out: dict = {}
+    for cluster in db.query(Cluster).filter(Cluster.is_missing.is_(False)).all():
+        try:
+            policies, assignments = load_state(db, cluster)
+            gs = guests(db, cluster)
+            resolved = resolve_assignments([{"id": g["id"], "tags": g["tags"]} for g in gs], assignments)
+        except Exception:  # noqa: BLE001
+            continue
+        names = {p["id"]: p["name"] for p in policies}
+        for wid, r in resolved.items():
+            ds = disks.get(wid, [])
+            left = [d["slot"] for d in ds if d["backup"] is False]
+            out[wid] = {"plan": names.get(r["policy_id"]), "exempt": r["policy_id"] is None and r["source"] is not None, "source": r["source"], "disks": len(ds), "left_out": len(left),
+                        "accepted": len([s for s in left if s in accepted.get(wid, set())])}
+    return out
+
+
 @router.get("/workload/{workload_id}")
 def workload_backup(workload_id: uuid.UUID, db: Session = Depends(get_db)):
     w = db.query(Workload).filter(Workload.id == workload_id).one_or_none()
@@ -142,6 +174,8 @@ def workload_backup(workload_id: uuid.UUID, db: Session = Depends(get_db)):
                        "layers": [{"label": "Copy", "text": f"to {ly['store']}{'/' + ly['namespace'] if ly['namespace'] else ''} ({ly['schedule']}); " + (describe_keep(ly) if ly["namespace"] else "kept by the datastore's own prune jobs")} for ly in pol.get("layers") or []]} if pol else None),
            "exempt": bool(r and r["policy_id"] is None), "source": r["source"] if r else None, "jobs": [], "backups": [], "error": None, "policies": [{"id": p["id"], "name": p["name"]} for p in policies],
            "cluster_id": str(cluster.id)}
+    all_disks, all_accepted = _disks_by_workload(db)
+    out["disks"] = [{**d, "accepted": d["slot"] in all_accepted.get(str(w.id), set())} for d in all_disks.get(str(w.id), [])]
     try:
         with _pve(db, cluster) as wc:
             jobs = wc._get("/cluster/backup") or []

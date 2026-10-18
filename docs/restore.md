@@ -20,7 +20,7 @@ The backup still exists and has **not failed verification** on the backup server
 
 ## Good to know
 
-- A disk marked "no backup" (`backup=0`) is not in the backup, so it is not restored; Proxmox turns that line into a note on the restored guest. PyXie does not count such a disk when it checks the result.
+- A disk marked "no backup" (`backup=0`) is not in the backup, so it is not restored; Proxmox turns that line into a note on the restored guest. PyXie does not count such a disk when it checks the result. The preview lists the disks that come back and, for a guest that still exists, the disks the backup does **not** hold (an overwrite loses those). If the backup holds no disk at all, an overwrite is blocked: restore it as a new guest instead, or pick another backup.
 - After an **overwrite**, Proxmox 9 may keep the replaced disks as `unused` disks of the guest, still using space. The result of the operation lists them; remove them in the guest's hardware settings.
 - A restored guest does not start by itself when its host boots (the "start at boot" setting is cleared on a new guest).
 - Containers use the same restore (`pct restore`). Proxmox restores a container onto one storage, so all its disks go to the storage of its root disk in the backup (or the storage you choose).

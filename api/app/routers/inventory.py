@@ -765,8 +765,10 @@ def dashboard_summary(db: Session = Depends(get_db)):
         .scalar()
     )
 
-    total_capacity = sum((s.capacity_bytes or 0) for s in storage)
-    total_used = sum((s.used_bytes or 0) for s in storage)
+    # backup storage (type pbs) is measured on the backup server, not summed with VM storage (S3 has no fixed size; namespaces share one datastore)
+    sized_storage = [s for s in storage if s.type != "pbs"]
+    total_capacity = sum((s.capacity_bytes or 0) for s in sized_storage)
+    total_used = sum((s.used_bytes or 0) for s in sized_storage)
     storage_pct = round(total_used / total_capacity * 100, 1) if total_capacity else None
 
     # Totals behind the memory gauge's detail line: physical RAM across nodes, and the

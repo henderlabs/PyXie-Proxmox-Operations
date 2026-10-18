@@ -23,6 +23,8 @@ import { useMe } from "@/lib/useMe";
 import { PreferredHostSelect, ProfileSelect, StoragePreferenceSelect, patchPlacementProfile } from "@/components/ProfileSelect";
 import { WorkloadRowDetail } from "@/components/WorkloadDetail";
 
+type BackupSummary = { plan: string | null; exempt: boolean; source: string | null; disks: number; left_out: number; accepted: number };
+
 type WorkloadFacts = {
   uptime: number | null;
   lock: string | null;
@@ -96,7 +98,7 @@ export default function WorkloadsTable({
   const toggleSelected = (id: string) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const searchQuery = search.trim().toLowerCase();
   const searchedWorkloads = searchQuery
-    ? visibleWorkloads.filter((w) => (w.name || "").toLowerCase().includes(searchQuery) || String(w.vmid).includes(searchQuery))
+    ? visibleWorkloads.filter((w) => (w.name || "").toLowerCase().includes(searchQuery) || String(w.vmid).includes(searchQuery) || backupText(backup[w.id]).toLowerCase().includes(searchQuery))
     : visibleWorkloads;
 
   // Server-rendering all ~130+ rows (each with several interactive
@@ -190,6 +192,30 @@ export default function WorkloadsTable({
 
   // Is each running VM's QEMU answering? One cached server scan (about 6 s cold for 116 VMs), so the
   // table renders at once and this column fills in afterwards.
+  // Each guest's backup plan and disks left out of backups (inventory only, one call).
+  const [backup, setBackup] = useState<Record<string, BackupSummary>>({});
+  useEffect(() => {
+    let cancelled = false;
+    function refresh() {
+      fetch("/api/backup-policies/guest-summary")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => data && !cancelled && setBackup(data))
+        .catch(() => {});
+    }
+    refresh();
+    const interval = setInterval(refresh, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+  const backupText = (b: BackupSummary | undefined) => {
+    if (!b) return "";
+    if (b.exempt) return "no backup";
+    const open = b.left_out - b.accepted;
+    return `${b.plan ?? "no plan"} ${open > 0 ? "left out" : b.left_out > 0 ? "left out on purpose" : ""}`.trim();
+  };
+
   const [liveness, setLiveness] = useState<Record<string, Liveness>>({});
   useEffect(() => {
     let cancelled = false;
@@ -252,6 +278,24 @@ export default function WorkloadsTable({
           header: "Status",
           render: (w) => <StatusBadge status={w.is_missing ? "unknown" : w.status} />,
           sortValue: (w) => (w.is_missing ? "unknown" : w.status),
+        },
+        {
+          header: "Backup",
+          tooltip: "The backup plan this guest follows (the same setting as on Protection) and whether any of its disks are left out of backups. Open the guest's Backup tab to change either.",
+          render: (w) => {
+            const b = backup[w.id];
+            if (!b || w.is_missing) return <span className="text-muted">—</span>;
+            if (b.exempt) return <span className="text-muted whitespace-nowrap">No backup</span>;
+            const open = b.left_out - b.accepted;
+            const plural = (n: number) => `${n} disk${n === 1 ? "" : "s"}`;
+            return (
+              <Link href={`/infrastructure/workloads/${w.id}?tab=backup`} className="whitespace-nowrap hover:underline">
+                <span className={b.plan ? (open > 0 ? "text-warn" : "text-text") : "text-warn"}>{b.plan ?? "No plan"}</span>{" "}
+                <span className="text-muted text-xs">{open > 0 ? `${open} of ${b.disks} disks left out` : b.left_out > 0 ? "left out on purpose" : b.disks ? `all ${plural(b.disks)}` : ""}</span>
+              </Link>
+            );
+          },
+          sortValue: (w) => backupText(backup[w.id]),
         },
         {
           header: "Live Check",

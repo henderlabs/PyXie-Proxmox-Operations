@@ -15,7 +15,8 @@ type Copy = { store: string; offsite: boolean; last: number | null; age_text: st
 type Plan = { policy_id: string | null; name: string | null; source: string | null; exempt: boolean; cluster_id: string };
 export type GuestRow = {
   id?: string; workload_id: string; vmid: number; name: string; type: string; status: "ok" | "partial" | "none"; copies: Copy[]; problems: string[]; covered_by: string[];
-  plan?: Plan; causes?: { level: "warn" | "info"; text: string }[]; state?: string | null;
+  plan?: Plan; notes?: string[]; disk_coverage?: { total: number; included: number; excluded: { slot: string; size_bytes: number | null; accepted: boolean; last_backup: number | null }[] };
+  causes?: { level: "warn" | "info"; text: string }[]; state?: string | null;
 };
 export type PlansByCluster = Record<string, { id: string; name: string; is_default: boolean }[]>;
 
@@ -32,6 +33,15 @@ export default function ProtectionGuests({ rows, stores, plans }: { rows: GuestR
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pend, setPend] = useState<{ op: Operation; name: string } | null>(null);
+  async function setLeftOut(workloadId: string, slot: string, on: boolean) {
+    setErr(null);
+    try {
+      const r = on ? await fetch("/api/protection/disk-exceptions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workload_id: workloadId, slot }) })
+        : await fetch(`/api/protection/disk-exceptions/${workloadId}/${slot}`, { method: "DELETE" });
+      if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || d.error || "Could not save"); }
+      location.reload();
+    } catch (e) { setErr(e instanceof Error ? e.message : "Could not save"); }
+  }
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = terms.length ? rows.filter((r) => { const hay = [r.name, r.vmid, r.type === "lxc" ? "ct container" : "vm", statusText[r.status], r.plan?.name ?? "", r.covered_by.join(" "), r.problems.join(" "), (r.causes ?? []).map((c) => c.text).join(" ")].join(" ").toLowerCase(); return terms.every((t) => hay.includes(t)); }) : rows;
   const attention = rows.filter((r) => r.status !== "ok").map((r) => r.workload_id);
@@ -105,10 +115,16 @@ export default function ProtectionGuests({ rows, stores, plans }: { rows: GuestR
           })),
           {
             header: "What is wrong, and why",
-            render: (r) => (r.problems.length === 0 && !(r.causes ?? []).length ? <span className="text-xs text-muted">Nothing</span> : (
+            render: (r) => (r.problems.length === 0 && !(r.causes ?? []).length && !(r.notes ?? []).length ? <span className="text-xs text-muted">Nothing</span> : (
               <span className="block text-xs space-y-0.5">
                 {r.problems.map((x, i) => <span key={i} className="block text-warn">{x}</span>)}
                 {(r.causes ?? []).map((c, i) => <span key={i} className={`block ${c.level === "warn" ? "text-bad" : "text-muted"}`}>Why: {c.text}</span>)}
+                {(r.notes ?? []).map((x, i) => <span key={i} className="block text-muted">{x}</span>)}
+                {canEdit && (r.disk_coverage?.excluded ?? []).map((d) => (
+                  <button key={d.slot} className="block text-accent hover:underline" onClick={() => setLeftOut(r.workload_id, d.slot, !d.accepted)}>
+                    {d.accepted ? `Disk ${d.slot}: stop treating as on purpose` : `Disk ${d.slot}: left out on purpose`}
+                  </button>
+                ))}
               </span>)),
           },
         ]}
