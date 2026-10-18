@@ -155,8 +155,15 @@ def build_steps(inp: dict) -> list[dict]:
 
     # 7. notifications
     mail = bool(st.get("smtp_enabled")) and bool(st.get("notification_recipient_set"))
-    add("notifications", "Notifications", "done" if mail else "optional",
-        f"Email on, {st.get('notification_rules', 0)} rule(s)." if mail else "Set an email relay and who gets alerts, so problems reach you.",
+    if mail:
+        mail_txt = f"Email on, {st.get('notification_rules_on', st.get('notification_rules', 0))} rule(s) on with someone to email."
+    elif st.get("smtp_enabled") and st.get("notification_rules_on", 1) and st.get("notification_rules", 0):
+        mail_txt = "Email is on, but no rule that is on has anyone to email. Add an address, or tick all admins, on a rule."
+    elif st.get("smtp_enabled"):
+        mail_txt = "Email is on, but no notification rule is on, so alerts reach no one. Add a rule."
+    else:
+        mail_txt = "Set an email relay and who gets alerts, so problems reach you."
+    add("notifications", "Notifications", "done" if mail else "optional", mail_txt,
         action={"label": "Open email settings", "href": "/platform/settings/email"})
 
     # 8. check

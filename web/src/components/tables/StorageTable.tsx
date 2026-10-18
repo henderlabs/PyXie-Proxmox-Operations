@@ -65,14 +65,14 @@ export default function StorageTable({ storage, defs = [], nodeNames = {} }: { s
           render: (s) => <StatusBadge status={s.is_missing ? "unknown" : s.status} />,
           sortValue: (s) => (s.is_missing ? "unknown" : s.status),
         },
-        { header: "Capacity", render: (s) => formatBytes(s.capacity_bytes), sortValue: (s) => s.capacity_bytes, optional: true },
-        { header: "Used", render: (s) => formatBytes(s.used_bytes), sortValue: (s) => s.used_bytes, optional: true },
+        { header: "Capacity", render: (s) => (s.type === "pbs" ? <span className="text-muted" title="Backup storage is measured on the backup server: see Backup server datastores above">—</span> : formatBytes(s.capacity_bytes)), sortValue: (s) => s.capacity_bytes, optional: true },
+        { header: "Used", render: (s) => (s.type === "pbs" ? <span className="text-muted" title="Backup storage is measured on the backup server: see Backup server datastores above">—</span> : formatBytes(s.used_bytes)), sortValue: (s) => s.used_bytes, optional: true },
         {
           header: "Utilization",
           render: (s) => (
-            <Meter value={s.capacity_bytes && s.used_bytes ? (s.used_bytes / s.capacity_bytes) * 100 : null} width={80} />
+            <Meter value={s.type !== "pbs" && s.capacity_bytes && s.used_bytes ? (s.used_bytes / s.capacity_bytes) * 100 : null} width={80} />
           ),
-          sortValue: (s) => (s.capacity_bytes && s.used_bytes ? (s.used_bytes / s.capacity_bytes) * 100 : null),
+          sortValue: (s) => (s.type !== "pbs" && s.capacity_bytes && s.used_bytes ? (s.used_bytes / s.capacity_bytes) * 100 : null),
         },
       ]}
       />

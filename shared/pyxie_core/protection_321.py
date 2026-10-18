@@ -83,6 +83,44 @@ def score_guest(last_by_store: dict, stores: list[dict], covered_by: list[str], 
             "status": status, "problems": problems, "covered_by": covered_by}
 
 
+def _day(ts) -> str:
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime("%b %-d, %Y")
+
+
+def _disk_label(d: dict) -> str:
+    return f"{d['slot']} ({d['size_bytes'] / (1 << 30):g} GiB)" if d.get("size_bytes") else d["slot"]
+
+
+def apply_disk_coverage(row: dict, disks: list[dict], *, powered_on: bool = True, last_data: dict | None = None, accepted: set | None = None) -> dict:
+    """A guest is only protected when its data disks are in a backup. `disks`: [{slot, size_bytes, backup}] (CD drives left out); a disk with
+    backup=False is never saved by Proxmox. `last_data`: {slot: unix time of the newest backup that holds that disk, or None}. `accepted`: slots
+    left out on purpose. Adds row["disk_coverage"] and row["notes"] (muted lines), and:
+      - accepted disk: a note only;
+      - powered off and an earlier backup holds the disk: a note naming the last complete backup (a stopped guest is not started for a backup);
+      - otherwise a problem (running: changes since the last backup holding it are not saved; no backup holds it at all) and 'ok' becomes 'partial'. Pure."""
+    last_data, accepted = last_data or {}, accepted or set()
+    total = len(disks)
+    left_out = [d for d in disks if d.get("backup") is False]
+    row["disk_coverage"] = {"total": total, "included": total - len(left_out),
+                            "excluded": [{"slot": d["slot"], "size_bytes": d.get("size_bytes"), "accepted": d["slot"] in accepted, "last_backup": last_data.get(d["slot"])} for d in left_out]}
+    row.setdefault("notes", [])
+    for d in left_out:
+        lab, last = _disk_label(d), last_data.get(d["slot"])
+        if d["slot"] in accepted:
+            row["notes"].append(f"Disk {lab} is left out of backups on purpose")
+        elif last and not powered_on:
+            row["notes"].append(f"Powered off. Disk {lab} has backup turned off, but the last complete backup ({_day(last)}) holds it: restoring gives the guest as it was then")
+        elif last:
+            row["problems"].append(f"Disk {lab} has backup turned off: the newest backup that holds it is from {_day(last)}, so changes since then are not saved")
+        elif len(left_out) == total:
+            row["problems"].append(f"No backup holds the data of disk {lab} (backup is turned off for it): a restore gives an empty guest. Turn backup on for the disk (Hardware tab)")
+        else:
+            row["problems"].append(f"No backup holds the data of disk {lab} (backup is turned off for it)")
+        if d["slot"] not in accepted and not (last and not powered_on) and row["status"] == "ok":
+            row["status"] = "partial"
+    return row
+
+
 def store_notes(store: dict, prune: list[dict], verify: list[dict], sync_into: list[dict], newest: Optional[int], now: float,
                 offsite_max_age_h: int = OFFSITE_MAX_AGE_H) -> list[dict]:
     """Warnings about one datastore, as {level, text}."""

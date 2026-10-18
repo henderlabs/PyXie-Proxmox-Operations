@@ -21,7 +21,7 @@ from .node_ready import node_not_ready
 from .operations_engine import OperationError, approve_operation, block_operation, create_operation, enter_stage, fail_operation
 from .pve_permissions import friendly_error, missing_privileges, permission_reason
 from .pve_write_client import MutationsDisabledError, PveMaintenanceClient, TaskTimeoutError, self_vmid_from_env
-from .restore_points import VOLID_RE, config_disks, config_nets, net_is_down, net_with_link, parse_config_text
+from .restore_points import VOLID_RE, config_disks, config_nets, describe_disks, disks_not_in_backup, net_is_down, net_with_link, parse_config_text
 from .tags_workflow import split_tags
 from .vm_create import VM_NAME_RE
 
@@ -146,6 +146,24 @@ def dry_run_restore(db, source: Workload, *, volid: str, mode: str, newid: int |
             if pool and pool not in {p.get("poolid") for p in client.pools() or []}:
                 reasons.append(f"the pool '{pool}' does not exist in Proxmox")
                 blocking.append("SAFE-RESTORE-001")
+            # what comes back, against what the guest has now (a disk with backup=0 is never in a backup)
+            if cfg:
+                if not disks:
+                    reasons.append("this backup holds no disk data, only the guest's settings. " + (
+                        "Overwriting would leave the guest with empty disks: restore it as a new guest instead, or pick another backup" if overwrite else
+                        "The new guest would have no disks with data"))
+                    blocking.append("SAFE-RESTORE-003")
+                else:
+                    reasons.append(f"what comes back from this backup: {describe_disks(disks)}")
+                live_src = used.get(source.vmid)
+                if live_src is not None:
+                    try:
+                        left_out = disks_not_in_backup(gk.config(client, source, live_src.get("node") or src_node.name), disks, kind)
+                    except Exception:  # noqa: BLE001
+                        left_out = []
+                    if left_out:
+                        reasons.append(f"NOT in this backup (backup was turned off for them): {describe_disks(left_out)}. " + (
+                            "An overwrite replaces the guest's disks, so these are lost" if overwrite else "The new guest will not have them"))
             if overwrite:
                 vmid = source.vmid
                 live = used.get(vmid)

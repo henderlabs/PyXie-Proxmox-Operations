@@ -71,7 +71,7 @@ class RestoreRequest(BaseModel):
 @router.post("/dry-run", dependencies=[Depends(require_admin)])
 def dry_run(payload: RestoreRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
     w = _workload(db, payload.workload_id)
-    for o in db.query(Operation).filter(Operation.operation_type_id == "workload.restore", Operation.status.in_(LIVE)).all():
+    for o in db.query(Operation).filter(Operation.operation_type_id == "workload.restore", Operation.status.in_(LIVE), Operation.dismissed.is_(False)).all():
         if (o.context or {}).get("source_workload_id") == str(w.id):
             raise HTTPException(409, "a restore of this guest is already open: confirm or cancel it first")
     op = dry_run_restore(db, w, volid=payload.volid, mode=payload.mode, newid=payload.newid, name=payload.name, target_node=payload.node, storage=payload.storage,

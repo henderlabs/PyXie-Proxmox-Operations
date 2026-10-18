@@ -6,6 +6,9 @@ const UUID = /^[0-9a-fA-F-]{36}$/;
 
 export async function GET(_req: NextRequest, { params }: { params: { path: string[] } }) {
   const [a, b] = params.path;
+  if (params.path.length === 1 && a === "guest-summary") {
+    try { return NextResponse.json(await apiFetch("/api/backup-policies/guest-summary")); } catch (e) { return fail(e); }
+  }
   if (a !== "workload" || !b || !UUID.test(b) || params.path.length !== 2) return NextResponse.json({ error: "not found" }, { status: 404 });
   try { return NextResponse.json(await apiFetch(`/api/backup-policies/workload/${b}`)); } catch (e) { return fail(e); }
 }

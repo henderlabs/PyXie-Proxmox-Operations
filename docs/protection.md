@@ -32,6 +32,15 @@ Under each guest every restore point has a **Retention** chip, worked out the wa
 - A datastore is **offsite** when it is S3-backed or its name contains "offsite".
 - A backup counts when it is under 48 hours old. An offsite copy counts while it is within what its feeding job's schedule allows: 35 days for a monthly job, 9 days for a weekly one, 48 hours for a daily one. PyXie takes the schedule from the datastore's sync job, or its prune job if no sync job is visible.
 - 3-2-1 is met when there are at least 3 copies (the live guest plus two fresh backups), at least 2 kinds of storage (for example disk and S3), and a fresh offsite copy.
+- **Disks count too.** A disk with *Backup* turned off (`backup=0` on the disk line) is never saved by Proxmox. PyXie looks in the backups for the newest one that really holds that disk:
+  - **Guest running, no backup holds the disk:** Partly protected. A restore gives a guest with empty disks. Turn backup on for the disk (Hardware tab).
+  - **Guest running, an older backup holds the disk:** Partly protected. Changes since that backup are not saved.
+  - **Guest powered off, an earlier backup holds the disk:** stays as the copies say, with a note naming the last complete backup. PyXie never powers a guest on for a backup (it may be off for a reason); a stopped guest stays in its plan and is backed up as it is.
+  - **Guest powered off, no backup holds the disk:** Partly protected, same as running.
+  - **Left out on purpose:** use the link on the guest's row. The guest then keeps its result and the row says so. The link only records the decision in PyXie; nothing changes in Proxmox, and you can withdraw it.
+  Counts on the Dashboard and the Protection page come from the same calculation, over current guests only.
+- **From the Workloads page.** The Workloads list has a **Backup** column (the plan the guest follows, the same setting as the drop-down on this page, and how many of its disks are left out; you can sort and search it). A guest's **Backup** tab lists its disks with *Backed up* or *Left out*, a *Mark on purpose* link, and the plan drop-down; its **Hardware** tab shows *In backups* or *Left out of backups* beside each disk, and clicking it opens the usual preview to change the disk's *Include in backups* setting. When a guest's plan is *No backup*, its disks show *Not backed up (no plan)*.
+- 3-2-1 describes copies and their age. It does not prove that a backup can be restored; use *Verify* and a test restore for that.
 
 A Proxmox Backup Server is managed from this page too (status, jobs, patching, access): see [adding-a-pbs.md](adding-a-pbs.md).
 

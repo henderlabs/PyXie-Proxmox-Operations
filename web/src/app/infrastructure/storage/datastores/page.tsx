@@ -15,8 +15,10 @@ export default async function DatastoresPage() {
 
   // Excludes is_missing -- a storage entry PVE no longer reports isn't real capacity.
   const present = storage.filter((s) => !s.is_missing);
-  const totalCapacity = present.reduce((sum, s) => sum + (s.capacity_bytes ?? 0), 0);
-  const totalUsed = present.reduce((sum, s) => sum + (s.used_bytes ?? 0), 0);
+  // Backup storage (type pbs) is measured on the backup server, where S3 has no fixed size and namespaces share one datastore: not summed here.
+  const sized = present.filter((s) => s.type !== "pbs");
+  const totalCapacity = sized.reduce((sum, s) => sum + (s.capacity_bytes ?? 0), 0);
+  const totalUsed = sized.reduce((sum, s) => sum + (s.used_bytes ?? 0), 0);
   const isoStores = defs.filter((d) => d.content.includes("iso") && !d.disabled).length;
 
   return (
@@ -29,6 +31,7 @@ export default async function DatastoresPage() {
         <StatTile label="Total Used" value={formatBytes(totalUsed)} />
         <StatTile label="Free" value={formatBytes(totalCapacity - totalUsed)} />
       </div>
+      <div className="text-xs text-muted -mt-3 mb-4">Totals cover VM, container and ISO storage. Backup storage is counted on the backup server cards below.</div>
       <BackupStorage title="Backup server datastores" />
       <StorageTable storage={storage} defs={defs} nodeNames={Object.fromEntries(nodes.map((n) => [n.id, n.name]))} />
     </div>

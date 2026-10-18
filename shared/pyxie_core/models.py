@@ -1098,6 +1098,21 @@ class WorkloadDisk(Base):
     __table_args__ = (UniqueConstraint("workload_id", "slot", name="uq_workload_disk_slot"),)
 
 
+class DiskBackupException(Base):
+    """A disk that is left out of backups ON PURPOSE (backup=0 and nobody wants it saved): Protection shows the guest as accepted, not partly protected."""
+
+    __tablename__ = "disk_backup_exceptions"
+
+    id = uuid_pk()
+    workload_id = Column(UUID(as_uuid=True), ForeignKey("workloads.id", ondelete="CASCADE"), nullable=False)
+    slot = Column(String, nullable=False)
+    note = Column(String, nullable=True)
+    created_by = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+
+    __table_args__ = (UniqueConstraint("workload_id", "slot", name="uq_disk_backup_exception"),)
+
+
 class WorkloadNic(Base):
     __tablename__ = "workload_nics_report"
 

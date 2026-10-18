@@ -6,7 +6,7 @@ import time
 from sqlalchemy.orm import Session
 
 from .crypto import decrypt_secret
-from .models import Cluster, PveTarget, ProtectionCredential, ProtectionTarget, Workload
+from .models import Cluster, PveTarget, ProtectionCredential, ProtectionTarget, Workload, WorkloadDisk, DiskBackupException
 from .pbs_client import PbsClient, PbsCredentials
 from . import protection_321 as p321
 from .protection_workflow import list_pbs_backup_jobs
@@ -21,6 +21,38 @@ def _pbs_targets(db: Session):
             ProtectionCredential.protection_target_id == t.id, ProtectionCredential.slot_name == "inventory").one_or_none())
         if c:
             yield t, PbsCredentials(t.hostname, t.api_port, c.token_user, c.token_id, decrypt_secret(c.encrypted_secret), t.tls_verify)
+
+
+def _disk_file_matches(kind: str, slot: str, filename: str) -> bool:
+    if kind == "vm":
+        return filename.startswith(f"drive-{slot}.img")
+    return filename.startswith("root.pxar") if slot == "rootfs" else filename.startswith(f"{slot}.pxar")
+
+
+def _newest_disk_backups(db: Session, need: dict) -> dict:
+    """need: {workload_id: (kind, vmid, [slots])} -> {workload_id: {slot: newest backup time that holds that disk, or None}}. Read only; one snapshot listing per
+    datastore namespace and guest, and only for guests that have a disk left out of backups."""
+    out = {wid: {s: None for s in slots} for wid, (_k, _v, slots) in need.items()}
+    if not need:
+        return out
+    for _t, creds in _pbs_targets(db):
+        try:
+            with PbsClient(creds) as pc:
+                for d in pc.datastores() or []:
+                    for ns in pc.namespaces(d["store"]):
+                        for wid, (kind, vmid, slots) in need.items():
+                            try:
+                                snaps = pc.snapshots(d["store"], kind, vmid, ns) or []
+                            except Exception:
+                                continue
+                            for sn in snaps:
+                                names = [str(f.get("filename", "")) for f in (sn.get("files") or [])]
+                                for slot in slots:
+                                    if any(_disk_file_matches(kind, slot, n) for n in names):
+                                        out[wid][slot] = max(out[wid][slot] or 0, int(sn["backup-time"]))
+        except Exception:
+            continue
+    return out
 
 
 def build_scorecard(db: Session, now: float | None = None) -> dict:
@@ -115,12 +147,28 @@ def build_scorecard(db: Session, now: float | None = None) -> dict:
         for wid, r in res.items():
             resolved[wid] = {"policy_id": r["policy_id"], "name": names.get(r["policy_id"]), "source": r["source"], "exempt": r["policy_id"] is None}
 
+    disks_by_wl: dict = {}
+    for d in db.query(WorkloadDisk).filter(WorkloadDisk.is_cdrom.is_(False)).all():
+        disks_by_wl.setdefault(str(d.workload_id), []).append({"slot": d.slot, "size_bytes": d.size_bytes, "backup": d.backup})
+    accepted_by_wl: dict = {}
+    for e in db.query(DiskBackupException).all():
+        accepted_by_wl.setdefault(str(e.workload_id), set()).add(e.slot)
+    # for a guest with a disk left out of backups: the newest backup anywhere that still holds that disk
+    need = {}
+    for w in db.query(Workload).filter(Workload.is_missing.is_(False), Workload.is_template.is_(False)).all():
+        slots = [d["slot"] for d in disks_by_wl.get(str(w.id), []) if d["backup"] is False and d["slot"] not in accepted_by_wl.get(str(w.id), set())]
+        if slots:
+            need[str(w.id)] = ({"vm": "vm", "lxc": "ct"}.get(w.type), str(w.vmid), slots)
+    last_data = _newest_disk_backups(db, need)
+
     rows = []
     type_map = {"vm": "vm", "lxc": "ct"}
     for w in db.query(Workload).filter(Workload.is_missing.is_(False), Workload.is_template.is_(False)).order_by(Workload.name).all():
         key = (type_map.get(w.type), str(w.vmid))
         row = p321.score_guest(last.get(key, {}), stores, covered.get(str(w.id), []), now)
         row.update({"workload_id": str(w.id), "vmid": w.vmid, "name": w.name, "type": w.type, "tags": getattr(w, "tags", None)})
+        p321.apply_disk_coverage(row, sorted(disks_by_wl.get(str(w.id), []), key=lambda d: d["slot"]), powered_on=getattr(w, "status", None) != "stopped",
+                                 last_data=last_data.get(str(w.id)), accepted=accepted_by_wl.get(str(w.id), set()))
         plan = resolved.get(str(w.id)) or {"policy_id": None, "name": None, "source": None, "exempt": False}
         row["plan"] = {**plan, "cluster_id": str(w.cluster_id)}
         row["state"] = getattr(w, "status", None)

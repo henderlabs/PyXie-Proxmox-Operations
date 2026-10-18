@@ -56,6 +56,27 @@ def config_disks(cfg: dict, kind: str) -> list[dict]:
     return out
 
 
+def disks_not_in_backup(current_cfg: dict, backup_disks: list[dict], kind: str) -> list[dict]:
+    """The disks the guest has now that a backup does not hold: [{key, size, storage}]. A disk is left out of a backup when it has backup=0.
+    `backup_disks` is config_disks() of the configuration inside the backup. CD drives and bind mounts are not data disks. Pure."""
+    rx = LXC_DISK_RE if kind == "ct" else QEMU_DISK_RE
+    held = {d["key"] for d in backup_disks}
+    out = []
+    for k, v in (current_cfg or {}).items():
+        v = str(v)
+        if not rx.match(k) or k in held or v.startswith("none") or "media=cdrom" in v or v.startswith("/"):
+            continue
+        first = v.split(",")[0]
+        size = next((p.split("=", 1)[1] for p in v.split(",")[1:] if p.startswith("size=")), None)
+        out.append({"key": k, "size": _size(size), "storage": first.split(":")[0] if ":" in first else None})
+    return sorted(out, key=lambda d: d["key"])
+
+
+def describe_disks(disks: list[dict]) -> str:
+    """'scsi0 (101 GiB), scsi1 (20 GiB)'. Pure."""
+    return ", ".join(f"{d['key']} ({d['size'] / (1 << 30):g} GiB)" if d.get("size") else d["key"] for d in disks)
+
+
 def config_nets(cfg: dict) -> dict:
     return {k: str(v) for k, v in cfg.items() if NET_RE.match(k)}
 

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { apiFetch } from "@/lib/api";
-import type { AuditEvent, DashboardSummary, Finding, ProtectionResultRow, Recommendation } from "@/lib/api";
+import type { AuditEvent, DashboardSummary, Finding, Recommendation } from "@/lib/api";
 import { Card, CardTitle, PageHeader } from "@/components/Card";
 import StatusBadge from "@/components/StatusBadge";
 import RebootBanner from "@/components/RebootBanner";
@@ -14,6 +14,8 @@ import { BalanceGauge, NodeBalanceStrip } from "@/components/ClusterBalance";
 import { ServerIcon, ClusterIcon, StorageIcon, CpuIcon, MemoryIcon, DashboardIcon, ShieldIcon, HealthIcon, WrenchIcon } from "@/components/Icons";
 import { formatBytes } from "@/lib/format";
 
+type ProtectionSummary = { ok: number; partial: number; none: number; total: number; has_backup_server: boolean } | null;
+
 type SnapshotsSummary = {
   total: number; workloads: number; oldest_days: number | null; warn_days: number; crit_days: number; aged: number; aged_critical: number;
   oldest: { workload_id: string; vmid: number; workload_name: string | null; snapshot: string; age_days: number | null }[];
@@ -25,12 +27,12 @@ export default async function DashboardPage() {
   // (1-3+ seconds each, measured 2026-09-12), blocking the entire
   // Dashboard on it. Isolated into its own client component instead, same
   // fix already applied to Nodes/Maintenance.
-  const [summary, findings, activity, recommendations, protectionResults, autoBalance, snapshots] = await Promise.all([
+  const [summary, findings, activity, recommendations, protection, autoBalance, snapshots] = await Promise.all([
     apiFetch<DashboardSummary>("/api/dashboard/summary"),
     apiFetch<Finding[]>("/api/findings?active=true"),
     apiFetch<AuditEvent[]>("/api/audit-events?limit=8"),
     apiFetch<Recommendation[]>("/api/recommendations"),
-    apiFetch<ProtectionResultRow[]>("/api/protection/results"),
+    apiFetch<ProtectionSummary>("/api/protection/summary").catch(() => null),
     apiFetch<AutoBalanceView[]>("/api/auto-balance").catch(() => [] as AutoBalanceView[]),
     apiFetch<SnapshotsSummary>("/api/workloads/snapshots-summary").catch(() => null),
   ]);
@@ -46,10 +48,7 @@ export default async function DashboardPage() {
     .sort((a, b) => (severityRank(a.severity) - severityRank(b.severity)))
     .slice(0, 5);
 
-  const protectedCount = protectionResults.filter((r) => r.protected === "true").length;
-  const unprotectedCount = protectionResults.filter((r) => r.protected === "false").length;
-  const unknownCount = protectionResults.filter((r) => r.protected === "unknown").length;
-  const hasProtectionData = protectionResults.length > 0;
+  const hasProtectionData = !!protection && protection.total > 0 && protection.has_backup_server;
 
   const cpuValues = summary.nodes_detail.map((n) => n.cpu_usage_pct).filter((v): v is number => v !== null);
   const memValues = summary.nodes_detail.map((n) => n.mem_usage_pct).filter((v): v is number => v !== null);
@@ -157,7 +156,13 @@ export default async function DashboardPage() {
           <div className="flex items-center gap-2 mb-3">
             <HealthIcon className="w-4 h-4 text-proxmox/70" />
             <span className="text-xs font-semibold uppercase tracking-wider text-muted">Health</span>
-            <StatusBadge status={summary.cluster_status} />
+            {summary.cluster_status === "healthy" && issueCount > 0 ? (
+              <span className={`text-xs font-medium ${criticalCount > 0 ? "text-bad" : "text-warn"}`}>
+                {criticalCount > 0 ? `${criticalCount} critical` : "No critical findings"}{issueCount - criticalCount > 0 ? ` · ${issueCount - criticalCount} warning${issueCount - criticalCount === 1 ? "" : "s"} to review` : ""}
+              </span>
+            ) : (
+              <StatusBadge status={summary.cluster_status} />
+            )}
           </div>
           <div className="grid grid-cols-2 gap-4 text-center">
             <Link href="/operations/maintenance" className="hover:underline">
@@ -175,29 +180,32 @@ export default async function DashboardPage() {
       <Card>
         <CardTitle>Protection</CardTitle>
         {hasProtectionData ? (
+          <>
           <div className="grid grid-cols-3 gap-4 text-center">
-            <div>
+            <Link href="/operations/protection" className="hover:underline">
               <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
                 <ShieldIcon className="w-4 h-4 text-good/70" />
-                Protected
+                3-2-1 met
               </div>
-              <div className="text-xl font-semibold text-good">{protectedCount}</div>
-            </div>
-            <div>
+              <div className="text-xl font-semibold text-good">{protection!.ok}</div>
+            </Link>
+            <Link href="/operations/protection" className="hover:underline">
+              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
+                <ShieldIcon className="w-4 h-4 text-warn/70" />
+                Partly protected
+              </div>
+              <div className="text-xl font-semibold text-warn">{protection!.partial}</div>
+            </Link>
+            <Link href="/operations/protection" className="hover:underline">
               <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
                 <ShieldIcon className="w-4 h-4 text-bad/70" />
-                Unprotected
+                Not protected
               </div>
-              <div className="text-xl font-semibold text-bad">{unprotectedCount}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
-                <ShieldIcon className="w-4 h-4 text-muted/70" />
-                Unknown
-              </div>
-              <div className="text-xl font-semibold text-muted">{unknownCount}</div>
-            </div>
+              <div className="text-xl font-semibold text-bad">{protection!.none}</div>
+            </Link>
           </div>
+          <div className="text-xs text-muted mt-2 text-center">of {protection!.total} current guests, the same count as the Protection page</div>
+          </>
         ) : (
           <div className="text-sm text-muted py-2">No protection provider configured yet -- see Operations → Protection.</div>
         )}

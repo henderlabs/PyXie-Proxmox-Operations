@@ -13,6 +13,7 @@ from pyxie_core.credentials import CredentialNotConfigured, load_pve_credentials
 from pyxie_core.models import (
     AppSettings, Cluster, HostMaintenanceCredential, Node, NotificationRule, ProtectionCredential, ProtectionTarget, PveCredential, PveTarget, Site, Workload,
 )
+from pyxie_core.notifications import resolve_recipients
 from pyxie_core.pve_client import PveClient
 from pyxie_core.pve_write_client import PveMaintenanceClient
 from pyxie_core.setup_status import build_steps, progress, server_checks
@@ -44,6 +45,7 @@ def _inputs(db: Session) -> dict:
             nodes_out.append({"name": n.name, "target_id": str(t.id), "pinned": bool(n.ssh_host_key_base64),
                               "wrapper_version": n.wrapper_version, "failover_enabled": n.failover_enabled is not False})
     s = db.query(AppSettings).filter(AppSettings.id == 1).one_or_none()
+    rules_on = db.query(NotificationRule).filter(NotificationRule.enabled.is_(True)).all()
     pbs = []
     for pt in db.query(ProtectionTarget).order_by(ProtectionTarget.name).all():
         slots = {c.slot_name for c in db.query(ProtectionCredential).filter(ProtectionCredential.protection_target_id == pt.id).all()}
@@ -60,8 +62,10 @@ def _inputs(db: Session) -> dict:
             "pve_mutations_enabled": bool(s and s.pve_mutations_enabled),
             "console_enabled": bool(s and s.console_enabled),
             "smtp_enabled": bool(s and s.smtp_enabled),
-            "notification_recipient_set": bool(s and s.notification_recipient),
+            # alerts only reach someone when a rule that is ON resolves to at least one address (its own list, or all active admins)
+            "notification_recipient_set": any(resolve_recipients(db, r) for r in rules_on),
             "notification_rules": db.query(NotificationRule).count(),
+            "notification_rules_on": len(rules_on),
         },
     }
 
@@ -192,9 +196,17 @@ def run_check(db: Session = Depends(get_db)):
     out.append(_chk("Settings", "Writes to Proxmox", "ok" if s["pve_mutations_enabled"] else "info",
                     "On." if s["pve_mutations_enabled"] else "Off: previews work, nothing is changed until you switch it on in Settings."))
     out.append(_chk("Settings", "Embedded console", "ok" if s["console_enabled"] else "info", "On." if s["console_enabled"] else "Off (optional)."))
-    out.append(_chk("Notifications", "Email alerts", "ok" if (s["smtp_enabled"] and s["notification_recipient_set"]) else "warn",
-                    f"Email relay on, {s['notification_rules']} rule(s)." if (s["smtp_enabled"] and s["notification_recipient_set"]) else "No working email setup, so alerts will not reach anyone.",
-                    "" if (s["smtp_enabled"] and s["notification_recipient_set"]) else "Settings > Email."))
+    ready = bool(s["smtp_enabled"] and s["notification_recipient_set"])
+    if ready:
+        note = f"Email relay on, {s['notification_rules_on']} rule(s) on with someone to email."
+        fix = ""
+    elif not s["smtp_enabled"]:
+        note, fix = "No email relay is set up, so alerts will not reach anyone.", "Settings > Email."
+    elif not s["notification_rules_on"]:
+        note, fix = "No notification rule is on, so alerts will not reach anyone.", "Settings > Notifications: add a rule."
+    else:
+        note, fix = "A notification rule is on but has no one to email, so alerts will not reach anyone.", "Settings > Notifications: add an address or tick all admins."
+    out.append(_chk("Notifications", "Email alerts", "ok" if ready else "warn", note, fix))
     order = {"fail": 0, "warn": 1, "info": 2, "ok": 3}
     summary = {k: sum(1 for c in out if c["status"] == k) for k in order}
     return {"checks": out, "summary": summary, "ran_at": datetime.now(timezone.utc).isoformat()}
