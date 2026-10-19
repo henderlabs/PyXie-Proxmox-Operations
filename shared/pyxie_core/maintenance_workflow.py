@@ -80,9 +80,9 @@ def dry_run_maintenance(
     )
 
     reasons: list[str] = [
-        "this run includes real Stage W4 package patching -- its own preflight (wrapper reachability, "
-        "disk headroom, plan) is checked again when the patch stage actually runs, not here; reboot only "
-        "happens if W4's post-apply verification determines one is required."
+        "this run installs package updates. Before installing, it checks again that the host can be reached for patching, "
+        "has enough disk space and that nothing else is running (that check happens when the update step starts, not in this preview, "
+        "so what is shown here may change); a reboot only happens if the update says one is needed."
         + (" A reboot will happen regardless, per the 'reboot anyway' option." if force_reboot else ""),
         (
             "once patched (and rebooted, if needed) every VM moved off will be migrated back to this node "

@@ -41,7 +41,7 @@ def ct_options(db, cluster: Cluster) -> dict:
     client, _cred = build_pve_client(db, target)
     with client:
         for n in nodes:
-            row = {"name": n.name, "online": n.status == "online", "maintenance": bool(n.maintenance_mode), "mem_total": None, "mem_used": None, "storages": []}
+            row = {"name": n.name, "online": n.status == "online", "maintenance": bool(n.maintenance_mode), "mem_total": None, "mem_used": None, "storages": [], "template_storages": []}
             try:
                 st = client.node_status(n.name) or {}
                 row["mem_total"], row["mem_used"] = (st.get("memory") or {}).get("total"), (st.get("memory") or {}).get("used")
@@ -52,6 +52,7 @@ def ct_options(db, cluster: Cluster) -> dict:
                     if "rootdir" in content:
                         row["storages"].append({"name": r["storage"], "type": r.get("type"), "avail": r.get("avail"), "shared": bool(r.get("shared"))})
                     if "vztmpl" in content:
+                        row["template_storages"].append({"name": r["storage"], "type": r.get("type"), "avail": r.get("avail")})
                         for c in client.storage_content(n.name, r["storage"], "vztmpl") or []:
                             e = seen.setdefault(c["volid"], {"volid": c["volid"], "size": c.get("size"), "nodes": []})
                             e["nodes"].append(n.name)

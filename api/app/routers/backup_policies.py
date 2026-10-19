@@ -137,6 +137,19 @@ def _disks_by_workload(db: Session) -> tuple[dict, dict]:
     return disks, accepted
 
 
+@router.get("/default-plan")
+def default_plan(cluster_id: uuid.UUID, db: Session = Depends(get_db)):
+    """The plan every new guest follows in this cluster (for the New VM wizard)."""
+    cluster = _cluster(db, cluster_id)
+    policies, assignments = load_state(db, cluster)
+    asg = next((a for a in assignments if a["scope_type"] == "cluster" and a.get("policy_id")), None)
+    pol = next((p for p in policies if asg and p["id"] == asg["policy_id"]), None)
+    if pol is None:
+        return {"policy": None}
+    return {"policy": {"id": pol["id"], "name": pol["name"], "retention": describe_retention(pol), "schedule": pol["schedule"], "storage": pol["storage"],
+                       "copies": [f"{ly['store']}{'/' + ly['namespace'] if ly['namespace'] else ''} ({ly['schedule']})" for ly in pol.get("layers") or []]}}
+
+
 @router.get("/guest-summary")
 def guest_summary(db: Session = Depends(get_db)):
     """For the Workloads list: each guest's backup plan (the same one Protection shows) and how many of its disks are left out of backups. Inventory only, no Proxmox calls."""

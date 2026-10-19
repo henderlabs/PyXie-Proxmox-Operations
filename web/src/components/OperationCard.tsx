@@ -131,6 +131,17 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "storage.iso_delete": "Delete ISO",
   "storage.iso_enable": "Enable ISO Images",
   "workload.hw_change": "Change Machine / CPU Type",
+  "workload.restore": "Restore Guest",
+  "workload.disk_change": "Change Disk",
+  "workload.resize": "Resize Guest",
+  "backup.policy_change": "Change Backup Plan",
+  "pbs.datastore_change": "Change Backup Datastore",
+  "pbs.storage_add": "Add Backup Storage",
+  "protection.backup_membership": "Change Backup Job Guests",
+  "protection.backup_retention": "Change Backup Retention",
+  "pool.create": "Create Pool",
+  "pool.delete": "Delete Pool",
+  "pool.members": "Change Pool Members",
 };
 
 /** Bulk Migrate is a cluster.rebalance whose plan was built from ticked VMs
@@ -520,7 +531,7 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
                   `Storage: now ${item.current_storage || "unknown"}${item.currently_on_shared ? " (shared -- reachable from any node)" : " (node-local)"}. ` +
                   (item.destination_storage
                     ? `After the move: ${item.destination_storage} (${item.destination_storage_scope === "cluster-shared" ? "shared" : "node-local on the destination"}); the disks are copied there. Informational: it follows the destination host's preferred storage.`
-                    : "No storage change planned: the disks stay where they are.")
+                    : (item.currently_on_shared ? "The disks are on shared storage, so nothing is copied." : "The disks are on this host's own storage: they are copied to the same storage name on the new host, which takes time and network."))
                 }
               >
                 {item.destination_storage ? (
@@ -528,7 +539,7 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
                     {item.current_storage || "?"} → <span className="text-text">{item.destination_storage}</span>
                   </>
                 ) : (
-                  <>on {item.current_storage} (stays)</>
+                  <>{item.currently_on_shared ? <>shared {item.current_storage}: no disk copy</> : <>{item.current_storage} → same storage name on the new host: the disks are copied</>}</>
                 )}
               </span>
             )}

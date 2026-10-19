@@ -52,7 +52,7 @@ export default async function MaintenancePage({
     <div>
       <PageHeader
         title="Maintenance"
-        subtitle="Node evacuation, guest shutdown/start, host updates, host reboot, and full maintenance runs -- every action previews first; most only run after you approve, except Apply Updates, which auto-applies once its own check comes back clean."
+        subtitle="Node evacuation, guest shutdown/start, host updates, host reboot, and full maintenance runs. Each button says what it does: preview only, needs approval, or applies after its own check (Apply Updates only)."
         icon={<WrenchIcon className="w-5 h-5" />}
       />
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Table } from "@/components/Table";
 import RestorePoints from "@/components/RestorePoints";
@@ -20,7 +20,7 @@ export type GuestRow = {
 };
 export type PlansByCluster = Record<string, { id: string; name: string; is_default: boolean }[]>;
 
-const statusText = { ok: "3-2-1 met", partial: "Partly protected", none: "Not protected" } as const;
+const statusText = { ok: "3-2-1 copies met", partial: "Partly protected", none: "Not protected" } as const;
 const statusColor = { ok: "text-good", partial: "text-warn", none: "text-bad" } as const;
 const order = { none: 0, partial: 1, ok: 2 } as const;
 const sel = "bg-surface border border-border rounded px-2 py-1 text-xs max-w-[15rem]";
@@ -30,6 +30,7 @@ export default function ProtectionGuests({ rows, stores, plans }: { rows: GuestR
   const me = useMe();
   const canEdit = me === undefined || me?.is_admin === true;
   const [q, setQ] = useState("");
+  useEffect(() => { const g = new URLSearchParams(window.location.search).get("guest"); if (g) setQ(g); }, []);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pend, setPend] = useState<{ op: Operation; name: string } | null>(null);

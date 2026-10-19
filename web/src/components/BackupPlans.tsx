@@ -183,14 +183,14 @@ function PlanView({ p, onEdit, onDelete }: { p: Plan; onEdit: () => void; onDele
           : <span className="text-xs text-muted">{[p.tags.length ? `tagged ${p.tags.join(", ")}` : null, p.set_by_hand ? `${p.set_by_hand} chosen by hand` : null].filter(Boolean).join("; ") || "no guest uses it yet"}</span>}
         {!p.enabled && <span className="text-warn text-xs">(switched off)</span>}
         <span className="flex-1" />
-        <span className={`text-xs ${p.three_two_one.ok ? "text-good" : "text-warn"}`} title={p.three_two_one.missing.join("; ")}>{p.three_two_one.ok ? "3-2-1 met" : `3-2-1: needs ${p.three_two_one.missing.join("; ")}`}</span>
+        <span className={`text-xs ${p.three_two_one.ok ? "text-good" : "text-warn"}`} title={p.three_two_one.missing.join("; ")}>{p.three_two_one.ok ? "3-2-1 copies met" : `3-2-1: needs ${p.three_two_one.missing.join("; ")}`}</span>
         <button type="button" onClick={onEdit} className="text-xs text-accent hover:underline">Edit</button>
         {onDelete && <button type="button" disabled={onDelete === "in use"} title={onDelete === "in use" ? "In use: give its guests another plan first" : "Delete this plan"} onClick={() => typeof onDelete === "function" && onDelete()} className={onDelete === "in use" ? "text-xs text-muted cursor-not-allowed" : "text-xs text-bad hover:underline"}>Delete</button>}
       </div>
       <ol className="mt-2 space-y-0.5 text-xs">
         <li><span className="text-text">1. Back up</span> {human(p.schedule)} to <span className="text-text">{p.storage}</span>{p.datastore && p.datastore !== p.storage ? <span className="text-muted"> ({p.datastore})</span> : null}: {keepWords(p as unknown as Record<string, unknown>)}</li>
         {p.layers.map((l, i) => <li key={i}><span className="text-text">{i + 2}. Copy</span> {human(l.schedule)} to <span className="text-text">{l.store}{l.namespace ? ` / ${l.namespace}` : ""}</span>: {l.namespace || p.is_default ? keepWords(l) : "kept by the datastore's own rules"}</li>)}
-        <li className="text-muted">Maintenance: {maint || "none switched on"}</li>
+        <li className="text-muted">Maintenance: {maint || "not managed by this plan (jobs already on the backup server stay as they are)"}</li>
       </ol>
       {p.warnings.filter((w) => w.level !== "info").map((w, i) => <div key={i} className={`text-xs mt-1 ${w.level === "bad" ? "text-bad" : "text-warn"}`}>{w.text}</div>)}
     </div>

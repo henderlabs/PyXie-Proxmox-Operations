@@ -27,7 +27,7 @@ type Server = { id: string; name: string; hostname: string; status: { reachable:
 
 const when = (s: number | null) => (s ? new Date(s * 1000).toLocaleDateString() : "never");
 const noteColor = (l: string) => (l === "bad" ? "text-bad" : l === "info" ? "text-muted" : "text-warn");
-const statusText = { ok: "3-2-1 met", partial: "Partly protected", none: "Not protected" } as const;
+const statusText = { ok: "3-2-1 copies met", partial: "Partly protected", none: "Not protected" } as const;
 const statusColor = { ok: "text-good", partial: "text-warn", none: "text-bad" } as const;
 
 export default async function BackupServersPage() {

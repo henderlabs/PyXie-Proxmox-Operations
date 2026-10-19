@@ -4,8 +4,11 @@ import { apiFetch, ApiError } from "@/lib/api";
 const fail = (e: unknown) => NextResponse.json({ error: (e as Error).message }, { status: e instanceof ApiError ? e.status : 500 });
 const UUID = /^[0-9a-fA-F-]{36}$/;
 
-export async function GET(_req: NextRequest, { params }: { params: { path: string[] } }) {
+export async function GET(req: NextRequest, { params }: { params: { path: string[] } }) {
   const [a, b] = params.path;
+  if (params.path.length === 1 && a === "default-plan") {
+    try { return NextResponse.json(await apiFetch(`/api/backup-policies/default-plan${req.nextUrl.search}`)); } catch (e) { return fail(e); }
+  }
   if (params.path.length === 1 && a === "guest-summary") {
     try { return NextResponse.json(await apiFetch("/api/backup-policies/guest-summary")); } catch (e) { return fail(e); }
   }
