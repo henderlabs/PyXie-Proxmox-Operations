@@ -83,3 +83,13 @@ def test_notifications_not_done_when_rule_has_no_recipient():
 def test_notifications_done_when_rule_resolves_to_someone():
     s = _steps(smtp_enabled=True, notification_recipient_set=True, notification_rules=1, notification_rules_on=1)["notifications"]
     assert s["state"] == "done"
+
+
+def test_removed_guests_known_and_unknown_backups_are_separated():
+    from pyxie_core.protection_321 import removed_and_unknown
+    current = {("vm", "101")}
+    missing = [{"workload_id": "w1", "kind": "vm", "vmid": 200, "name": "old"}, {"workload_id": "w2", "kind": "vm", "vmid": 101, "name": "reused"}, {"workload_id": "w3", "kind": "ct", "vmid": 300, "name": "nobackups"}]
+    last = {("vm", "101"): {"a": 5}, ("vm", "200"): {"a": 10, "b": 20}, ("vm", "999"): {"a": 7}, ("ct", "300"): {}}
+    removed, unknown = removed_and_unknown(current, missing, last)
+    assert [r["vmid"] for r in removed] == [200] and removed[0]["last"] == 20
+    assert [u["vmid"] for u in unknown] == ["999"]

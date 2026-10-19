@@ -1,4 +1,5 @@
 import Link from "next/link";
+import LocalTime from "@/components/LocalTime";
 import { apiFetch } from "@/lib/api";
 import type { HostMaintenanceStatus, Node, PveTask, Workload } from "@/lib/api";
 import { Card, CardTitle, PageHeader } from "@/components/Card";
@@ -112,15 +113,15 @@ function HostMaintenancePanel({ status, nodeId }: { status: HostMaintenanceStatu
         <Row label="Reboot required" value={status.reboot_required == null ? "—" : status.reboot_required ? "yes" : "no"} />
         <Row label="Disk free" value={status.disk_free_bytes != null ? formatBytes(status.disk_free_bytes) : "—"} />
         <Row label="Host key fingerprint" value={status.host_key_fingerprint || "—"} />
-        <Row label="Host key pinned" value={status.host_key_pinned_at ? new Date(status.host_key_pinned_at).toLocaleString() : "—"} />
+        <Row label="Host key pinned" value={status.host_key_pinned_at ? <LocalTime iso={status.host_key_pinned_at} /> : "—"} />
         <Row label="Capabilities" value={(status.capabilities || []).join(", ") || "—"} />
-        <Row label="Status checked" value={status.status_checked_at ? new Date(status.status_checked_at).toLocaleString() : "—"} />
+        <Row label="Status checked" value={status.status_checked_at ? <LocalTime iso={status.status_checked_at} /> : "—"} />
       </div>
     </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex justify-between">
       <dt className="text-muted">{label}</dt>

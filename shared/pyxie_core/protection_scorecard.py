@@ -175,7 +175,11 @@ def build_scorecard(db: Session, now: float | None = None) -> dict:
         row["causes"] = p321.known_causes(state=row["state"], exempt=plan["exempt"], has_plan=plan["policy_id"] is not None, covered=bool(row["covered_by"]),
                                           failures=failed.get(key, []), now=now) if row["status"] != "ok" else []
         rows.append(row)
+    current_keys = {(type_map.get(w.type), str(w.vmid)) for w in db.query(Workload).filter(Workload.is_missing.is_(False), Workload.is_template.is_(False)).all()}
+    gone = [{"workload_id": str(w.id), "kind": type_map.get(w.type), "vmid": w.vmid, "name": w.name, "type": w.type}
+            for w in db.query(Workload).filter(Workload.is_missing.is_(True), Workload.is_template.is_(False)).order_by(Workload.last_seen.desc()).all()]
+    removed, unknown = p321.removed_and_unknown(current_keys, gone, last)
     order = {"none": 0, "partial": 1, "ok": 2}
     rows.sort(key=lambda r: (order[r["status"]], r["name"] or ""))
-    return {"summary": p321.summarize(rows), "rows": rows, "plans": plans, "stores": store_cards, "jobs": jobs, "errors": errors,
+    return {"summary": p321.summarize(rows), "rows": rows, "removed": removed, "unknown": unknown, "plans": plans, "stores": store_cards, "jobs": jobs, "errors": errors,
             "rules": {"offsite_by_schedule": True, "backup_max_age_h": p321.BACKUP_MAX_AGE_H, "offsite_max_age_h": p321.OFFSITE_MAX_AGE_H}}

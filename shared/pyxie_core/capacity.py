@@ -82,3 +82,22 @@ def _top_pressure_workloads(db, nodes, limit: int = 5) -> list[dict]:
 
 def compute_capacity(db) -> list[dict]:
     return [cluster_capacity(db, c) for c in db.query(Cluster).filter(Cluster.is_missing.is_(False)).all()]
+
+
+def host_failure_check(nodes: list[dict], guests: list[dict], reserve_pct: float = 10.0) -> list[dict]:
+    """For each host: if it failed, would the running guests on it fit in the memory the other online hosts have left?
+    `nodes`: {id, name, online, mem_total}. `guests`: {node_id, status, memory_bytes, ha_state}. Memory is what the guests are configured with,
+    and every surviving host keeps `reserve_pct` of its RAM free. Proxmox only restarts guests that are managed by HA on its own, so the HA count is
+    reported too. A check of RAM only (not CPU or storage), not a failover test. Pure."""
+    online = [n for n in nodes if n.get("online") and n.get("mem_total")]
+    running = lambda g: g.get("status") == "running"  # noqa: E731
+    used = {n["id"]: sum(g.get("memory_bytes") or 0 for g in guests if g["node_id"] == n["id"] and running(g)) for n in nodes}
+    out = []
+    for n in nodes:
+        mine = [g for g in guests if g["node_id"] == n["id"] and running(g)]
+        need = used[n["id"]]
+        spare = sum(max(0, int(o["mem_total"] * (1 - reserve_pct / 100)) - used[o["id"]]) for o in online if o["id"] != n["id"])
+        ha = sum(1 for g in mine if g.get("ha_state") not in (None, "", "none"))
+        out.append({"node": n["name"], "running_guests": len(mine), "ha_guests": ha, "needs_bytes": need, "spare_bytes": spare,
+                    "fits": need <= spare, "short_bytes": max(0, need - spare)})
+    return out

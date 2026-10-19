@@ -104,6 +104,16 @@ export default function FindingList({ findings, view }: { findings: Finding[]; v
                   {!f.active && f.resolved_at && <> · resolved {new Date(f.resolved_at).toLocaleString()}</>}
                   {f.triage === "dismissed" && <> · comes back as a new alert only if it clears and happens again, or gets worse</>}
                 </div>
+                {f.category === "task" && f.evidence && (() => {
+                  const e = f.evidence as { started_at?: string | null; workload_id?: string | null; node_id?: string | null };
+                  const href = e.workload_id ? `/infrastructure/workloads/${e.workload_id}?tab=tasks` : e.node_id ? `/infrastructure/nodes/${e.node_id}` : "/platform/logging";
+                  return (
+                    <div className="text-xs text-muted mt-0.5 ml-[70px]">
+                      A past task result{e.started_at ? <> (ran {new Date(e.started_at).toLocaleString()})</> : null}, not a live fault: it clears when the next run of that task succeeds.{" "}
+                      <a href={href} className="text-accent hover:underline">{e.workload_id ? "See this guest's tasks and log" : e.node_id ? "See this host's tasks" : "See the task log"}</a>
+                    </div>
+                  );
+                })()}
               </div>
               {canTriage && (
                 <div className="flex gap-1.5">

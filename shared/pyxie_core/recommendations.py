@@ -17,6 +17,7 @@ from .pins import compute_pin_info, load_pin_rules
 from .placement import (
     note_planned_move,
     current_storage_name,
+    guest_disk_rows,
     get_cluster_storage_preference,
     is_currently_on_shared_storage,
     rank_with_simulated_load,
@@ -522,6 +523,7 @@ def _placement_recommendations(
                             # dropdown every other batch migration plan does.
                             "currently_on_shared": currently_on_shared,
                             "current_storage": current_storage,
+                            "disks": guest_disk_rows(db, wl),
                             "storage_preference": effective_pref,
                             "candidates": [
                                 {

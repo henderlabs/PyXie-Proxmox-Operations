@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from pyxie_core.audit import write_audit_event
-from pyxie_core.capacity import compute_capacity
-from pyxie_core.models import Recommendation, RightsizingCache, Workload
+from pyxie_core.capacity import compute_capacity, host_failure_check
+from pyxie_core.models import Cluster, Node, Recommendation, RightsizingCache, Workload
 from pyxie_core.recommendations import _placement_recommendations, apply_triage, generate_recommendations
 from pyxie_core.rightsizing import refresh_rightsizing_cache
 
@@ -189,6 +189,19 @@ def recompute_rightsizing(db: Session = Depends(get_db), user=Depends(get_curren
 @router.get("/capacity")
 def capacity(db: Session = Depends(get_db)):
     return compute_capacity(db)
+
+
+@router.get("/capacity/host-failure")
+def capacity_host_failure(db: Session = Depends(get_db), reserve_pct: float = 10.0):
+    """Per host: would its running guests fit in what the other hosts have left if it failed (memory only)."""
+    out = []
+    for c in db.query(Cluster).filter(Cluster.is_missing.is_(False)).all():
+        nodes = db.query(Node).filter(Node.cluster_id == c.id, Node.is_missing.is_(False)).order_by(Node.name).all()
+        ws = db.query(Workload).filter(Workload.cluster_id == c.id, Workload.is_missing.is_(False), Workload.is_template.isnot(True)).all()
+        out.append({"cluster_id": str(c.id), "name": c.name, "reserve_pct": reserve_pct,
+                    "rows": host_failure_check([{"id": n.id, "name": n.name, "online": n.status == "online", "mem_total": n.mem_total_bytes} for n in nodes],
+                                               [{"node_id": w.node_id, "status": w.status, "memory_bytes": w.memory_bytes, "ha_state": w.ha_state} for w in ws], reserve_pct)})
+    return out
 
 
 class TriageRequest(BaseModel):

@@ -286,6 +286,7 @@ type MigratePlanItem = {
   candidates?: PlanCandidate[];
   currently_on_shared?: boolean;
   current_storage?: string | null;
+  disks?: { slot: string; storage: string | null; size_bytes: number | null; shared: boolean }[];
   destination_storage?: string | null;
   destination_storage_scope?: string | null;
   source_node?: string;
@@ -539,7 +540,9 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
                     {item.current_storage || "?"} → <span className="text-text">{item.destination_storage}</span>
                   </>
                 ) : (
-                  <>{item.currently_on_shared ? <>shared {item.current_storage}: no disk copy</> : <>{item.current_storage} → same storage name on the new host: the disks are copied</>}</>
+                  <>{item.disks && item.disks.length > 0
+                    ? <>{item.disks.map((d) => `${d.slot} on ${d.storage ?? "?"}: ${d.shared ? "shared, not copied" : "local, copied"}`).join(" · ")}{item.disks.some((d) => !d.shared) ? ` (${(item.disks.filter((d) => !d.shared).reduce((n, d) => n + (d.size_bytes ?? 0), 0) / 1073741824).toFixed(0)} GiB to copy)` : ""}</>
+                    : item.currently_on_shared ? <>shared {item.current_storage}: no disk copy</> : <>{item.current_storage} → same storage name on the new host: the disks are copied</>}</>
                 )}
               </span>
             )}
@@ -696,6 +699,14 @@ export default function OperationCard({
         <div className="text-sm font-medium text-text">{operationSummary(op)}</div>
         <StatusBadge status={op.status} />
       </div>
+      {(() => {
+        // who authorised this: the viewer, a person, or a standing authority (automatic balancing, Apply Updates after its own check)
+        const ap = (op as unknown as { approver?: string | null }).approver;
+        const note = op.status === "awaiting_approval" ? "Needs your approval before anything changes"
+          : ap === "PyXie (automatic)" ? "Approved automatically under a standing authority: no approval click was needed"
+          : ap ? `Approved by ${ap}` : null;
+        return note ? <div className="text-xs text-muted mb-2 -mt-1">{note}</div> : null;
+      })()}
 
       {op.stage && (
         <div className="text-xs text-muted mb-2">

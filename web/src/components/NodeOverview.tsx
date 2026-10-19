@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import LocalTime from "@/components/LocalTime";
 import { useEffect, useState } from "react";
 import type { Node } from "@/lib/api";
 import { Card, CardTitle } from "@/components/Card";
@@ -161,7 +162,7 @@ export default function NodeOverview({
           <WrenchIcon className="w-4 h-4" />
           <span className="font-medium">
             In maintenance mode{node.maintenance_reason ? ` — ${node.maintenance_reason}` : ""}
-            {node.maintenance_mode_since ? ` since ${new Date(node.maintenance_mode_since).toLocaleString()}` : ""}
+            {node.maintenance_mode_since ? <> since <LocalTime iso={node.maintenance_mode_since} /></> : ""}
             {node.maintenance_mode_by ? ` (by ${node.maintenance_mode_by})` : ""}
           </span>
         </div>
@@ -248,7 +249,7 @@ export default function NodeOverview({
             <Row label="Boot mode" value={s?.boot_mode ? `${s.boot_mode.toUpperCase()}${s.secure_boot != null ? (s.secure_boot ? ", Secure Boot on" : ", Secure Boot off") : ""}` : s ? "Not reported by this host" : "Not collected yet"} />
             <Row label="KSM sharing" value={s?.ksm_shared != null ? formatBytes(s.ksm_shared) : s ? "Not reported by this host" : "Not collected yet"} />
             <PendingUpdatesRow nodeId={nodeId} initialCount={pending} />
-            <Row label="Last seen" value={new Date(node.last_seen).toLocaleString()} />
+            <Row label="Last seen" value={<LocalTime iso={node.last_seen} />} />
           </dl>
         </Card>
         <Card>
@@ -310,7 +311,7 @@ export default function NodeOverview({
                     <li key={v.workload_id} className="flex items-center gap-2">
                       <span className={`inline-block px-1.5 py-0.5 rounded text-xs font-medium ${LIVENESS_CLASS[v.state]}`}>{LIVENESS_LABEL[v.state]}</span>
                       <Link href={`/infrastructure/workloads/${v.workload_id}`} className="text-accent hover:underline">{v.name || `VM ${v.vmid}`}</Link>
-                      <span className="text-muted text-xs">{v.detail}{v.since ? ` Since ${new Date(v.since).toLocaleString()}.` : ""}</span>
+                      <span className="text-muted text-xs">{v.detail}{v.since ? <> Since <LocalTime iso={v.since} />.</> : ""}</span>
                     </li>
                   ))}
                 </ul>

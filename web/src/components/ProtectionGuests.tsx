@@ -105,7 +105,14 @@ export default function ProtectionGuests({ rows, stores, plans }: { rows: GuestR
             },
             sortValue: (r) => r.plan?.name ?? "",
           },
-          { header: "Result", render: (r) => <span className={statusColor[r.status]}>{statusText[r.status]}</span>, sortValue: (r) => order[r.status] },
+          { header: "Result", render: (r) => (
+              <span title="3-2-1 copies is about copies and their age. Disks says how many of the guest's disks are in its backups. Whether a restore actually works is not tracked: do a test restore.">
+                <span className={statusColor[r.status]}>{statusText[r.status]}</span>
+                <span className="block text-[11px] text-muted">
+                  copies {r.copies.filter((c) => c.fresh).length} of {r.copies.length} fresh · disks {r.disk_coverage ? (r.disk_coverage.included === r.disk_coverage.total ? "all" : `${r.disk_coverage.included} of ${r.disk_coverage.total}`) : "?"}
+                </span>
+              </span>
+            ), sortValue: (r) => order[r.status] },
           ...stores.map((s) => ({
             header: s,
             render: (r: GuestRow & { id: string }) => {

@@ -104,14 +104,27 @@ const RECENT_LIMIT = 100; // the list scrolls: this is history you can read back
 // The standalone Migrations page retired 2026-09-11 -- live migrations
 // (Balance Load, the Workloads "Move" action, or anything else) now show
 // up on Maintenance's own operations log alongside everything else.
-function pageFor(operationTypeId: string, context?: Record<string, unknown> | null): string {
+function pageFor(operationTypeId: string, context?: Record<string, unknown> | null, workloadId?: string | null): string {
   // This used to route
   // EVERY operation type to Maintenance, including backup-membership
   // operations that live on the Protection page -- clicking through
   // landed an operator somewhere that had no idea what they were looking
   // at, undermining the preview-first safety pattern.
-  if (operationTypeId === "protection.backup_membership" || operationTypeId === "workload.restore") {
+  if (operationTypeId === "workload.restore" && context?.source_name) {
+    return `/operations/protection?guest=${encodeURIComponent(String(context.source_name))}`;
+  }
+  if (operationTypeId === "protection.backup_membership" || operationTypeId === "workload.restore" || operationTypeId === "backup.policy_change") {
     return "/operations/protection";
+  }
+  // Backup server operations open that server's page; guest operations open the guest (its Tasks tab shows the Proxmox tasks and log).
+  if (operationTypeId.startsWith("pbs.") && context?.protection_target_id) {
+    return `/operations/protection/servers/${context.protection_target_id}`;
+  }
+  if (operationTypeId.startsWith("pool.")) {
+    return "/infrastructure/workloads/pools";
+  }
+  if (workloadId && operationTypeId.startsWith("workload.") && operationTypeId !== "workload.network_vlan_change") {
+    return `/infrastructure/workloads/${workloadId}?tab=${["workload.disk_change", "workload.disk_grow", "workload.hw_change", "workload.nic_change", "workload.ct_nic_change", "workload.cdrom_change"].includes(operationTypeId) ? "hardware" : "tasks"}`;
   }
   if (operationTypeId === "protection.backup_retention") {
     return "/operations/protection";
@@ -145,7 +158,11 @@ function subjectFor(op: Operation): string {
     // here too, rendering as a bare "?".
     return (r?.job_id as string | undefined) || "backup job";
   }
-  return r?.node || "?";
+  if (op.operation_type_id === "backup.policy_change") {
+    return "backup plan";
+  }
+  // restore previews name the source guest, backup-server operations the server, pool operations the pool, backup jobs the job
+  return (r?.workload_name as string | null | undefined) || (r?.source as string | undefined) || (r?.target as string | undefined) || (r?.pool as string | undefined) || (r?.job_id as string | undefined) || r?.node || "?";
 }
 
 function relativeTime(iso: string | null): string {
@@ -251,7 +268,7 @@ function TaskRow({ op, onApproved, isAdmin }: { op: Operation; onApproved: () =>
 
   return (
     <a
-      href={pageFor(op.operation_type_id, op.context)}
+      href={pageFor(op.operation_type_id, op.context, op.workload_id)}
       className="block px-3 py-2 hover:bg-surface2/60 border-b border-border/60"
     >
       <div className="flex items-center justify-between gap-2">
