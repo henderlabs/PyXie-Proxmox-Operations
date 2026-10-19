@@ -19,6 +19,10 @@ const BTN2 = "px-3 py-1.5 rounded text-sm border border-border text-muted hover:
 
 export default function UpdatesPanel({ initial }: { initial: UpdatesResponse }) {
   const [data, setData] = useState<UpdatesResponse>(initial);
+  // absolute times are formatted in the viewer's own time zone after mount: the server renders in UTC
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const local = (iso: string) => (mounted ? new Date(iso).toLocaleString() : "");
   const [offline, setOffline] = useState(false);
   const [confirm, setConfirm] = useState<"update" | "rollback" | null>(null);
   const [busy, setBusy] = useState(false);
@@ -273,7 +277,7 @@ export default function UpdatesPanel({ initial }: { initial: UpdatesResponse }) 
             <tbody>
               {data.history.map((h) => (
                 <tr key={h.id} className="border-t border-border">
-                  <td className="py-1.5 pr-3 text-muted" title={new Date(h.finished_at).toLocaleString()}>{formatRelativeTime(h.finished_at)}</td>
+                  <td className="py-1.5 pr-3 text-muted" title={local(h.finished_at)}>{formatRelativeTime(h.finished_at)}</td>
                   <td className="pr-3">{h.action === "rollback" ? "Restored" : "Updated"} v{h.from_version} → v{h.to_version}{h.migrated ? <span className="text-muted text-xs ml-1">(database changed)</span> : null}</td>
                   <td className="pr-3">{h.rolled_back ? <span className="text-muted">undone</span> : <StatusBadge status={h.result === "success" ? "success" : "failed"} />}</td>
                   <td className="text-muted">{h.requested_by || "—"}</td>
@@ -294,7 +298,7 @@ export default function UpdatesPanel({ initial }: { initial: UpdatesResponse }) 
                 <div className="font-medium mb-1">Go back to v{rb.from_version}?</div>
                 <div className="text-xs text-muted mb-3">
                   {rb.migrated
-                    ? `That update changed the database, so this restores the backup taken just before it (${new Date(rb.finished_at).toLocaleString()}). Anything changed in PyXie since then is lost.`
+                    ? `That update changed the database, so this restores the backup taken just before it (${local(rb.finished_at)}). Anything changed in PyXie since then is lost.`
                     : "That update did not change the database, so only the program is switched back; no data is touched."}{" "}
                   The site is unavailable for about 1 to 2 minutes.
                 </div>
