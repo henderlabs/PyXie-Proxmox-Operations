@@ -176,6 +176,14 @@ def build_steps(inp: dict) -> list[dict]:
     return steps
 
 
+def open_steps(steps: list[dict]) -> dict:
+    """How many setup steps are still open: required ones (the Setup guide dot is red) and the recommended ones (amber). The optional backup-server step
+    and the final check never count. Pure."""
+    countable = [s for s in steps if s["key"] != "check" and not (s["key"] == "pbs" and not s.get("items")) and s["state"] != "done"]
+    required = sum(1 for s in countable if s["key"] in REQUIRED)
+    return {"required": required, "recommended": len(countable) - required}
+
+
 def progress(steps: list[dict]) -> dict:
     # the backup-server step only counts once a backup server has been added: it is optional
     countable = [s for s in steps if s["key"] != "check" and not (s["key"] == "pbs" and not s.get("items"))]

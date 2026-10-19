@@ -92,13 +92,13 @@ const SECTIONS: NavSection[] = [
         icon: <GearIcon />,
         exact: true,
         children: [
-          { label: "Notifications", href: "/platform/settings/notifications", icon: <BellIcon /> },
-          { label: "Email (SMTP)", href: "/platform/settings/email", icon: <MailIcon /> },
-          { label: "Updates", href: "/platform/settings/updates", icon: <PackageIcon /> },
           { label: "Setup guide", href: "/platform/providers", icon: <PlugIcon /> },
           { label: "Credentials", href: "/platform/credentials", icon: <KeyIcon /> },
+          { label: "Email (SMTP)", href: "/platform/settings/email", icon: <MailIcon /> },
+          { label: "Notifications", href: "/platform/settings/notifications", icon: <BellIcon /> },
           { label: "Users", href: "/platform/users", icon: <UsersIcon />, adminOnly: true },
           { label: "Policies", href: "/platform/policies", icon: <SlidersIcon /> },
+          { label: "Updates", href: "/platform/settings/updates", icon: <PackageIcon /> },
         ],
       },
     ],
@@ -110,6 +110,8 @@ export default function Sidebar({ version }: { version: string }) {
   const router = useRouter();
   const [me, setMe] = useState<{ email: string; display_name: string | null; is_admin: boolean } | null>(null);
   const [badges, setBadges] = useState<Record<string, number>>({});
+  // Setup guide steps still open: red when a required step is not done, amber when only recommended ones are
+  const [setupOpen, setSetupOpen] = useState<{ required: number; recommended: number } | null>(null);
   const isPublicPage = pathname === "/login" || pathname.startsWith("/accept-invite");
 
   // Every page's own data is server-rendered fresh on each navigation
@@ -161,8 +163,12 @@ export default function Sidebar({ version }: { version: string }) {
           .catch(() => {});
       });
     }
+    function refreshSetup() {
+      fetch("/api/setup/status").then((r) => (r.ok ? r.json() : null)).then((d) => d?.open && setSetupOpen(d.open)).catch(() => {});
+    }
     refresh();
-    const interval = setInterval(refresh, 30000);
+    refreshSetup();
+    const interval = setInterval(() => { refresh(); refreshSetup(); }, 30000);
     const off = onBadgesChanged(refresh);
     return () => {
       clearInterval(interval);
@@ -211,6 +217,13 @@ export default function Sidebar({ version }: { version: string }) {
         </span>
         {(badges[item.href] || 0) > 0 && (
           <span className="text-proxmox text-xs font-bold leading-none">{badges[item.href]}</span>
+        )}
+        {item.href === "/platform/providers" && setupOpen && (setupOpen.required > 0 || setupOpen.recommended > 0) && (
+          <span
+            className={`w-2 h-2 rounded-full ${setupOpen.required > 0 ? "bg-bad" : "bg-warn"}`}
+            title={setupOpen.required > 0 ? `${setupOpen.required} required setup step${setupOpen.required === 1 ? "" : "s"} not done` : `${setupOpen.recommended} recommended setup step${setupOpen.recommended === 1 ? "" : "s"} not done`}
+            aria-label={setupOpen.required > 0 ? "Required setup steps are open" : "Recommended setup steps are open"}
+          />
         )}
       </Link>
     );
