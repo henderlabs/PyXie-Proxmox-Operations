@@ -100,13 +100,17 @@ def bridges_by_node(db, cluster: Cluster) -> dict[str, dict[str, dict]]:
         if t.get("error"):
             continue
         out[t["node"]] = {i["iface"]: i for i in t["interfaces"] if i.get("type") in ("bridge", "OVSBridge") and i.get("active", True)}
-    # SDN virtual networks (vnets) are attached like bridges but are defined cluster-wide, not in a host's network config
-    try:
-        target = db.query(PveTarget).filter(PveTarget.id == cluster.pve_target_id).one()
-        with PveMaintenanceClient(load_pve_credentials(db, target, "maintenance")) as wc:
-            vnets = wc._get("/cluster/sdn/vnets") or []
-    except Exception:  # noqa: BLE001 -- no SDN, or the token may not list it: plain bridges only
-        vnets = []
+    # SDN virtual networks (vnets) are attached like bridges but are defined cluster-wide, not in a host's network config. Read with the READ-ONLY token
+    # first (PVEAuditor has SDN.Audit); the admin token is only a fallback for a read-only account that cannot list them.
+    from .network_workflow import read_sdn
+    vnets = read_sdn(db, cluster)["vnets"]
+    if not vnets:
+        try:
+            target = db.query(PveTarget).filter(PveTarget.id == cluster.pve_target_id).one()
+            with PveMaintenanceClient(load_pve_credentials(db, target, "maintenance")) as wc:
+                vnets = wc._get("/cluster/sdn/vnets") or []
+        except Exception:  # noqa: BLE001 -- no SDN, or neither token may list it: plain bridges only
+            vnets = []
     for v in vnets:
         name = v.get("vnet")
         if not name:

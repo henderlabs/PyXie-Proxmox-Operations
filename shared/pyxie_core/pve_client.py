@@ -383,6 +383,23 @@ class PveClient:
         network config rather than accepting any tag 1-4094."""
         return self._get(f"/nodes/{node}/network")
 
+    def sdn_zones(self) -> list[dict]:
+        """GET /cluster/sdn/zones -- SDN zones. Proxmox only lists the zones the token has SDN.Audit (or SDN.Allocate) on, so a token without it sees an
+        empty list, not an error."""
+        return self._get("/cluster/sdn/zones") or []
+
+    def sdn_vnets(self) -> list[dict]:
+        """GET /cluster/sdn/vnets -- SDN virtual networks (vnet, alias, zone, tag). Filtered the same way as sdn_zones()."""
+        return self._get("/cluster/sdn/vnets") or []
+
+    def cluster_options(self) -> dict:
+        """GET /cluster/options -- datacenter options (for example the migration network)."""
+        return self._get("/cluster/options") or {}
+
+    def cluster_config_nodes(self) -> list[dict]:
+        """GET /cluster/config/nodes -- cluster members with their corosync link addresses (ring0_addr, ring1_addr...)."""
+        return self._get("/cluster/config/nodes") or []
+
     def tasks(self, node: str, limit: int = 20, *, source: str | None = None, vmid: Optional[int] = None) -> list[dict]:
         """GET /nodes/{node}/tasks. `source` defaults to PVE's own default
         ('archive' -- finished tasks only) when omitted, matching existing

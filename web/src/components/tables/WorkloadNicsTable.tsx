@@ -47,11 +47,11 @@ export default function WorkloadNicsTable({ workloads }: { workloads: WorkloadNi
         { header: "Workload", render: (r) => r.name || `vmid ${r.vmid}`, sortValue: (r) => r.name || String(r.vmid) },
         { header: "Node", render: (r) => r.node, sortValue: (r) => r.node, optional: true },
         { header: "NIC", render: (r) => r.nic.net_id, sortValue: (r) => r.nic.net_id, optional: true },
-        { header: "Bridge", render: (r) => r.nic.bridge || "—", sortValue: (r) => r.nic.bridge },
+        { header: "Network", render: (r) => <>{r.nic.bridge || "—"}{r.nic.sdn?.alias ? <span className="text-muted text-xs"> · {r.nic.sdn.alias}</span> : null}</>, sortValue: (r) => r.nic.bridge },
         {
           header: "VLAN",
           render: (r) => <NicVlanEditor row={r} />,
-          sortValue: (r) => r.nic.vlan_tag ?? -1,
+          sortValue: (r) => r.nic.effective_tag ?? r.nic.vlan_tag ?? -1,
         },
       ]}
     />
@@ -79,6 +79,14 @@ function NicVlanEditor({ row }: { row: Row }) {
   const [dryRun, setDryRun] = useState<DryRunOperation | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (nic.sdn) {
+    return (
+      <span className="text-xs text-text" title={`The network ${nic.bridge} sets the VLAN (zone ${nic.sdn.zone ?? "?"}); a NIC on it carries no tag of its own.`}>
+        {nic.sdn.tag != null ? `VLAN ${nic.sdn.tag}` : "VLAN set by the network"} <span className="text-muted/60">(from the network)</span>
+      </span>
+    );
+  }
 
   if (!nic.bridge_vlan_aware) {
     return (

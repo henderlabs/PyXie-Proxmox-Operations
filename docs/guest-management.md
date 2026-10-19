@@ -68,7 +68,11 @@ A layer sets only the fields you tick. They prefill the wizards and the hardware
 
 ## Networks in use
 
-**Infrastructure > Network** has a **Networks in use** card: every guest network interface grouped by bridge and VLAN, with the hosts that could not carry each network (bridge missing, bridge not VLAN-aware, VLAN not allowed) and any guest already running somewhere that cannot carry its VLAN. It is read-only.
+**Infrastructure > Network** is read-only and has three parts:
+
+- **Networks in use:** one row per network, with its VLAN, how many guests use it and whether every host can carry it. On a cluster that uses Proxmox SDN, each SDN network is listed with its alias, zone and VLAN tag (the VLAN comes from the network, so a guest NIC on it carries no tag of its own), and unused networks are listed too. PyXie reads SDN with the read-only account, which needs `SDN.Audit` (the built-in `PVEAuditor` role has it). If PyXie cannot see an SDN network that guests use, it says so on the row instead of reporting a missing bridge on every host. Plain bridges are listed by bridge and VLAN, with the hosts that could not carry them (bridge missing, not VLAN-aware, VLAN not allowed). Search by network, VLAN or guest.
+- **Hosts and links:** hosts with identical network layouts are shown once ("Same on all 8 hosts"); a host that differs is listed on its own. For each link, *Carries* is filled only where PyXie can prove it: the host's management address, the datacenter migration network, a cluster (corosync) link address, an SDN zone's bridge, or guests attached to the bridge. A link built into a bridge or bond inherits what that bridge or bond carries. Nothing is read from a name, so storage links and others show "not shown". Every interface on every host is under *Every interface on every host*.
+- **Workload NICs:** each guest NIC with its network and VLAN. Changing a NIC's VLAN is only offered on VLAN-aware bridges, never on an SDN network.
 
 ## Notifications
 
