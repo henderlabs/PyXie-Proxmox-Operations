@@ -238,11 +238,19 @@ def _compute_assessment(
             # Round up, never down -- rounding down would eat into the
             # safety margin just computed above.
             suggested += 1
+        # Never cut by more than half in one step: the 99th percentile ignores the busiest minutes of each day (log-on storms, patch windows),
+        # so take a first step, then reassess on the new allocation.
+        stepped = False
+        floor_step = -(-workload.cpu_cores // 2)
+        if suggested < floor_step:
+            suggested, stepped = floor_step, True
 
         if suggested < workload.cpu_cores:
             reason = f"P95 CPU usage {cpu_stats['p95']}% of {workload.cpu_cores} vCPU over the last {round(window)}d (peak {cpu_stats['max']}%)"
             if is_windows and suggested == min_vcpu and round(max(headroom_p95, headroom_max)) < min_vcpu:
                 reason += f" -- floored at {min_vcpu} vCPU, Windows guest"
+            if stepped:
+                reason += " -- at most half in one step: reassess after this change"
             result["cpu_suggestion"] = {
                 "current": workload.cpu_cores,
                 "suggested": suggested,
@@ -291,7 +299,7 @@ def _compute_assessment(
             # PVE's "used" memory counts file cache, so high usage alone does not mean the
             # guest needs more RAM. For VMs, require evidence of real pressure (sustained
             # swapping); containers have no such counters and keep the usage-only rule.
-            gate = memory_pressure_verdict(pressure) if workload.type == "vm" else {"state": "pressure", "detail": None}
+            gate = memory_pressure_verdict(pressure, windows=is_windows) if workload.type == "vm" else {"state": "pressure", "detail": None}
             if gate["state"] == "pressure":
                 why = f"; {gate['detail']}" if gate.get("detail") else ""
                 result["memory_suggestion"] = {
@@ -319,7 +327,7 @@ def assess_all_workloads(db) -> list[dict]:
     from the full history span, not the window. Every path runs the same
     _compute_assessment() math."""
     cpu_target_pct, mem_target_pct, round_vcpu_even = _rightsizing_settings(db)
-    workloads = db.query(Workload).filter(Workload.is_missing.is_(False)).all()
+    workloads = db.query(Workload).filter(Workload.is_missing.is_(False), Workload.is_template.isnot(True)).all()  # templates are never resized
     if not workloads:
         return []
 

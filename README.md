@@ -357,7 +357,17 @@ high 60d+).
     in (at least 256 MiB/day over at least 7 of the last 14 days,
     from `workload_mem_pressure`); otherwise the row shows a note
     ("gathering memory-pressure data (N of 7 days)" or "high usage is
-    file cache"). Containers keep the usage-only rule.
+    file cache"). Containers keep the usage-only rule. **Windows guests
+    use free memory instead of swap-in:** the "swapped in" counter the
+    Windows balloon driver reports counts ordinary page reads (measured
+    54-198 GB over 14 days on healthy Windows VMs with half their RAM
+    free), so for them pressure means the guest's free memory stayed
+    under 10% of its RAM for at least half of the readings.
+  - **CPU is never cut by more than half in one step** (8 to 4, then
+    reassess): the 99th percentile ignores the busiest minutes of each
+    day, such as log-on storms and patch windows.
+  - **A pure decrease is a saving, shown as info, never critical.**
+    Templates are not assessed.
   - **Host-only VMs** (no balloon/guest memory stats) are not assessed
     for memory at all, because their memory figure is the host-side
     process size, not usage.

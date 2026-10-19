@@ -96,7 +96,7 @@ export default function NicEditPanel({ workloadId, workloadName, running, reques
             <div>
               <label className="block text-muted mb-1">Bridge</label>
               <select className={sel} value={bridge} onChange={(e) => setBridge(e.target.value)}>
-                {opts.bridges.map((b) => <option key={b.name} value={b.name}>{b.name}{b.sdn ? `${b.alias ? ` · ${b.alias}` : ""}${b.tag != null ? ` · VLAN ${b.tag}` : ""}` : b.vlan_aware ? " (VLAN-aware)" : ""}{b.missing_on.length ? `  ⚠ not on ${b.missing_on.join(", ")}` : ""}</option>)}
+                {opts.bridges.map((b) => <option key={b.name} value={b.name}>{b.name}{b.sdn ? `${b.alias ? ` · ${b.alias}` : ""}${b.tag != null && !(b.alias ?? "").includes(String(b.tag)) ? ` · VLAN ${b.tag}` : ""}` : b.vlan_aware ? " (VLAN-aware)" : ""}{b.missing_on.length ? `  ⚠ not on ${b.missing_on.join(", ")}` : ""}</option>)}
               </select>
             </div>
             <div>

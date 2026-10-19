@@ -85,7 +85,7 @@ def prune_memory_pressure(db: Session) -> int:
 
 _SUMMARY_SQL = """
 WITH s AS (
-  SELECT workload_id, sampled_at, swapped_in_bytes AS si, swapped_out_bytes AS so,
+  SELECT workload_id, sampled_at, swapped_in_bytes AS si, swapped_out_bytes AS so, free_bytes, total_bytes,
          LAG(swapped_in_bytes)  OVER w AS psi,
          LAG(swapped_out_bytes) OVER w AS pso
   FROM workload_mem_pressure
@@ -96,7 +96,10 @@ SELECT workload_id,
        MIN(sampled_at) AS first_at, MAX(sampled_at) AS last_at, COUNT(*) AS samples,
        -- counters are cumulative since guest boot: only count increases (a drop is a guest reboot)
        COALESCE(SUM(CASE WHEN psi IS NOT NULL AND si >= psi THEN si - psi END), 0) AS swap_in_bytes,
-       COALESCE(SUM(CASE WHEN pso IS NOT NULL AND so >= pso THEN so - pso END), 0) AS swap_out_bytes
+       COALESCE(SUM(CASE WHEN pso IS NOT NULL AND so >= pso THEN so - pso END), 0) AS swap_out_bytes,
+       -- free memory as the guest reports it: how often it was under 10% of the guest's RAM
+       COUNT(*) FILTER (WHERE free_bytes IS NOT NULL AND total_bytes > 0) AS free_samples,
+       COUNT(*) FILTER (WHERE free_bytes IS NOT NULL AND total_bytes > 0 AND free_bytes::numeric / total_bytes < 0.10) AS low_free_samples
 FROM s GROUP BY workload_id
 """
 
@@ -106,6 +109,7 @@ def _row_to_summary(r) -> dict:
     return {
         "days": round(days, 2), "samples": int(r.samples),
         "swap_in_bytes": int(r.swap_in_bytes), "swap_out_bytes": int(r.swap_out_bytes),
+        "free_samples": int(r.free_samples), "low_free_samples": int(r.low_free_samples),
     }
 
 
@@ -132,10 +136,17 @@ def _gib(n: float) -> str:
     return f"{n / 1024 ** 3:.1f} GiB"
 
 
-def memory_pressure_verdict(summary) -> dict:
+LOW_FREE_SHARE = 0.5   # Windows: free memory under 10% of the guest's RAM for at least this share of the readings = real shortage
+
+
+def memory_pressure_verdict(summary, windows: bool = False) -> dict:
     """Pure function. state is 'gathering' (not enough history to say),
     'no_pressure' (high usage is file cache), or 'pressure' (guest is genuinely
-    short of memory)."""
+    short of memory).
+
+    Linux guests: sustained swap-in. Windows guests: the "swapped in" counter the Windows balloon driver reports counts ordinary page reads
+    (measured: 54-198 GB over 14 days on healthy Windows VMs with half their RAM free), so it says nothing about a shortage there; what they
+    report reliably is free memory, so pressure means free memory stayed under 10% of the guest's RAM for most of the readings."""
     days = summary["days"] if summary else 0.0
     if days < MIN_DAYS:
         return {
@@ -143,6 +154,16 @@ def memory_pressure_verdict(summary) -> dict:
             "note": f"gathering memory-pressure data ({days:.0f} of {MIN_DAYS} days)",
             "detail": None,
         }
+    if windows:
+        n, low = summary.get("free_samples", 0), summary.get("low_free_samples", 0)
+        if not n:
+            return {"state": "gathering", "note": "Windows guest: no free-memory readings yet", "detail": None}
+        share = low / n
+        if share >= LOW_FREE_SHARE:
+            return {"state": "pressure", "note": None,
+                    "detail": f"free memory was under 10% of the guest's RAM for {share * 100:.0f}% of the readings over {days:.0f}d"}
+        return {"state": "no_pressure", "note": f"Windows guest: free memory was under 10% only {share * 100:.0f}% of the time in {days:.0f}d, so high usage is cache, not a shortage",
+                "detail": None}
     per_day = summary["swap_in_bytes"] / max(days, 1.0)
     if per_day >= SWAP_IN_BYTES_PER_DAY:
         return {

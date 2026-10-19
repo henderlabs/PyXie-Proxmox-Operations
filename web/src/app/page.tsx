@@ -208,7 +208,7 @@ export default async function DashboardPage() {
           <div className="text-xs text-muted mt-2 text-center">of {protection!.total} current guests</div>
           </>
         ) : (
-          <div className="text-sm text-muted py-2">No protection provider configured yet -- see Operations → Protection.</div>
+          <div className="text-sm text-muted py-2">No backup server is connected, so PyXie shows no protection status. See Operations → Protection.</div>
         )}
       </Card>
         {snapshots && (

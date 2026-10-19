@@ -60,11 +60,11 @@ export default function VlanOverview({ segments, sdn = [] }: { segments: VlanSeg
                 )}
                 {open === key && (
                   <tr><td colSpan={5} className="pb-2">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 text-xs">
+                    <div className="pl-6 text-xs space-y-0.5 border-l border-border ml-2">
                       {s.guests.map((g) => (
-                        <div key={`${g.workload_id}-${g.net_id}`} className="py-0.5 flex justify-between gap-2">
-                          <span className="truncate text-text">{g.name ?? g.vmid} <span className="text-muted">{g.type === "vm" ? "VM" : "CT"} {g.vmid}</span></span>
-                          <span className="text-muted shrink-0">{g.node} · {g.net_id}</span>
+                        <div key={`${g.workload_id}-${g.net_id}`} className="flex gap-3">
+                          <span className="text-text min-w-[16rem]">{g.name ?? g.vmid} <span className="text-muted">{g.type === "vm" ? "VM" : "CT"} {g.vmid}</span></span>
+                          <span className="text-muted">{g.node} · {g.net_id}</span>
                         </div>
                       ))}
                     </div>
