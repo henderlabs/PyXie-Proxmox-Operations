@@ -21,6 +21,12 @@ TASK_LOOKBACK_DAYS = 7
 DEFAULT_STORAGE_WARNING_PCT = 85
 
 
+def vmid_from_upid(upid: str | None) -> int | None:
+    """A Proxmox task id reads UPID:node:pid:pstart:starttime:type:id:user: and the id is the guest's VMID for a guest task. Pure."""
+    parts = (upid or "").split(":")
+    return int(parts[6]) if len(parts) > 6 and parts[6].isdigit() else None
+
+
 def _storage_warning_threshold(db: Session) -> float:
     policy = (
         db.query(Policy)
@@ -335,8 +341,8 @@ def evaluate_findings(db: Session) -> dict:
         if t.exit_status == "OK":
             continue
         # a Proxmox task id (UPID) reads UPID:node:pid:pstart:starttime:type:id:user: and the id is the guest for a guest task
-        parts = (t.upid or "").split(":")
-        wl = _names.get((t.cluster_id, int(parts[6]))) if len(parts) > 6 and parts[6].isdigit() else None
+        vmid = vmid_from_upid(t.upid)
+        wl = _names.get((t.cluster_id, vmid)) if vmid is not None else None
         who = f" on {wl.name or wl.vmid} ({wl.vmid})" if wl else (f" on {_nodes[node_id]}" if node_id in _nodes else "")
         current.append(
             {
@@ -347,7 +353,7 @@ def evaluate_findings(db: Session) -> dict:
                 "severity": "warning",
                 "title": f"Latest {t.task_type or 'unknown'} task failed{who}: {t.exit_status}",
                 "evidence": {"upid": t.upid, "user": t.user, "exit_status": t.exit_status, "started_at": t.started_at.isoformat() if t.started_at else None,
-                             "workload_id": str(wl.id) if wl else None, "vmid": wl.vmid if wl else None, "node": _nodes.get(node_id)},
+                             "workload_id": str(wl.id) if wl else None, "vmid": wl.vmid if wl else None, "node": _nodes.get(node_id), "node_id": str(node_id) if node_id else None},
             }
         )
 

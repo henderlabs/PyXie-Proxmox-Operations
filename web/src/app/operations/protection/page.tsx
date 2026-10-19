@@ -4,9 +4,10 @@ import BackupPlans from "@/components/BackupPlans";
 import BackupStorage from "@/components/BackupStorage";
 import ProtectionTabs from "@/components/ProtectionTabs";
 import ProtectionGuests, { type GuestRow, type PlansByCluster } from "@/components/ProtectionGuests";
+import RemovedGuests, { type RemovedRow, type UnknownRow } from "@/components/RemovedGuests";
 import { ShieldIcon } from "@/components/Icons";
 
-type Scorecard = { plans: PlansByCluster; summary: { ok: number; partial: number; none: number; total: number }; rows: GuestRow[]; stores: { name: string }[]; errors: string[] };
+type Scorecard = { plans: PlansByCluster; summary: { ok: number; partial: number; none: number; total: number }; rows: GuestRow[]; removed?: RemovedRow[]; unknown?: UnknownRow[]; stores: { name: string }[]; errors: string[] };
 
 export default async function ProtectionPage() {
   const [card] = await Promise.all([
@@ -32,6 +33,7 @@ export default async function ProtectionPage() {
         <div className="text-xs text-muted mb-2">Pick a plan on the row to change it. Guests that need attention open by themselves; open any guest to see its plan in detail and every restore point on site and offsite, with what pruning will keep or remove, and to restore from one.</div>
         <ProtectionGuests rows={card.rows} stores={card.stores.map((s) => s.name)} plans={card.plans ?? {}} />
       </Card>
+      <RemovedGuests removed={card.removed ?? []} unknown={card.unknown ?? []} />
     </div>
   );
 }

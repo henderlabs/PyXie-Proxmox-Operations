@@ -646,3 +646,14 @@ def recommend_storage_for_candidate(
         return {"id": str(shared[0].id), "name": shared[0].name, "scope": "cluster-shared",
                 "reason": "destination node has no local storage -- falling back to cluster-shared"}
     return None
+
+
+def guest_disk_rows(db: Session, workload: Workload) -> list[dict]:
+    """The guest's disks for a migration preview: [{slot, storage, size_bytes, shared}]. `shared` is true when that storage is cluster-shared (the disk is not
+    copied when the guest moves host) and false for node-local storage (the disk is copied over the network). CD drives are left out. Inventory only."""
+    from .models import Storage, WorkloadDisk
+    disks = db.query(WorkloadDisk).filter(WorkloadDisk.workload_id == workload.id, WorkloadDisk.is_cdrom.is_(False)).order_by(WorkloadDisk.slot).all()
+    shared: dict[str, bool] = {}
+    for s in db.query(Storage).filter(Storage.cluster_id == workload.cluster_id, Storage.is_missing.is_(False)).all():
+        shared[s.name] = shared.get(s.name, False) or s.scope == "cluster-shared"
+    return [{"slot": d.slot, "storage": d.storage, "size_bytes": d.size_bytes, "shared": bool(shared.get(d.storage or "", False))} for d in disks]

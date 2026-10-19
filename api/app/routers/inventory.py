@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from datetime import datetime, timedelta, timezone
+from pyxie_core.task_attribution import match_operation
 
 from pyxie_core.audit import write_audit_event
 from pyxie_core.discovery import build_pve_client
@@ -623,31 +624,8 @@ def list_tasks(db: Session = Depends(get_db), limit: int = 50, status: str | Non
         op_candidates = db.query(Operation).filter(or_(*conds)).order_by(Operation.created_at.desc()).limit(500).all()
 
     def _find_operation(task: PveTask, vmid: int | None):
-        if not task.started_at:
-            return None
-        # A VM-scoped task matches on its workload's stable id (works even
-        # for a migration, since workload_id doesn't change when the VM
-        # moves -- only the vmid->workload lookup that FINDS it has to be
-        # cluster-scoped, not node-scoped, see above). A node-level task
-        # (no vmid at all) matches on the operation's own node_id instead.
         wid = workload_id_by_cluster_vmid.get((task.cluster_id, vmid)) if vmid else None
-        best, best_delta = None, None
-        for op in op_candidates:
-            # an operation only explains a task when it actually ran, and a host-level task (no guest) only matches a host-level operation:
-            # a guest operation on the same host, or a preview that was never approved, must not take credit for an unrelated task
-            if op.status in ("awaiting_approval", "blocked", "cancelled", "rejected"):
-                continue
-            is_candidate = (wid and op.workload_id == wid) or (not wid and not op.workload_id and task.node_id and op.node_id == task.node_id)
-            if not is_candidate:
-                continue
-            window_start = op.created_at
-            window_end = op.completed_at or (datetime.now(timezone.utc) if op.status not in ("completed", "failed") else op.created_at + timedelta(minutes=30))
-            buffer = timedelta(minutes=1)
-            if window_start - buffer <= task.started_at <= window_end + buffer:
-                delta = abs((task.started_at - op.created_at).total_seconds())
-                if best is None or delta < best_delta:
-                    best, best_delta = op, delta
-        return best
+        return match_operation(task.started_at, task.node_id, wid, op_candidates)
 
     out = []
     for t in tasks:

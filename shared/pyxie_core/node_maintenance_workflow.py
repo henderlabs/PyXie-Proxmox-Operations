@@ -44,7 +44,7 @@ from .operations_engine import (
     enter_stage,
     fail_operation,
 )
-from .placement import note_planned_move, current_storage_name, get_cluster_storage_preference, is_currently_on_shared_storage, rank_with_simulated_load, recommend_destinations, recommend_storage_for_candidate
+from .placement import note_planned_move, current_storage_name, guest_disk_rows, get_cluster_storage_preference, is_currently_on_shared_storage, rank_with_simulated_load, recommend_destinations, recommend_storage_for_candidate
 from .discovery import build_pve_client
 
 
@@ -185,6 +185,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                         # the DB, without needing a fresh PVE client call.
                         "currently_on_shared": currently_on_shared,
                         "current_storage": current_storage,
+                        "disks": guest_disk_rows(db, wl),
                         "storage_preference": effective_pref,
                         # Full ranked field, not just the pick -- lets the
                         # approval preview offer an alternate destination

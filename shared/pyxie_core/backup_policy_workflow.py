@@ -141,6 +141,27 @@ def apply_scope(asg: list[dict], pid: str, name: str, tags: list[str] | None, ma
     return out
 
 
+def plan_words(pols: list[dict], resolved: dict | None) -> str:
+    """One plan in a sentence: its name, schedule, storage, keep rules and copies; 'no backup' when the guest has none. Pure."""
+    p = next((x for x in pols if resolved and x["id"] == resolved["policy_id"]), None)
+    if p is None:
+        return "no backup"
+    copies = ", ".join(str(ly.get("store")) for ly in (p.get("layers") or []))
+    return f"{p['name']} (back up to {p['storage']} at {p['schedule']}, {describe_retention(p)}" + (f"; copy to {copies}" if copies else "") + ")"
+
+
+def plain_plan_changes(gs: list[dict], policies: list[dict], assignments: list[dict], new_pols: list[dict], new_asg: list[dict], vm_label) -> list[str]:
+    """For a plan assignment preview: one line per guest whose plan changes, old plan -> new plan, in plain words. Pure."""
+    ids = [{"id": g["id"], "tags": g["tags"]} for g in gs]
+    before, after = resolve_assignments(ids, assignments), resolve_assignments(ids, new_asg)
+    out = []
+    for g in gs:
+        b, a = before.get(g["id"]), after.get(g["id"])
+        if (b or {}).get("policy_id") != (a or {}).get("policy_id"):
+            out.append(f"{vm_label(g['vmid'])}: {plan_words(policies, b)} -> {plan_words(new_pols, a)}. Backups already taken stay; the new plan's keep rules apply from the next prune")
+    return out
+
+
 def _names(gs: list[dict]) -> dict[int, str]:
     return {g["vmid"]: g["name"] for g in gs}
 
@@ -195,23 +216,7 @@ def dry_run_policy_change(db, cluster: Cluster, *, change: dict, leave_other: bo
         names = _names(gs)
         vm_label = lambda v: f"{names.get(v, 'VM')} ({v})"  # noqa: E731
         if change["action"] == "assign":
-            # in plain words first: which guests change plan, from what to what; the Proxmox job details follow
-            from .backup_policy import resolve_assignments as _resolve
-            ids = [{"id": g["id"], "tags": g["tags"]} for g in gs]
-            before, after = _resolve(ids, assignments), _resolve(ids, new_asg)
-
-            def _words(pols, r):
-                p = next((x for x in pols if r and x["id"] == r["policy_id"]), None)
-                if p is None:
-                    return "no backup"
-                copies = ", ".join(str(ly.get("store")) for ly in (p.get("layers") or []))
-                return f"{p['name']} (back up to {p['storage']} at {p['schedule']}, {describe_retention(p)}" + (f"; copy to {copies}" if copies else "") + ")"
-            plain = []
-            for g in gs:
-                b, a = before.get(g["id"]), after.get(g["id"])
-                if (b or {}).get("policy_id") != (a or {}).get("policy_id"):
-                    plain.append(f"{vm_label(g['vmid'])}: {_words(policies, b)} -> {_words(new_pols, a)}. Backups already taken stay; the new plan's keep rules apply from the next prune")
-            reasons[0:0] = plain
+            reasons[0:0] = plain_plan_changes(gs, policies, assignments, new_pols, new_asg, vm_label)
         if change["action"] == "save":
             p = next(p for p in new_pols if p["id"] == (change["policy"].get("id") or change.get("new_id")))
             reasons.append(f"policy '{p['name']}': back up to {p['storage']} at {p['schedule']} ({p['mode']} mode), {describe_retention(p)}" + ("" if p["enabled"] else "; switched off, so its job will not run"))

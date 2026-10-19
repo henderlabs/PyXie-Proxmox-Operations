@@ -101,13 +101,13 @@ export default async function DashboardPage() {
       <Card className="flex flex-col">
         <CardTitle>Cluster Resource Usage</CardTitle>
         <div className="flex-1 flex flex-wrap items-center content-center justify-around gap-4 py-1">
-          <HalfGauge value={avgCpu} label="Avg CPU across nodes" icon={<CpuIcon />} />
+          <HalfGauge value={avgCpu} label="CPU: average of the hosts" icon={<CpuIcon />} />
           <HalfGauge
             value={avgMem}
-            label="Avg Memory across nodes"
+            label="Memory: average of the hosts"
             icon={<MemoryIcon />}
             detail={
-              summary.mem_total_bytes ? `${formatBytes(summary.mem_used_bytes)} of ${formatBytes(summary.mem_total_bytes)}` : null
+              summary.mem_total_bytes ? `all hosts together: ${formatBytes(summary.mem_used_bytes)} of ${formatBytes(summary.mem_total_bytes)} (${Math.round((100 * (summary.mem_used_bytes ?? 0)) / summary.mem_total_bytes)}%)` : null
             }
           />
           <HalfGauge
@@ -205,7 +205,7 @@ export default async function DashboardPage() {
               <div className="text-xl font-semibold text-bad">{protection!.none}</div>
             </Link>
           </div>
-          <div className="text-xs text-muted mt-2 text-center">of {protection!.total} current guests, the same count as the Protection page</div>
+          <div className="text-xs text-muted mt-2 text-center">of {protection!.total} current guests</div>
           </>
         ) : (
           <div className="text-sm text-muted py-2">No protection provider configured yet -- see Operations → Protection.</div>

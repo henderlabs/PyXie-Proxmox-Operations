@@ -121,6 +121,24 @@ def apply_disk_coverage(row: dict, disks: list[dict], *, powered_on: bool = True
     return row
 
 
+def removed_and_unknown(current_keys: set, missing: list[dict], last: dict) -> tuple[list[dict], list[dict]]:
+    """Backups whose guest no longer exists. `current_keys`: {(kind, vmid)} of guests that exist. `missing`: guests PyXie knew that are gone
+    ({workload_id, kind, vmid, name}); `last`: {(kind, vmid): {store: newest backup time}}. Returns (removed: gone guests PyXie knows, which can be
+    restored from here; unknown: backup groups of guests PyXie never saw). An ID that a new guest reuses is that guest's, not a removed one. Pure."""
+    removed, seen = [], set()
+    for m in missing:
+        key = (m["kind"], str(m["vmid"]))
+        per = last.get(key)
+        if key in current_keys or key in seen or not per:
+            continue
+        seen.add(key)
+        removed.append({**m, "vmid": m["vmid"], "last": max(per.values()), "stores": per})
+    unknown = [{"kind": k[0], "vmid": k[1], "last": max(per.values()), "stores": per}
+               for k, per in sorted(last.items()) if k[0] in ("vm", "ct") and k not in current_keys and k not in seen and per
+               and not any((m["kind"], str(m["vmid"])) == k for m in missing)]
+    return sorted(removed, key=lambda r: -r["last"]), sorted(unknown, key=lambda r: -r["last"])
+
+
 def store_notes(store: dict, prune: list[dict], verify: list[dict], sync_into: list[dict], newest: Optional[int], now: float,
                 offsite_max_age_h: int = OFFSITE_MAX_AGE_H) -> list[dict]:
     """Warnings about one datastore, as {level, text}."""

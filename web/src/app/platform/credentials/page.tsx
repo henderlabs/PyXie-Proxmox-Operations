@@ -1,3 +1,4 @@
+import LocalTime from "@/components/LocalTime";
 import { apiFetch } from "@/lib/api";
 import type { Cluster, Credential, HostMaintenanceCredentialRecord, Node, PveTarget } from "@/lib/api";
 import { Card, CardTitle, EmptyState, PageHeader } from "@/components/Card";
@@ -77,7 +78,7 @@ export default async function CredentialsPage() {
                   <div className="text-xs text-muted font-mono">{c.masked_secret}</div>
                   <StatusBadge status={c.status} />
                   <div className="text-xs text-muted">
-                    {c.last_validated_at ? `validated ${new Date(c.last_validated_at).toLocaleString()}` : "never validated"}
+                    {c.last_validated_at ? <>validated <LocalTime iso={c.last_validated_at} /></> : "never validated"}
                   </div>
                   <ActionButton href={`/api/pve-targets/${t.id}/credentials/${c.id}/test-connection`} label="Test Connection" />
                 </div>
@@ -94,7 +95,7 @@ export default async function CredentialsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-text font-medium">ssh (host patching)</div>
-                  <div className="text-xs text-muted">{hostMaintCredByTarget[i] ? `${hostMaintCredByTarget[i]!.ssh_username} · key created ${new Date(hostMaintCredByTarget[i]!.created_at).toLocaleDateString()}` : "no key generated yet"}</div>
+                  <div className="text-xs text-muted">{hostMaintCredByTarget[i] ? <>{hostMaintCredByTarget[i]!.ssh_username} · key created <LocalTime iso={hostMaintCredByTarget[i]!.created_at} dateOnly /></> : "no key generated yet"}</div>
                 </div>
                 <div className="text-xs text-muted font-mono">{hostMaintCredByTarget[i] ? "SSH key (private half stored encrypted)" : ""}</div>
                 {hostMaintCredByTarget[i] && <StatusBadge status={hostMaintCredByTarget[i]!.status} />}
