@@ -34,14 +34,14 @@ export default function BackupTab({ workloadId, workloadName, canEdit, onOpenHar
       {(info.disks ?? []).length > 0 && (
         <Card>
           <CardTitle>Disks in backups</CardTitle>
-          <div className="text-xs text-muted mb-2">{noPlan ? "This guest has no backup plan, so none of its disks are backed up. " : "A disk marked Left out is skipped by every backup of this guest. "}A powered-off guest is never started for a backup.</div>
+          <div className="text-xs text-muted mb-2">{noPlan ? "This guest has no backup plan, so none of its disks are backed up. " : "A disk with backup off is skipped by every backup of this guest. "}A powered-off guest is never started for a backup.</div>
           <table className="w-full text-sm">
             <tbody>
               {info.disks!.map((d) => (
                 <tr key={d.slot} className="border-t border-border">
                   <td className="py-1.5 pr-3">{d.slot}</td>
                   <td className="pr-3 text-muted">{d.size_bytes ? `${(d.size_bytes / GIB).toFixed(d.size_bytes >= GIB ? 0 : 2)} GiB` : "—"}</td>
-                  <td className="pr-3">{noPlan ? <span className="text-muted">Not backed up (no plan)</span> : d.backup === false ? <span className={d.accepted ? "text-muted" : "text-warn"}>{d.accepted ? "Left out on purpose" : "Left out"}</span> : <span className="text-good">Backed up</span>}</td>
+                  <td className="pr-3">{noPlan ? <span className="text-muted">Not backed up (no plan)</span> : d.backup === false ? <span className={d.accepted ? "text-muted" : "text-warn"}>{d.accepted ? "Backup off, on purpose" : "Backup off"}</span> : <span className="text-good">Backup on</span>}</td>
                   <td className="text-right text-xs whitespace-nowrap">
                     {canEdit && d.backup === false && <button type="button" onClick={() => setOnPurpose(d.slot, !d.accepted)} className="text-accent hover:underline mr-3">{d.accepted ? "Not on purpose" : "Mark on purpose"}</button>}
                     {canEdit && onOpenHardware && <button type="button" onClick={onOpenHardware} className="text-accent hover:underline">Change in Hardware</button>}

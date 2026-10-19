@@ -40,6 +40,7 @@ const when = (s: number | null) => (s ? new Date(s * 1000).toLocaleDateString() 
 /** How much space the backups use on every backup server datastore. `compact` is the short form for a tile; the full form adds counts, the last cleanup, an estimate and a 30 day trend. */
 export default function BackupStorage({ variant = "full", title = "Backup storage" }: { variant?: "compact" | "full"; title?: string }) {
   const { data, err } = useUsage();
+  if (variant === "full" && data && data.length === 0 && !err) return null; // no backup server: nothing to show
   if (variant === "compact") {
     return (
       <Card className="!p-3">

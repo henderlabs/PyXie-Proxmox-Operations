@@ -116,7 +116,9 @@ def bridges_by_node(db, cluster: Cluster) -> dict[str, dict[str, dict]]:
         if not name:
             continue
         for node_bridges in out.values():
-            node_bridges.setdefault(name, {"iface": name, "type": "sdn", "vlan_aware": True, "allowed_vlans": None, "sdn_zone": v.get("zone")})
+            tag = v.get("tag")
+            node_bridges.setdefault(name, {"iface": name, "type": "sdn", "vlan_aware": True, "allowed_vlans": None, "sdn_zone": v.get("zone"),
+                                           "alias": v.get("alias"), "tag": int(tag) if str(tag or "").isdigit() else None})
     return out
 
 
@@ -138,6 +140,8 @@ def check_bridge(bridge: str, tag: int | None, current_node: str, topo: dict[str
         problem = None
         if info is None:
             problem = f"it has no bridge '{bridge}'"
+        elif tag is not None and info.get("type") == "sdn":
+            problem = f"'{bridge}' is an SDN network that sets the VLAN itself ({info.get('tag') or 'its own tag'}): leave the VLAN tag empty"
         elif tag is not None and not info.get("vlan_aware"):
             problem = f"bridge '{bridge}' is not VLAN-aware, so it cannot carry VLAN {tag}"
         elif tag is not None and not _vlan_allowed(tag, info.get("allowed_vlans")):
