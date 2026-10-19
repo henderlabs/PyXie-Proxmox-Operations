@@ -16,7 +16,7 @@ live from Proxmox. A host is suggested (online, not in maintenance, allowed by h
 
 Every choice is a real dropdown with a plain-language name and a one-line explanation of the selected option (for example *Linux (kernel 2.6 or newer)* rather than `l26`), memory is in **GB**, and
 a choice someone has set as a default is starred (**★ ... (default)**) and listed first. On the Review step, **Make these choices the default** saves the System, Disk and Network choices as the default for
-the cluster, the operating system, a tag you gave the VM, or its pool. **Back up this VM** adds the new VM to one of your Proxmox Backup Server backup jobs once it exists (a second preview and approval).
+the cluster, the operating system, a tag you gave the VM, or its pool. On the Review step, **Backup** says which backup plan the new VM follows (the default plan, with its schedule, keep rules and copies); it is included from the next run. To use another plan, or none, pick it on the Protection page, or on the guest's Backup tab, once the VM exists (see [protection.md](protection.md)). If no default plan is set, the step instead offers to add the VM to one of your Proxmox Backup Server jobs (a second preview and approval).
 
 **Workloads > + New container** creates an **unprivileged** container from an installed template (privileged containers can only be made by `root@pam`, which PyXie does not use).
 No password is taken (a secret does not belong in an operation record): add an SSH public key, or open a shell from Proxmox. Templates: **Storage > ISO library > Container

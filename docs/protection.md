@@ -43,6 +43,8 @@ Under each guest every restore point has a **Retention** chip, worked out the wa
 - **Removed guests.** Under the guests table, *Removed guests that still have backups* lists guests that no longer exist. Ones PyXie knew can be restored from there as a new guest (same preview and approval as any restore). Backups of guests PyXie never saw are listed with their ID and last backup date; restore those from Proxmox.
 - 3-2-1 describes copies and their age. It does not prove that a backup can be restored; use *Verify* and a test restore for that.
 
+What PyXie does not do (test restores, a second backup server, immutability) is in [limits.md](limits.md).
+
 A Proxmox Backup Server is managed from this page too (status, jobs, patching, access): see [adding-a-pbs.md](adding-a-pbs.md).
 
 ## What PyXie needs
