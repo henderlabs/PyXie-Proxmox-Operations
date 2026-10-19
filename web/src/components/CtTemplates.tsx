@@ -8,7 +8,7 @@ import { notifyOperationsChanged } from "@/lib/operationsBus";
 
 type Tpl = { volid: string; size: number | null; nodes: string[] };
 type App = { template: string; package: string | null; os: string | null; version: string | null; headline: string | null; section: string | null };
-type CtOpts = { templates: Tpl[]; nodes: { name: string; online: boolean; storages: { name: string }[] }[] };
+type CtOpts = { templates: Tpl[]; nodes: { name: string; online: boolean; storages: { name: string }[]; template_storages?: { name: string }[] }[] };
 
 /** Container templates: the ones installed, download one of Proxmox's official templates, delete one. */
 export default function CtTemplates({ clusterId }: { clusterId: string }) {
@@ -58,12 +58,12 @@ export default function CtTemplates({ clusterId }: { clusterId: string }) {
           )}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-2 text-sm items-end">
             <div><label className="block text-xs text-muted mb-1">Host</label><select className="bg-surface border border-border rounded px-2 py-1.5 w-full" value={node} onChange={(e) => { setNode(e.target.value); setStorage(""); }}>{opts.nodes.filter((n) => n.online).map((n) => <option key={n.name}>{n.name}</option>)}</select></div>
-            <div><label className="block text-xs text-muted mb-1">Storage</label><select className="bg-surface border border-border rounded px-2 py-1.5 w-full" value={storage} onChange={(e) => setStorage(e.target.value)}><option value="">Choose…</option>{(nodeObj?.storages ?? []).map((s) => <option key={s.name}>{s.name}</option>)}</select></div>
+            <div><label className="block text-xs text-muted mb-1">Storage</label><select className="bg-surface border border-border rounded px-2 py-1.5 w-full" value={storage} onChange={(e) => setStorage(e.target.value)}><option value="">Choose…</option>{(nodeObj?.template_storages ?? []).map((s) => <option key={s.name}>{s.name}</option>)}</select>{nodeObj && (nodeObj.template_storages ?? []).length === 0 && <div className="text-xs text-warn mt-1">No storage on this host can hold container templates. Turn on the Container templates content type for a storage under Storage (for example the local directory), then come back.</div>}</div>
             <div className="md:col-span-2"><label className="block text-xs text-muted mb-1">Official template</label>
               <select className="bg-surface border border-border rounded px-2 py-1.5 w-full" value={tpl} onChange={(e) => setTpl(e.target.value)}><option value="">{apps ? "Choose…" : "Reading Proxmox's list…"}</option>{(apps ?? []).map((a) => <option key={a.template} value={a.template}>{a.template}{a.headline ? ` — ${a.headline}` : ""}</option>)}</select></div>
           </div>
           <div className="mt-2"><button type="button" disabled={busy || !!pend || !node || !storage || !tpl} onClick={() => preview("download", "template-download/dry-run", { node, storage, template: tpl }, `Download ${tpl} into ${storage}`)} className="px-3 py-1.5 rounded bg-ink text-on-ink border border-proxmox hover:bg-proxmox/10 disabled:opacity-50 text-xs">{busy ? "Checking…" : "Preview download"}</button>
-            <span className="text-xs text-muted ml-3">The storage must hold container templates (content type vztmpl): Proxmox&apos;s default &quot;local&quot; does.</span></div>
+            <span className="text-xs text-muted ml-3">Only storages that can hold container templates are listed (Proxmox&apos;s default &quot;local&quot; does).</span></div>
         </>
       )}
     </Card>

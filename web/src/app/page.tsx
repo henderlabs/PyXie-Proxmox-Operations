@@ -3,6 +3,7 @@ import { apiFetch } from "@/lib/api";
 import type { AuditEvent, DashboardSummary, Finding, Recommendation } from "@/lib/api";
 import { Card, CardTitle, PageHeader } from "@/components/Card";
 import StatusBadge from "@/components/StatusBadge";
+import LocalTime from "@/components/LocalTime";
 import RebootBanner from "@/components/RebootBanner";
 import AutoRefresh from "@/components/AutoRefresh";
 import QuickStartBanner from "@/components/QuickStartBanner";
@@ -185,7 +186,7 @@ export default async function DashboardPage() {
             <Link href="/operations/protection" className="hover:underline">
               <div className="text-xs text-muted flex items-center justify-center gap-1 mb-1">
                 <ShieldIcon className="w-4 h-4 text-good/70" />
-                3-2-1 met
+                3-2-1 copies met
               </div>
               <div className="text-xl font-semibold text-good">{protection!.ok}</div>
             </Link>
@@ -304,7 +305,7 @@ export default async function DashboardPage() {
           {activity.map((event) => (
             <div key={event.id} className="flex items-center justify-between py-2 text-sm">
               <span className="text-text">{describeEvent(event)}</span>
-              <span className="text-muted text-xs">{new Date(event.timestamp).toLocaleString()}</span>
+              <span className="text-muted text-xs"><LocalTime iso={event.timestamp} /></span>
             </div>
           ))}
         </div>

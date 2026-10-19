@@ -39,6 +39,7 @@ const ACTIONS = [
     id: "check-updates",
     key: "host-updates",
     label: "Check for Updates",
+    mode: "preview" as const,
     description: "Shows which package updates are available on the selected node(s). A host not yet connected for patching is read through the PVE API (review only). A host with updates pending can then be applied; one that is up to date needs nothing.",
     icon: PackageIcon,
     group: "action" as const,
@@ -55,6 +56,7 @@ const ACTIONS = [
     id: "apply-updates",
     key: "host-updates",
     label: "Apply Updates",
+    mode: "auto" as const,
     description: "Checks live and installs immediately if nothing blocks it -- no separate approval click. Still fails safe: a real blocker (quorum, disk headroom, etc.) stops it just like every other action here.",
     icon: PackageIcon,
     group: "action" as const,
@@ -361,6 +363,9 @@ export default function NodeActionsForm({
       >
         <Icon className="w-4 h-4" />
         {a.label}
+        <span className="text-[10px] font-normal opacity-70" title={a.mode === "auto" ? "Runs by itself when its own check is clean: there is no separate approval click" : a.mode === "preview" ? "Only shows what is available: nothing changes" : "Shows a preview, then waits for your approval before anything changes"}>
+          {a.mode === "auto" ? "applies after check" : a.mode === "preview" ? "preview only" : "needs approval"}
+        </span>
       </button>
     );
   }

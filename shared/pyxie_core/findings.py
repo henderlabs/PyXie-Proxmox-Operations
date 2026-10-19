@@ -329,9 +329,15 @@ def evaluate_findings(db: Session) -> dict:
         if key not in latest_by_group:  # first hit per group is the latest, thanks to the ORDER BY above
             latest_by_group[key] = t
 
+    _names = {(w.cluster_id, w.vmid): w for w in db.query(Workload).filter(Workload.is_missing.is_(False)).all()}
+    _nodes = {n.id: n.name for n in db.query(Node).all()}
     for (node_id, task_type), t in latest_by_group.items():
         if t.exit_status == "OK":
             continue
+        # a Proxmox task id (UPID) reads UPID:node:pid:pstart:starttime:type:id:user: and the id is the guest for a guest task
+        parts = (t.upid or "").split(":")
+        wl = _names.get((t.cluster_id, int(parts[6]))) if len(parts) > 6 and parts[6].isdigit() else None
+        who = f" on {wl.name or wl.vmid} ({wl.vmid})" if wl else (f" on {_nodes[node_id]}" if node_id in _nodes else "")
         current.append(
             {
                 "dedupe_key": f"task.failed:{node_id}:{task_type}",
@@ -339,8 +345,9 @@ def evaluate_findings(db: Session) -> dict:
                 "object_id": t.id,
                 "category": "task",
                 "severity": "warning",
-                "title": f"Latest {t.task_type or 'unknown'} task failed: {t.exit_status}",
-                "evidence": {"upid": t.upid, "user": t.user, "exit_status": t.exit_status, "started_at": t.started_at.isoformat() if t.started_at else None},
+                "title": f"Latest {t.task_type or 'unknown'} task failed{who}: {t.exit_status}",
+                "evidence": {"upid": t.upid, "user": t.user, "exit_status": t.exit_status, "started_at": t.started_at.isoformat() if t.started_at else None,
+                             "workload_id": str(wl.id) if wl else None, "vmid": wl.vmid if wl else None, "node": _nodes.get(node_id)},
             }
         )
 

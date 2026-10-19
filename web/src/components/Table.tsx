@@ -136,6 +136,12 @@ export function Table<T extends { id: string }>({
   const sort = onSortChange ? controlledSort ?? null : internalSort;
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [pickerOpen, setPickerOpen] = useState(false);
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPickerOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [pickerOpen]);
   const [dragging, setDragging] = useState<string | null>(null);
   const resizingHeader = useRef<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(defaultExpanded ?? []));

@@ -147,10 +147,9 @@ export default function RightsizingTable({
         {
           header: "Confidence",
           render: (a) => (
-            <>
-              <StatusBadge status={a.confidence === "insufficient_data" ? "warning" : a.confidence === "high" ? "healthy" : "unknown"} />
-              <span className="ml-1 text-xs text-muted">{a.confidence.replace(/_/g, " ")}</span>
-            </>
+            <span className={`text-xs ${a.confidence === "high" ? "text-good" : a.confidence === "insufficient_data" ? "text-warn" : "text-muted"}`} title="How much history this suggestion rests on (not the guest's health)">
+              {a.confidence === "insufficient_data" ? "Insufficient data" : `${a.confidence.charAt(0).toUpperCase()}${a.confidence.slice(1).replace(/_/g, " ")} confidence`}
+            </span>
           ),
           sortValue: (a) => a.confidence,
           optional: true,

@@ -633,11 +633,15 @@ def list_tasks(db: Session = Depends(get_db), limit: int = 50, status: str | Non
         wid = workload_id_by_cluster_vmid.get((task.cluster_id, vmid)) if vmid else None
         best, best_delta = None, None
         for op in op_candidates:
-            is_candidate = (wid and op.workload_id == wid) or (not wid and task.node_id and op.node_id == task.node_id)
+            # an operation only explains a task when it actually ran, and a host-level task (no guest) only matches a host-level operation:
+            # a guest operation on the same host, or a preview that was never approved, must not take credit for an unrelated task
+            if op.status in ("awaiting_approval", "blocked", "cancelled", "rejected"):
+                continue
+            is_candidate = (wid and op.workload_id == wid) or (not wid and not op.workload_id and task.node_id and op.node_id == task.node_id)
             if not is_candidate:
                 continue
             window_start = op.created_at
-            window_end = op.completed_at or datetime.now(timezone.utc)
+            window_end = op.completed_at or (datetime.now(timezone.utc) if op.status not in ("completed", "failed") else op.created_at + timedelta(minutes=30))
             buffer = timedelta(minutes=1)
             if window_start - buffer <= task.started_at <= window_end + buffer:
                 delta = abs((task.started_at - op.created_at).total_seconds())

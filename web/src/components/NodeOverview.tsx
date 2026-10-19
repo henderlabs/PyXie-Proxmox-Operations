@@ -240,13 +240,13 @@ export default function NodeOverview({
         <Card>
           <CardTitle>System</CardTitle>
           <dl>
-            <Row label="CPU" value={s?.cpu_model ? `${s.cpu_model}` : "—"} />
-            <Row label="Sockets / cores / threads" value={s ? `${s.cpu_sockets ?? "?"} / ${s.cpu_cores ?? "?"} per socket / ${s.cpu_threads ?? "?"}` : "—"} />
+            <Row label="CPU" value={s?.cpu_model ? `${s.cpu_model}` : s ? "Not reported by this host" : "Not collected yet"} />
+            <Row label="Sockets / cores / threads" value={s ? `${s.cpu_sockets ?? "?"} / ${s.cpu_cores ?? "?"} per socket / ${s.cpu_threads ?? "?"}` : "Not collected yet"} />
             <Row label="Memory total" value={formatBytes(s?.mem_total ?? node.mem_total_bytes)} />
             <Row label="Allocated to workloads" value={node.allocated_memory_bytes != null ? `${formatBytes(node.allocated_memory_bytes)}${(s?.mem_total ?? node.mem_total_bytes) ? ` (${Math.round((node.allocated_memory_bytes / ((s?.mem_total ?? node.mem_total_bytes) as number)) * 100)}% of RAM)` : ""}` : "—"} />
             <Row label="Kernel" value={s?.kernel ?? node.kernel_version ?? "—"} />
-            <Row label="Boot mode" value={s?.boot_mode ? `${s.boot_mode.toUpperCase()}${s.secure_boot != null ? (s.secure_boot ? ", Secure Boot on" : ", Secure Boot off") : ""}` : "—"} />
-            <Row label="KSM sharing" value={s?.ksm_shared != null ? formatBytes(s.ksm_shared) : "—"} />
+            <Row label="Boot mode" value={s?.boot_mode ? `${s.boot_mode.toUpperCase()}${s.secure_boot != null ? (s.secure_boot ? ", Secure Boot on" : ", Secure Boot off") : ""}` : s ? "Not reported by this host" : "Not collected yet"} />
+            <Row label="KSM sharing" value={s?.ksm_shared != null ? formatBytes(s.ksm_shared) : s ? "Not reported by this host" : "Not collected yet"} />
             <PendingUpdatesRow nodeId={nodeId} initialCount={pending} />
             <Row label="Last seen" value={new Date(node.last_seen).toLocaleString()} />
           </dl>

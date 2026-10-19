@@ -1,3 +1,4 @@
+import LocalTime from "@/components/LocalTime";
 import { apiFetch } from "@/lib/api";
 import type { AppSettings, NotificationCatalog, NotificationRule, NotificationItem } from "@/lib/api";
 import { Card, CardTitle, EmptyState, PageHeader } from "@/components/Card";
@@ -46,7 +47,7 @@ export default async function NotificationsSettingsPage() {
                   <StatusBadge status={n.severity === "informational" ? "healthy" : n.severity} />
                   <span className="text-text truncate">{n.title}</span>
                 </div>
-                <span className="text-xs text-muted shrink-0">{new Date(n.created_at).toLocaleString()}</span>
+                <span className="text-xs text-muted shrink-0"><LocalTime iso={n.created_at} /></span>
               </div>
             ))}
           </div>

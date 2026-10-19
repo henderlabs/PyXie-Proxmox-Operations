@@ -178,6 +178,11 @@ export default function CreateVmWizard() {
   const machineChoices: Choice[] = [...MACHINES, ...(opts?.machines ?? []).filter((m) => !["pc", "q35"].includes(m)).map((m) => ({ value: m, label: m, help: "A specific machine version: the VM keeps the same virtual hardware even after Proxmox is upgraded." }))];
   const [jobs, setJobs] = useState<{ job_id: string; cluster_id: string; storage: string; schedule: string | null; enabled: boolean; all_guests: boolean }[]>([]);
   const [backupJob, setBackupJob] = useState("");
+  const [defaultPlan, setDefaultPlan] = useState<{ name: string; retention: string; schedule: string; storage: string; copies: string[] } | null>(null);
+  useEffect(() => {
+    if (!clusterId) return;
+    fetch(`/api/backup-policies/default-plan?cluster_id=${clusterId}`).then((r) => r.json()).then((d) => setDefaultPlan(d.policy ?? null)).catch(() => setDefaultPlan(null));
+  }, [clusterId]);
   const [bkOp, setBkOp] = useState<Operation | null>(null);
   const [bkError, setBkError] = useState<string | null>(null);
   useEffect(() => { fetch("/api/protection/backup-jobs").then((r) => (r.ok ? r.json() : [])).then((d) => setJobs(Array.isArray(d) ? d : [])).catch(() => {}); }, []);
@@ -296,7 +301,14 @@ export default function CreateVmWizard() {
                   <Check label="Start the VM when it is created" checked={!!f.start_after} onChange={(v) => set("start_after", v)} />
                   <Check label="Start at host boot" checked={!!f.start_at_boot} onChange={(v) => set("start_at_boot", v)} />
                 </div>
-                {!op && (
+                {!op && defaultPlan && (
+                  <div className="text-sm">
+                    <span className="text-muted">Backup: </span>
+                    <span className="text-text">follows the default plan "{defaultPlan.name}"</span>
+                    <div className="text-xs text-muted">Backs up to {defaultPlan.storage} at {defaultPlan.schedule}, {defaultPlan.retention}{defaultPlan.copies.length ? `; copies to ${defaultPlan.copies.join(", ")}` : ""}. The new VM is included from the next run. To use another plan, or none, pick it on the Protection page once the VM exists.</div>
+                  </div>
+                )}
+                {!op && !defaultPlan && (
                   <Field label="Back up this VM (optional)" hint={backupJob && clusterJobs.find((j) => j.job_id === backupJob)?.all_guests ? "That job already backs up every guest, so the new VM is covered automatically." : "Adds the new VM to a Proxmox Backup Server job once it exists (a second preview and approval). Backups are not scheduled for a VM that is in no job."}>
                     <select className={input + " max-w-md"} value={backupJob} onChange={(e) => setBackupJob(e.target.value)}>
                       <option value="">Not in a backup job</option>
