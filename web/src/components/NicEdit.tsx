@@ -8,7 +8,7 @@ import { notifyOperationsChanged } from "@/lib/operationsBus";
 
 type NicOptions = {
   supported: boolean; models: string[]; next_slot: string | null; hosts: string[]; error: string | null;
-  bridges: { name: string; vlan_aware: boolean; allowed_vlans: string | null; missing_on: string[] }[];
+  bridges: { name: string; vlan_aware: boolean; allowed_vlans: string | null; missing_on: string[]; sdn?: boolean; alias?: string | null; tag?: number | null }[];
 };
 
 export type NicEditRequest = { action: "add" | "edit" | "remove"; nic?: NetInfo };
@@ -53,7 +53,7 @@ export default function NicEditPanel({ workloadId, workloadName, running, reques
     try {
       const body = {
         workload_id: workloadId, action, net_id: action === "add" ? opts?.next_slot ?? null : nic?.key,
-        model, bridge, tag: tag.trim() ? parseInt(tag, 10) : null, firewall, mac: mac.trim() || null, link_down: linkDown,
+        model, bridge, tag: !sdnPick && tag.trim() ? parseInt(tag, 10) : null, firewall, mac: mac.trim() || null, link_down: linkDown,
       };
       const r = await fetch("/api/operations/workload-nic-change/dry-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
@@ -64,6 +64,7 @@ export default function NicEditPanel({ workloadId, workloadName, running, reques
 
   const done = () => { setOp(null); notifyOperationsChanged(); onClose(); };
   const sel = "bg-surface border border-border rounded px-2 py-1.5 text-sm w-full";
+  const sdnPick = opts?.bridges.find((b) => b.name === bridge && b.sdn);
   const title = action === "add" ? `Add a network device to ${workloadName}` : action === "edit" ? `Edit ${nic?.key} on ${workloadName}` : `Remove ${nic?.key} from ${workloadName}`;
   return (
     <div className="mt-3 border border-border rounded p-3 bg-surface2/40 text-xs max-w-xl">
@@ -95,12 +96,13 @@ export default function NicEditPanel({ workloadId, workloadName, running, reques
             <div>
               <label className="block text-muted mb-1">Bridge</label>
               <select className={sel} value={bridge} onChange={(e) => setBridge(e.target.value)}>
-                {opts.bridges.map((b) => <option key={b.name} value={b.name}>{b.name}{b.vlan_aware ? " (VLAN-aware)" : ""}{b.missing_on.length ? `  ⚠ not on ${b.missing_on.join(", ")}` : ""}</option>)}
+                {opts.bridges.map((b) => <option key={b.name} value={b.name}>{b.name}{b.sdn ? `${b.alias ? ` · ${b.alias}` : ""}${b.tag != null ? ` · VLAN ${b.tag}` : ""}` : b.vlan_aware ? " (VLAN-aware)" : ""}{b.missing_on.length ? `  ⚠ not on ${b.missing_on.join(", ")}` : ""}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-muted mb-1">VLAN tag (empty = untagged)</label>
-              <input type="number" min={1} max={4094} className={sel} value={tag} onChange={(e) => setTag(e.target.value)} placeholder="untagged" />
+              <label className="block text-muted mb-1">VLAN tag {sdnPick ? "" : "(empty = untagged)"}</label>
+              <input type="number" min={1} max={4094} className={sel} value={sdnPick ? "" : tag} disabled={!!sdnPick} onChange={(e) => setTag(e.target.value)}
+                placeholder={sdnPick ? (sdnPick.tag != null ? `VLAN ${sdnPick.tag}, set by the network` : "set by the network") : "untagged"} title={sdnPick ? "This network sets the VLAN itself: a NIC on it carries no tag of its own." : undefined} />
             </div>
             <div>
               <label className="block text-muted mb-1">MAC address</label>

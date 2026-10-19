@@ -255,6 +255,9 @@ def workload_nic_options(workload_id: uuid.UUID, db: Session = Depends(get_db)):
         names = sorted({b for t in topo.values() for b in t})
         out["bridges"] = [{"name": b, "vlan_aware": all(bool(topo[n][b].get("vlan_aware")) for n in topo if b in topo[n]),
                            "allowed_vlans": next((topo[n][b].get("allowed_vlans") for n in topo if b in topo[n]), None),
+                           "sdn": any(topo[n][b].get("type") == "sdn" for n in topo if b in topo[n]),
+                           "alias": next((topo[n][b].get("alias") for n in topo if b in topo[n] and topo[n][b].get("alias")), None),
+                           "tag": next((topo[n][b].get("tag") for n in topo if b in topo[n] and topo[n][b].get("tag") is not None), None),
                            "missing_on": [n for n in sorted(topo) if b not in topo[n]]} for b in names]
         out["nics"] = [{"net_id": k, **net_fields(v)} for k, v in sorted(config.items()) if k.startswith("net") and k[3:].isdigit()]
         out["next_slot"] = next_free_slot(config)

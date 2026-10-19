@@ -181,5 +181,5 @@ def build_scorecard(db: Session, now: float | None = None) -> dict:
     removed, unknown = p321.removed_and_unknown(current_keys, gone, last)
     order = {"none": 0, "partial": 1, "ok": 2}
     rows.sort(key=lambda r: (order[r["status"]], r["name"] or ""))
-    return {"summary": p321.summarize(rows), "rows": rows, "removed": removed, "unknown": unknown, "plans": plans, "stores": store_cards, "jobs": jobs, "errors": errors,
+    return {"summary": p321.summarize(rows), "rows": rows, "removed": removed, "unknown": unknown, "has_backup_server": bool(store_cards), "plans": plans, "stores": store_cards, "jobs": jobs, "errors": errors,
             "rules": {"offsite_by_schedule": True, "backup_max_age_h": p321.BACKUP_MAX_AGE_H, "offsite_max_age_h": p321.OFFSITE_MAX_AGE_H}}

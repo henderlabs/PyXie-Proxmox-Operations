@@ -527,6 +527,14 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
   const admin = me === undefined || me?.is_admin === true;
   const [nicEdit, setNicEdit] = useState<NicEditRequest | null>(null);
   const [diskReq, setDiskReq] = useState<DiskRequest | null>(null);
+  // SDN networks set the VLAN themselves: look up each bridge's network name and VLAN so the table can say so
+  const [sdnNets, setSdnNets] = useState<Record<string, { alias: string | null; tag: number | null }>>({});
+  useEffect(() => {
+    if (lxc || !canEdit) return;
+    fetch(`/api/workloads/${workloadId}/nic-options`).then((r) => (r.ok ? r.json() : null)).then((d: { bridges?: { name: string; sdn?: boolean; alias?: string | null; tag?: number | null }[] } | null) => {
+      if (d?.bridges) setSdnNets(Object.fromEntries(d.bridges.filter((b) => b.sdn).map((b) => [b.name, { alias: b.alias ?? null, tag: b.tag ?? null }])));
+    }).catch(() => {});
+  }, [workloadId, lxc, canEdit, cfg?.nets?.length]);
   const [defs, setDefs] = useState<{ deviations: { field: string; label: string; actual: unknown; default: unknown; source: string }[] } | null>(null);
   useEffect(() => {
     if (lxc || !canEdit) return;
@@ -574,7 +582,7 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
                 <td className="py-1.5 pr-3">{d.key}{d.kind !== "disk" ? <span className="text-muted text-xs ml-1">({d.kind})</span> : null}
                   {d.kind === "disk" && (() => {
                     const left = d.options.backup === "0";
-                    const pill = <span className={`text-xs ml-2 ${left ? "text-warn" : "text-good"}`}>{left ? "Left out of backups" : "In backups"}</span>;
+                    const pill = <span className={`text-xs ml-2 ${left ? "text-warn" : "text-good"}`}>{left ? "Backup off" : "Backup on"}</span>;
                     return !lxc && canEdit && admin && !diskReq ? <button type="button" title="Change whether this disk is in backups" onClick={() => setDiskReq({ action: "edit_options", disk: { key: d.key, volume: d.volume, size: d.size, options: d.options } })} className="hover:underline">{pill}</button> : pill;
                   })()}
                 </td>
@@ -607,8 +615,8 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
             {cfg.nets.map((n) => (
               <tr key={n.key} className="border-t border-border">
                 <td className="py-1.5 pr-3">{n.key}{n.firewall ? <span className="text-muted text-xs ml-1">(firewall)</span> : null}</td>
-                <td className="pr-3">{n.bridge || "—"}</td>
-                <td className="pr-3">{n.vlan_tag || "—"}</td>
+                <td className="pr-3">{n.bridge || "—"}{n.bridge && sdnNets[n.bridge]?.alias ? <span className="text-muted text-xs"> · {sdnNets[n.bridge].alias}</span> : null}</td>
+                <td className="pr-3">{n.vlan_tag || (n.bridge && sdnNets[n.bridge]?.tag != null ? <>{sdnNets[n.bridge].tag} <span className="text-muted text-xs">(from the network)</span></> : "—")}</td>
                 <td className="pr-3 text-muted">{n.mac || "—"}</td>
                 <td className="pr-3">{(lxc ? n.ip : n.model) || "—"}{n.link_down ? <span className="text-warn text-xs ml-1">(disconnected)</span> : null}</td>
                 <td className="text-right whitespace-nowrap">{canEdit && admin && !nicEdit && <><button type="button" onClick={() => setNicEdit({ action: "edit", nic: n })} className="text-xs text-accent hover:underline mr-3">Edit</button><button type="button" onClick={() => setNicEdit({ action: "remove", nic: n })} className="text-xs text-bad hover:underline">Remove</button></>}</td>
