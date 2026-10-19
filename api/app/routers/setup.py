@@ -16,7 +16,7 @@ from pyxie_core.models import (
 from pyxie_core.notifications import resolve_recipients
 from pyxie_core.pve_client import PveClient
 from pyxie_core.pve_write_client import PveMaintenanceClient
-from pyxie_core.setup_status import build_steps, progress, server_checks
+from pyxie_core.setup_status import build_steps, open_steps, progress, server_checks
 
 from ..auth_deps import get_current_user, require_admin
 from ..deps import get_db
@@ -73,7 +73,7 @@ def _inputs(db: Session) -> dict:
 @router.get("/status")
 def setup_status(db: Session = Depends(get_db)):
     steps = build_steps(_inputs(db))
-    return {"steps": steps, "progress": progress(steps), "tls_mode": edge_probe.tls_mode()}
+    return {"steps": steps, "progress": progress(steps), "open": open_steps(steps), "tls_mode": edge_probe.tls_mode()}
 
 
 def _chk(group, label, status, detail="", fix=""):
