@@ -14,7 +14,7 @@ membership -- and, since v0.37, creating, changing, cloning and deleting
 VMs and containers, snapshots, tags (with Proxmox's own colors), defaults
 and templates, resource pools, an ISO library and NFS storage setup (see
 [`docs/guest-management.md`](docs/guest-management.md)), and a 3-2-1 backup scorecard ([`docs/protection.md`](docs/protection.md)) and Proxmox Backup Server management: status, jobs and patching ([`docs/adding-a-pbs.md`](docs/adding-a-pbs.md)), restoring a VM or container from any restore point ([`docs/restore.md`](docs/restore.md)), and one backup plan with copies, namespaces, pruning, garbage collection and verification ([`docs/retention-policies.md`](docs/retention-policies.md), [`docs/backup-namespaces.md`](docs/backup-namespaces.md)). See the Safety
-Contract section below for exactly how every one of those is gated.
+Contract section below for exactly how every one of those is gated. What PyXie does not do (yet) is listed plainly in [`docs/limits.md`](docs/limits.md).
 
 ## Installation
 
@@ -402,6 +402,10 @@ What the RAM columns show, and why it can differ from PVE:
 
 ## Protection subsystem
 
+**Backups (v0.41 onward).** One backup plan says how every guest is backed up, copied, kept and checked: a default plan plus per-guest exceptions, with first backup, copies (including S3 and namespaces), keep rules, pruning, garbage collection and verification ([`docs/protection.md`](docs/protection.md), [`docs/retention-policies.md`](docs/retention-policies.md), [`docs/backup-namespaces.md`](docs/backup-namespaces.md)). A guest is only "3-2-1 copies met" when its disks are in the backups too; a guest with a disk left out of backups is partly protected. Restore (as a new guest or over the old one, including guests that were removed) is previewed and approved like every other write ([`docs/restore.md`](docs/restore.md)). The Workloads list has a Backup column, and each guest's Backup tab and Hardware tab show and change its disks. The Capacity page has an *If a host fails* memory table. Limits: [`docs/limits.md`](docs/limits.md).
+
+**Contract underneath.**
+
 Generic contract (`protection_targets`/`protection_credentials`) +
 normalized `protection_results` (tri-state `protected`: `true`/`false`/
 `unknown`; `unknown` is never treated as safe). PBS is the fully
@@ -577,8 +581,10 @@ Alembic migrations: `api/migrations/versions/`.
   labels beyond their column header -- usable once you know the page, a
   genuinely new operator would benefit from a further pass here.
 - The PVE task -> PyXie operation link (Logging -> PVE Tasks) is a
-  time-window + object-scope heuristic, not a foreign key -- correct
-  against every real case tested so far, but two operations racing on
-  the same workload within the same window could in principle
-  misattribute a task. Not observed in practice; would need a real
+  time-window + object-scope heuristic, not a foreign key. Since v0.44.0
+  an operation that never ran (an unapproved preview, a cancelled or
+  blocked one) never takes credit, and a guest operation never takes
+  credit for a host task (`pyxie_core/task_attribution.py`, tested), but
+  two operations racing on the same workload within the same window could
+  in principle still misattribute a task. It would need a real
   correlation ID threaded through to PVE to close entirely.

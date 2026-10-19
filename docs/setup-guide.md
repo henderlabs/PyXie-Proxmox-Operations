@@ -11,7 +11,7 @@ Platform > Setup guide (in the left menu; formerly "Integrations") opens with "S
 | 4 | Add the admin credential | the Maintenance (Admin) credential is saved and tested |
 | 5 | Connect each host for patching | host key pair generated, and every node has its SSH host key pinned and a current wrapper |
 | 6 | Turn features on | the "write to Proxmox" switch is on (console is shown alongside) |
-| 7 | Notifications | email relay on and a recipient set |
+| 7 | Notifications | email relay on, and at least one notification rule that is on has someone to email (its own addresses, or all admins) |
 | 8 | Check everything | (button) |
 
 Step 2 is done by running the script from the **Create the Proxmox accounts** section of **Settings > Credentials** on a Proxmox node; PyXie never
