@@ -176,7 +176,14 @@ export default function RightsizingTable({
           header: "Memory (P95)",
           tooltip: "95th percentile memory over the last 30 days while running. \"now\" is the live reading from PVE.",
           render: (a) =>
-            a.currently_running ? (
+            a.currently_running && a.memory_host_only ? (
+              <div
+                className="text-[11px] text-muted"
+                title="Proxmox gets no memory statistics from inside this guest (no balloon driver), so this reading is the size of its process on the host, about 100% of its RAM. It says nothing about what the guest uses, so no memory advice is given."
+              >
+                host-side reading only (no guest memory stats)
+              </div>
+            ) : a.currently_running ? (
               <div>
                 <div className="flex items-center gap-2">
                   <Meter value={a.memory.p95} width={56} />
