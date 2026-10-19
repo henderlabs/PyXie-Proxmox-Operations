@@ -223,7 +223,8 @@ def _rightsizing_recommendations(assessments: list[dict], capacity_reports: list
             )
             possible_impact = "Uses more of the node's/cluster's allocatable capacity."
         else:
-            severity = "warning" if touches_constrained_resource else "info"
+            # a pure decrease is a saving, not a risk: never above info, even on the scarce resource
+            severity = "info"
             expected_benefit = "Frees CPU/memory allocation for other workloads without observed performance impact."
             possible_impact = "Reduced burst headroom if usage pattern changes."
 
