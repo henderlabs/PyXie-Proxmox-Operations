@@ -113,12 +113,68 @@ def list_network_topology(db: Session, cluster: Cluster) -> list[dict]:
                     "ports": i.get("bridge_ports") or i.get("slaves"),
                     "active": bool(i.get("active", 1)),
                     "comments": i.get("comments"),
+                    "address": i.get("address"),
+                    "cidr": i.get("cidr"),
                 }
                 for i in raw_ifaces
                 if i.get("iface") != "lo"
             ]
             topology.append({"node": node.name, "node_id": str(node.id), "interfaces": interfaces})
     return topology
+
+
+def read_sdn(db: Session, cluster: Cluster) -> dict:
+    """Read-only: the cluster's SDN zones and virtual networks, with the READ-ONLY (inventory) token, which has SDN.Audit through PVEAuditor.
+    {readable, error, zones: [{zone, type, bridge, nodes}], vnets: [{vnet, alias, zone, tag, vlanaware}]}. Proxmox lists only what the token may
+    audit, so an empty list can mean "no SDN" or "no permission": the caller decides which from what guests are attached to."""
+    out: dict = {"readable": True, "error": None, "zones": [], "vnets": []}
+    try:
+        client, _cred = build_pve_client(db, _load_cluster_context(db, cluster))
+        with client:
+            zones, vnets = client.sdn_zones(), client.sdn_vnets()
+    except Exception as exc:  # noqa: BLE001 -- the Network page still works without SDN
+        out.update(readable=False, error=str(exc)[:200])
+        return out
+    out["zones"] = [{"zone": z.get("zone"), "type": z.get("type"), "bridge": z.get("bridge"),
+                     "nodes": [n for n in str(z.get("nodes") or "").replace(",", " ").split() if n]} for z in zones if z.get("zone")]
+    out["vnets"] = [{"vnet": v.get("vnet"), "alias": v.get("alias"), "zone": v.get("zone"),
+                     "tag": int(v["tag"]) if str(v.get("tag", "")).isdigit() else None, "vlanaware": bool(v.get("vlanaware"))} for v in vnets if v.get("vnet")]
+    return out
+
+
+def read_cluster_net_facts(db: Session, cluster: Cluster) -> dict:
+    """Read-only facts that prove what a host link is used for: the datacenter migration network (CIDR) and each member's corosync link addresses.
+    Missing facts are simply absent: nothing is guessed."""
+    out: dict = {"migration_cidr": None, "corosync": {}}
+    try:
+        client, _cred = build_pve_client(db, _load_cluster_context(db, cluster))
+        with client:
+            try:
+                out["migration_cidr"] = _parse_migration(client.cluster_options())
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                for n in client.cluster_config_nodes() or []:
+                    addrs = [str(v) for k, v in n.items() if str(k).startswith("ring") and str(k).endswith("_addr") and v]
+                    if n.get("name"):
+                        out["corosync"][n["name"]] = addrs
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _parse_migration(options: dict) -> str | None:
+    """The datacenter option `migration` comes as 'type=secure,network=10.0.0.0/24' (a string) or a mapping. Pure."""
+    m = (options or {}).get("migration")
+    if isinstance(m, dict):
+        return m.get("network")
+    for part in str(m or "").split(","):
+        k, _, v = part.partition("=")
+        if k.strip() == "network" and v.strip():
+            return v.strip()
+    return None
 
 
 def list_workload_nics(db: Session, cluster: Cluster) -> list[dict]:
@@ -137,6 +193,7 @@ def list_workload_nics(db: Session, cluster: Cluster) -> list[dict]:
     target = _load_cluster_context(db, cluster)
     read_client, _cred = build_pve_client(db, target)
     topo_by_node = {t["node"]: {i["iface"]: i for i in t["interfaces"]} for t in list_network_topology(db, cluster)}
+    vnets = {v["vnet"]: v for v in read_sdn(db, cluster)["vnets"]}
 
     out = []
     with read_client:
@@ -166,6 +223,7 @@ def list_workload_nics(db: Session, cluster: Cluster) -> list[dict]:
                 bridge = parsed.get("bridge")
                 tag = int(parsed["tag"]) if str(parsed.get("tag", "")).isdigit() else None
                 iface_info = topo_by_node.get(wl.node.name, {}).get(bridge or "", {})
+                vnet = vnets.get(bridge or "")
                 nics.append(
                     {
                         "net_id": key,
@@ -174,6 +232,9 @@ def list_workload_nics(db: Session, cluster: Cluster) -> list[dict]:
                         "model": parsed.get("model"),
                         "bridge_vlan_aware": bool(iface_info.get("vlan_aware")),
                         "allowed_vlans": iface_info.get("allowed_vlans"),
+                        # an SDN network sets the VLAN itself: the NIC carries no tag of its own
+                        "sdn": ({"alias": vnet.get("alias"), "zone": vnet.get("zone"), "tag": vnet.get("tag")} if vnet else None),
+                        "effective_tag": vnet.get("tag") if vnet else tag,
                     }
                 )
             out.append(

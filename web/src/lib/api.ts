@@ -210,6 +210,8 @@ export type WorkloadNic = {
   model: string | null;
   bridge_vlan_aware: boolean;
   allowed_vlans: string | null;
+  sdn?: { alias: string | null; zone: string | null; tag: number | null } | null;
+  effective_tag?: number | null;
 };
 
 export type WorkloadNics = {
@@ -233,7 +235,17 @@ export type VlanSegment = {
   guests: { workload_id: string; vmid: number; name: string | null; type: string; node: string; net_id: string; status: string }[];
   problems: string[];
   blocked_hosts: { node: string; reason: string }[];
+  sdn?: { alias: string | null; zone: string | null; tag: number | null } | null;
+  unused?: boolean;
+  note?: string | null;
 };
+
+export type NetworkSdnStatus = { cluster_id: string; cluster_name: string; readable: boolean; error: string | null; zones: string[]; networks: number };
+export type NetworkLayoutGroup = {
+  nodes: string[]; is_main: boolean; error?: string;
+  interfaces: { iface: string; type: string | null; ports: string[]; active: boolean; vlan_aware: boolean; carries: string[] }[];
+};
+export type NetworkLayout = { cluster_id: string; cluster_name: string; groups: NetworkLayoutGroup[]; facts: { migration_network: string | null; corosync_links_known: boolean } };
 
 export type Site = { id: string; organization_id: string; name: string; slug: string };
 export type Organization = { id: string; name: string; slug: string; created_at: string };
