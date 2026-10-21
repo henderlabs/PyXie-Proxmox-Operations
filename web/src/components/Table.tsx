@@ -98,6 +98,7 @@ export function Table<T extends { id: string }>({
   defaultsVersion,
   controlledSort,
   onSortChange,
+  scrollHeight,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -133,6 +134,9 @@ export function Table<T extends { id: string }>({
    * both (the default) for Table's normal self-contained sorting. */
   controlledSort?: SortState;
   onSortChange?: (next: SortState) => void;
+  /** CSS max-height for the table body. When set, the rows scroll inside the table (both ways)
+   * and the header row stays pinned, so whatever sits under the table stays in view. */
+  scrollHeight?: string;
 }) {
   const [order, setOrder] = useState<string[]>(columns.map((c) => c.header));
   const [hidden, setHidden] = useState<Set<string>>(
@@ -333,11 +337,11 @@ export function Table<T extends { id: string }>({
       {rows.length === 0 ? (
         <div className="text-sm text-muted text-center py-10 border border-dashed border-border rounded-lg">{emptyMessage}</div>
       ) : (
-        <div ref={scrollRef} className="overflow-x-auto border border-border rounded-lg">
+        <div ref={scrollRef} className={`${scrollHeight ? "overflow-auto" : "overflow-x-auto"} border border-border rounded-lg`} style={scrollHeight ? { maxHeight: scrollHeight } : undefined}>
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-surface2 text-left text-muted text-xs uppercase tracking-wider select-none">
-                {renderDetail && <th className="w-8" />}
+                {renderDetail && <th className={`w-8 ${scrollHeight ? "sticky top-0 z-10 bg-surface2" : ""}`} />}
                 {orderedColumns.map((c) => {
                   const isSorted = sort?.header === c.header;
                   const sortable = !!(c.sortValue || c.compare);
@@ -349,7 +353,7 @@ export function Table<T extends { id: string }>({
                       onDragOver={(e) => e.preventDefault()}
                       onDrop={() => onDrop(c.header)}
                       style={widths[c.header] ? { width: `${widths[c.header]}px` } : undefined}
-                      className={`relative px-3 py-2 font-medium ${c.className || ""} ${dragging === c.header ? "opacity-40" : ""}`}
+                      className={`${scrollHeight ? "sticky top-0 z-10 bg-surface2" : "relative"} px-3 py-2 font-medium ${c.className || ""} ${dragging === c.header ? "opacity-40" : ""}`}
                     >
                       <span className="inline-flex items-center gap-1.5">
                         <span className="text-muted/60 cursor-grab" title="Drag to reorder">⠿</span>

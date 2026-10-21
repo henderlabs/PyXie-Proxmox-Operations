@@ -137,12 +137,25 @@ export default function WorkloadsTable({
   // across the full dataset, not just whichever page happens to be
   // showing -- this is meant to hold up at real enterprise fleet sizes,
   // not just 130 VMs.
-  const PAGE_SIZE = 25;
+  // 0 = all rows. Remembered per browser, like the column layout.
+  const PAGE_SIZE_CHOICES = [25, 50, 100, 0];
+  const [pageSize, setPageSize] = useState(25);
+  useEffect(() => {
+    try {
+      const saved = Number(window.localStorage.getItem("pyxie:workloads-page-size"));
+      if (PAGE_SIZE_CHOICES.includes(saved)) setPageSize(saved);
+    } catch { /* storage unavailable: keep the default */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  function choosePageSize(n: number) {
+    setPageSize(n);
+    try { window.localStorage.setItem("pyxie:workloads-page-size", String(n)); } catch { /* best-effort */ }
+  }
   const [sort, setSort] = useState<SortState>(null);
   const [page, setPage] = useState(1);
   useEffect(() => {
     setPage(1);
-  }, [searchQuery, showRemoved, sort]);
+  }, [searchQuery, showRemoved, sort, pageSize]);
 
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const nodesByCluster = new Map<string, Node[]>();
@@ -634,13 +647,21 @@ export default function WorkloadsTable({
 
   const sortedSearchedWorkloads = sortRows(searchedWorkloads, columns, sort);
   const selectedWorkloads = workloads.filter((w) => selected.has(w.id) && !w.is_missing);
-  const totalPages = Math.max(1, Math.ceil(sortedSearchedWorkloads.length / PAGE_SIZE));
+  const effectivePageSize = pageSize === 0 ? Math.max(1, sortedSearchedWorkloads.length) : pageSize;
+  const totalPages = Math.max(1, Math.ceil(sortedSearchedWorkloads.length / effectivePageSize));
   const currentPage = Math.min(page, totalPages);
-  const pagedWorkloads = sortedSearchedWorkloads.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const pagedWorkloads = sortedSearchedWorkloads.slice((currentPage - 1) * effectivePageSize, currentPage * effectivePageSize);
 
   return (
     <div>
       <div className="flex items-center gap-4 mb-2">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name or vmid…"
+          className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm w-64"
+        />
         {missingWorkloads.length > 0 && (
           <label className="flex items-center gap-2 text-xs text-muted cursor-pointer w-fit shrink-0">
             <input type="checkbox" checked={showRemoved} onChange={(e) => setShowRemoved(e.target.checked)} />
@@ -650,13 +671,6 @@ export default function WorkloadsTable({
             </span>
           </label>
         )}
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name or vmid…"
-          className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm w-64"
-        />
       </div>
       {admin && selected.size > 0 && (
         <div className="flex items-center gap-3 mb-2 text-xs">
@@ -668,6 +682,7 @@ export default function WorkloadsTable({
       {bulkTags && selectedWorkloads.length > 0 && <BulkTagsAction workloads={selectedWorkloads} onClose={() => setBulkTags(false)} />}
       <Table
         rows={pagedWorkloads}
+        scrollHeight="max(320px, calc(100vh - 380px))"
         controlledSort={sort}
         onSortChange={setSort}
         emptyMessage={searchQuery ? <span className="text-muted">No workloads match &quot;{search}&quot;.</span> : <NoInfrastructureHint subject="workloads" />}
@@ -708,10 +723,22 @@ export default function WorkloadsTable({
         }
       />
       {sortedSearchedWorkloads.length > 0 && (
-        <div className="flex items-center justify-between mt-2 text-xs text-muted">
+        <div className="sticky bottom-0 z-10 flex items-center gap-3 mt-2 py-2 bg-canvas text-xs text-muted">
           <span>
             {sortedSearchedWorkloads.length} workload{sortedSearchedWorkloads.length === 1 ? "" : "s"}
           </span>
+          <label className="ml-auto flex items-center gap-1.5">
+            Per page
+            <select
+              value={pageSize}
+              onChange={(e) => choosePageSize(Number(e.target.value))}
+              className="bg-surface2 border border-border rounded px-1.5 py-1 text-xs text-text"
+            >
+              {PAGE_SIZE_CHOICES.map((n) => (
+                <option key={n} value={n}>{n === 0 ? "All (slower)" : n}</option>
+              ))}
+            </select>
+          </label>
           {totalPages > 1 && (
             <div className="flex items-center gap-2">
               <button
