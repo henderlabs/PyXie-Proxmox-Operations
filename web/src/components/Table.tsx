@@ -42,6 +42,12 @@ export function sortRows<T>(rows: T[], columns: Column<T>[], sort: SortState): T
       if (a.v == null && b.v == null) return 0;
       if (a.v == null) return 1;
       if (b.v == null) return -1;
+      if (typeof a.v === "string" && typeof b.v === "string") {
+        const al = a.v.toLowerCase();
+        const bl = b.v.toLowerCase();
+        if (al < bl) return -1;
+        if (al > bl) return 1;
+      }
       if (a.v < b.v) return -1;
       if (a.v > b.v) return 1;
       return 0;
