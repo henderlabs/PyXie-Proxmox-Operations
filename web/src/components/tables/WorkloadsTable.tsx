@@ -87,6 +87,31 @@ export default function WorkloadsTable({
   );
   const visibleWorkloads = showRemoved ? workloads : workloads.filter((w) => !w.is_missing);
 
+  // Declared before the search filter below: const arrows are not hoisted, so using
+  // backupText earlier threw 'Cannot access before initialization' on every keystroke.
+  const [backup, setBackup] = useState<Record<string, BackupSummary>>({});
+  useEffect(() => {
+    let cancelled = false;
+    function refresh() {
+      fetch("/api/backup-policies/guest-summary")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => data && !cancelled && setBackup(data))
+        .catch(() => {});
+    }
+    refresh();
+    const interval = setInterval(refresh, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+  const backupText = (b: BackupSummary | undefined) => {
+    if (!b) return "";
+    if (b.exempt) return "no backup";
+    const open = b.left_out - b.accepted;
+    return `${b.plan ?? "no plan"} ${open > 0 ? "left out" : b.left_out > 0 ? "left out on purpose" : ""}`.trim();
+  };
+
   // Same match predicate as WorkloadSearchSelect.tsx (the Maintenance
   // page's VM picker) -- case-insensitive substring on name or vmid --
   // so a VM findable there is findable the same way here.
@@ -193,28 +218,6 @@ export default function WorkloadsTable({
   // Is each running VM's QEMU answering? One cached server scan (about 6 s cold for 116 VMs), so the
   // table renders at once and this column fills in afterwards.
   // Each guest's backup plan and disks left out of backups (inventory only, one call).
-  const [backup, setBackup] = useState<Record<string, BackupSummary>>({});
-  useEffect(() => {
-    let cancelled = false;
-    function refresh() {
-      fetch("/api/backup-policies/guest-summary")
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => data && !cancelled && setBackup(data))
-        .catch(() => {});
-    }
-    refresh();
-    const interval = setInterval(refresh, 60000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-  const backupText = (b: BackupSummary | undefined) => {
-    if (!b) return "";
-    if (b.exempt) return "no backup";
-    const open = b.left_out - b.accepted;
-    return `${b.plan ?? "no plan"} ${open > 0 ? "left out" : b.left_out > 0 ? "left out on purpose" : ""}`.trim();
-  };
 
   const [liveness, setLiveness] = useState<Record<string, Liveness>>({});
   useEffect(() => {
