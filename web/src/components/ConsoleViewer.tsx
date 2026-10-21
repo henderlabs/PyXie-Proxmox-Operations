@@ -19,7 +19,7 @@ const EMBEDDED_HINT: Record<ConsoleInfo["embedded"], string> = {
   disabled: "The embedded console is switched off. An admin can turn it on in Settings.",
   no_credential: "No credential is saved for this PVE target (Credentials page). Use Open in PVE meanwhile.",
   not_running: "The console is available while the guest is running.",
-  unavailable: "This guest is not currently visible to PVE.",
+  unavailable: "Removed from Proxmox. PVE no longer lists this guest, so it has no console. PyXie keeps the record for history.",
 };
 
 export function useConsoleInfo(workloadId: string) {
@@ -231,7 +231,12 @@ export default function ConsoleViewer({ workloadId, info }: { workloadId: string
         {state === "connecting" && <span className="text-muted">Connecting…</span>}
         {state === "connected" && <span className="text-muted">Connected. Idle limit 15 min.</span>}
       </div>
-      {!canEmbed && info && EMBEDDED_HINT[info.embedded] && <p className="text-xs text-muted">{EMBEDDED_HINT[info.embedded]}</p>}
+      {!canEmbed && info?.embedded === "unavailable" && (
+        <p className="text-xs rounded bg-warn/15 text-warn px-2.5 py-2">
+          <span className="font-medium">Removed from Proxmox.</span> PVE no longer lists this guest, so it has no console. PyXie keeps the record for history. Deleted it on purpose? You can ignore this.
+        </p>
+      )}
+      {!canEmbed && info && info.embedded !== "unavailable" && EMBEDDED_HINT[info.embedded] && <p className="text-xs text-muted">{EMBEDDED_HINT[info.embedded]}</p>}
       {message && <p className="text-xs text-bad">{message}</p>}
       {live && showClip && (
         <div className="rounded border border-border px-2 py-1.5 text-sm">
