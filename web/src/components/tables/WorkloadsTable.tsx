@@ -142,7 +142,8 @@ export default function WorkloadsTable({
   const [pageSize, setPageSize] = useState(25);
   useEffect(() => {
     try {
-      const saved = Number(window.localStorage.getItem("pyxie:workloads-page-size"));
+      const raw = window.localStorage.getItem("pyxie:workloads-page-size");
+      const saved = raw === null ? NaN : Number(raw);  // Number(null) is 0, which would mean "All"
       if (PAGE_SIZE_CHOICES.includes(saved)) setPageSize(saved);
     } catch { /* storage unavailable: keep the default */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
