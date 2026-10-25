@@ -83,7 +83,7 @@ from .operations_engine import (
     enter_stage,
     fail_operation,
 )
-from .placement import evaluate_affinity, get_node_tier
+from .placement import capacity_shortfall_reason, evaluate_affinity, get_node_tier
 from .preconditions import revalidate_live_migration
 from .pve_write_client import (
     MutationsDisabledError,
@@ -193,6 +193,11 @@ def _evaluate_migration_hard_blocks(
                 expected_disk_bytes = entry.get("maxdisk") if entry else None
             except Exception:
                 expected_disk_bytes = None
+        # The disks must fit on the target storage: not a judgment call, so it is never overridable.
+        no_room = capacity_shortfall_reason(destination_storage, expected_disk_bytes)
+        if no_room:
+            reasons.append(no_room)
+            blocking_rules.append("SAFE-STORAGE-002")
         config = _qemu_config(client, source_node.name, workload)
         current_storage_names = sorted(_workload_disk_storage_names(config)) if config else []
         extra["current_storage"] = current_storage_names[0] if current_storage_names else None
