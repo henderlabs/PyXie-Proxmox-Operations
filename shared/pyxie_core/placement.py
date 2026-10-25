@@ -648,6 +648,26 @@ def recommend_storage_for_candidate(
     return None
 
 
+def capacity_shortfall_reason(storage, needed_bytes) -> Optional[str]:
+    """A plain-words reason when `needed_bytes` of disk cannot fit in `storage`, else None.
+    A storage whose size is not known, or a guest with no known disk size, is not refused: there is nothing to compare."""
+    if storage is None or not needed_bytes or storage.capacity_bytes is None:
+        return None
+    free = max(storage.capacity_bytes - (storage.used_bytes or 0), 0)
+    if needed_bytes <= free:
+        return None
+    gb = lambda b: f"{b / 1024 ** 3:.0f} GB"
+    return f"{storage.name} has {gb(free)} free but the guest's disks are {gb(needed_bytes)}, so they would not fit"
+
+
+def storage_capacity_shortfall(db: Session, workload: Workload, storage_id) -> Optional[str]:
+    """capacity_shortfall_reason for moving all of a guest's disks onto the storage with this id (inventory only)."""
+    from .models import Storage
+    storage = db.query(Storage).filter(Storage.id == storage_id).one_or_none() if storage_id else None
+    needed = sum(d["size_bytes"] or 0 for d in guest_disk_rows(db, workload))
+    return capacity_shortfall_reason(storage, needed)
+
+
 def guest_disk_rows(db: Session, workload: Workload) -> list[dict]:
     """The guest's disks for a migration preview: [{slot, storage, size_bytes, shared}]. `shared` is true when that storage is cluster-shared (the disk is not
     copied when the guest moves host) and false for node-local storage (the disk is copied over the network). CD drives are left out. Inventory only."""

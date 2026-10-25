@@ -23,6 +23,7 @@ from .placement import (
     rank_with_simulated_load,
     recommend_destinations,
     recommend_storage_for_candidate,
+    storage_capacity_shortfall,
 )
 from .rightsizing import assess_all_workloads, refresh_rightsizing_cache
 
@@ -465,11 +466,6 @@ def _placement_recommendations(
                 if not moving:
                     continue
 
-                note_planned_move(simulated_added_bytes, wl, best.node_id)
-                if wl.memory_bytes and wl.node_id in sim_pct and best.node_id in sim_pct:
-                    sim_pct[wl.node_id] -= wl.memory_bytes / node_by_id[wl.node_id].mem_total_bytes * 100.0
-                    sim_pct[best.node_id] += wl.memory_bytes / node_by_id[best.node_id].mem_total_bytes * 100.0
-
                 # Storage decision, same source of truth every other
                 # migration path (evacuation, maintenance, the manual "Move
                 # to Another Node" action) already uses -- Balance Load was
@@ -494,6 +490,25 @@ def _placement_recommendations(
                 storage_rec = recommend_storage_for_candidate(
                     db, best.node_id, currently_on_shared, storage_preference=effective_pref
                 )
+                if storage_rec:
+                    no_room = storage_capacity_shortfall(db, wl, storage_rec["id"])
+                    if no_room:
+                        # Refused, and kept out of the simulated load: a move that cannot happen must not use up headroom.
+                        if blocked_out is not None:
+                            blocked_out.append({
+                                "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name, "memory_bytes": wl.memory_bytes,
+                                "source_node_id": str(wl.node_id), "source_node": current.node_name,
+                                "blocked_node_id": str(best.node_id), "blocked_node": best.node_name,
+                                "blocking_reasons": [no_room], "improvement": round(improvement, 1),
+                                "planned_instead": None, "kind": "no_space",
+                            })
+                        continue
+
+                note_planned_move(simulated_added_bytes, wl, best.node_id)
+                if wl.memory_bytes and wl.node_id in sim_pct and best.node_id in sim_pct:
+                    sim_pct[wl.node_id] -= wl.memory_bytes / node_by_id[wl.node_id].mem_total_bytes * 100.0
+                    sim_pct[best.node_id] += wl.memory_bytes / node_by_id[best.node_id].mem_total_bytes * 100.0
+
 
                 wl_label = wl.name or f"VMID {wl.vmid}"
                 possible_impact = "Live migration -- typically no downtime, brief network blip possible."
