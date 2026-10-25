@@ -1021,6 +1021,7 @@ class ResizeRequest(BaseModel):
 class StorageMoveRequest(BaseModel):
     workload_id: uuid.UUID
     target_storage: str
+    disk_slot: str | None = None  # move only this disk (e.g. scsi1); None moves every disk that is not on the target already
 
 
 @router.post("/workload-storage-moves/dry-run", dependencies=[Depends(require_admin)])
@@ -1030,7 +1031,7 @@ def create_storage_move_dry_run(payload: StorageMoveRequest, user=Depends(get_cu
     if workload is None:
         raise HTTPException(404, "workload not found")
     try:
-        op = dry_run_storage_move(db, workload, target_storage=payload.target_storage, actor=user.email)
+        op = dry_run_storage_move(db, workload, target_storage=payload.target_storage, actor=user.email, only_slot=payload.disk_slot)
     except StorageMoveError as exc:
         raise HTTPException(400, str(exc))
     return _serialize(op)

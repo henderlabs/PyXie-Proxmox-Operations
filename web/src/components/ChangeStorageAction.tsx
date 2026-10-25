@@ -10,11 +10,20 @@ import { useMe } from "@/lib/useMe";
 
 /** Change where a VM's disks live (Proxmox "move disk"): pick a storage, preview what moves and whether it fits, approve, watch it copy. */
 export default function ChangeStorageAction({
-  workloadId, workloadName, nodeId, clusterId, nodes, storage,
-}: { workloadId: string; workloadName: string; nodeId: string; clusterId: string; nodes: Node[]; storage: StorageItem[] }) {
+  workloadId, workloadName, nodeId, clusterId, nodes, storage, diskSlot, diskStorage, startOpen, onClose,
+}: {
+  workloadId: string; workloadName: string; nodeId: string; clusterId: string; nodes: Node[]; storage: StorageItem[];
+  /** Move only this disk (for example "scsi1") instead of every disk. */
+  diskSlot?: string;
+  /** Where that disk is now, so it is not offered as the target. */
+  diskStorage?: string | null;
+  /** Show the panel at once, with no button (the caller opened it). */
+  startOpen?: boolean;
+  onClose?: () => void;
+}) {
   const router = useRouter();
   const me = useMe();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!startOpen);
   const [target, setTarget] = useState("");
   const [op, setOp] = useState<Operation | null>(null);
   const [pending, setPending] = useState(false);
@@ -24,6 +33,7 @@ export default function ChangeStorageAction({
   // Storages this VM's host can reach: the cluster's shared storage and this host's own local storage.
   const options = storage
     .filter((s) => !s.is_missing && s.cluster_id === clusterId && (s.scope === "cluster-shared" || (s.scope === "node-local" && s.node_id === nodeId)) && !["pbs", "iscsi"].includes(s.type ?? ""))
+    .filter((s) => !(diskSlot && s.name === diskStorage))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // Follow a running move.
@@ -46,13 +56,13 @@ export default function ChangeStorageAction({
   if (me !== undefined && me?.is_admin !== true) return null;
 
   function reset() {
-    setOpen(false); setTarget(""); setOp(null); setError(null);
+    setOpen(false); setTarget(""); setOp(null); setError(null); onClose?.();
   }
 
   async function preview() {
     setPending(true); setError(null);
     try {
-      const r = await fetch("/api/operations/workload-storage-moves/dry-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workload_id: workloadId, target_storage: target }) });
+      const r = await fetch("/api/operations/workload-storage-moves/dry-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workload_id: workloadId, target_storage: target, ...(diskSlot ? { disk_slot: diskSlot } : {}) }) });
       const d = await r.json();
       if (!r.ok) { setError(d.error || "Preview failed"); return; }
       setOp(d); notifyOperationsChanged();
@@ -84,11 +94,11 @@ export default function ChangeStorageAction({
   const res = op?.dry_run_result as { disks?: { slot: string; storage: string; size_bytes: number }[]; reasons?: string[]; target_storage?: string; total_bytes?: number } | null | undefined;
   return (
     <div className="mt-2 border border-border rounded p-3 bg-surface2/40 text-xs w-full max-w-md">
-      <div className="font-medium text-text mb-1">Change storage for {workloadName}</div>
+      <div className="font-medium text-text mb-1">{diskSlot ? `Move ${diskSlot} of ${workloadName}` : `Change storage for ${workloadName}`}</div>
       {!op ? (
         <>
           <p className="text-muted mb-2">Copies the VM&apos;s disks to another storage on {nodeName}, one disk at a time, while it keeps running. Each old copy is deleted only after Proxmox reports its copy finished. Disks already on the chosen storage are left alone.</p>
-          <label className="block text-muted mb-1">Move the disks to</label>
+          <label className="block text-muted mb-1">{diskSlot ? `Move ${diskSlot} to` : "Move the disks to"}</label>
           <select className="bg-surface border border-border rounded px-2 py-1.5 text-sm w-full mb-2" value={target} onChange={(e) => setTarget(e.target.value)}>
             <option value="">Choose a storage…</option>
             {options.map((s) => (
