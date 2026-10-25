@@ -38,6 +38,23 @@ MIGRATION_MIN_THROUGHPUT_BYTES_PER_SEC = 20 * 1024 * 1024  # 20 MiB/s, conservat
 STORAGE_RELOCATION_BUFFER_SECONDS = 300  # RAM pre-copy + PVE overhead on top of the disk estimate
 
 
+def pick_destination_storage(candidates, destination_node_id):
+    """Choose the storage a migration targets from every row sharing its name.
+
+    Storage names are only unique per node: `local-lvm` and `local` exist once
+    on every node, so a lookup by name and cluster alone matches one row per
+    node. The migration lands on the DESTINATION node, so that node's own
+    storage wins; otherwise a cluster-shared or external storage of that name
+    is used. Another node's storage cannot be used by the destination, so it
+    is ignored (None, not an error).
+    """
+    own = [c for c in candidates if c.node_id is not None and c.node_id == destination_node_id]
+    if own:
+        return own[0]
+    shared = [c for c in candidates if c.node_id is None or c.scope in ("cluster-shared", "external", "replicated")]
+    return shared[0] if shared else None
+
+
 def _migration_timeout_seconds(ctx: dict) -> float:
     disk_bytes = ctx.get("expected_disk_bytes")
     if ctx.get("target_storage_name") and disk_bytes:
@@ -449,9 +466,12 @@ def execute_migration(db: Session, operation_id) -> Operation:
                 destination_storage = None
                 target_storage_name = ctx.get("target_storage_name")
                 if target_storage_name:
-                    destination_storage = db.query(Storage).filter(
-                        Storage.name == target_storage_name, Storage.cluster_id == cluster.id,
-                    ).one_or_none()
+                    destination_storage = pick_destination_storage(
+                        db.query(Storage).filter(
+                            Storage.name == target_storage_name, Storage.cluster_id == cluster.id,
+                        ).all(),
+                        destination_node.id,
+                    )
                 hard_reasons, hard_blocks, _extra = _evaluate_migration_hard_blocks(
                     db, read_client, workload, source_node, destination_node, destination_storage,
                     transport, was_running, bool(ctx.get("confirm_override_headroom", False)),
