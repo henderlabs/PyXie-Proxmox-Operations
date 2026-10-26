@@ -126,6 +126,32 @@ def liveness_loop():
         time.sleep(max(5.0, INTERVAL_SECONDS - (time.monotonic() - started)))
 
 
+# Everything the background threads and the polling-queue jobs import, at the top of a function or lazily.
+PRELOAD_MODULES = (
+    "worker.jobs",
+    "pyxie_core.live_memory",
+    "pyxie_core.liveness_watch",
+    "pyxie_core.discovery",
+    "pyxie_core.pbs_server",
+    "pyxie_core.operations_engine",
+    "pyxie_core.auto_balance",
+    "pyxie_core.report_collection",
+)
+
+
+def _preload():
+    """Import every module the threads and the queue jobs use, before any thread starts.
+
+    RQ runs each job in a forked child. A thread that is part-way through an import when the fork happens leaves that module's
+    import lock held in the child, with no thread left to release it, so the child's own import of the same module waits until
+    the 300 s job timeout. The first discovery pass after every restart hit this: inventory and findings stood still for five
+    minutes. Importing here, while only one thread exists, leaves the threads and the jobs nothing left to import."""
+    import importlib
+
+    for name in PRELOAD_MODULES:
+        importlib.import_module(name)
+
+
 OPS_ROLE_ENV = "PYXIE_WORKER_ROLE"
 
 
@@ -162,6 +188,7 @@ def main():
         run_operations_worker()
         return
 
+    _preload()  # before any thread starts: see _preload
     threading.Thread(target=scheduler_loop, daemon=True).start()
     threading.Thread(target=live_memory_loop, daemon=True).start()
     threading.Thread(target=liveness_loop, daemon=True).start()
