@@ -6,6 +6,7 @@ import type { Node, Operation, StorageItem } from "@/lib/api";
 import MigrationBars from "@/components/MigrationBars";
 import { notifyOperationsChanged } from "@/lib/operationsBus";
 import { isInFlight } from "@/lib/operationStatus";
+import { useOperationWatch } from "@/lib/useOperationWatch";
 import { useMe } from "@/lib/useMe";
 
 /** Change where a VM's disks live (Proxmox "move disk"): pick a storage, preview what moves and whether it fits, approve, watch it copy. */
@@ -50,22 +51,12 @@ export default function ChangeStorageAction({
     .filter((s) => !holdsDisks || holdsDisks.has(s.name))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  // Follow a running move.
-  useEffect(() => {
-    if (!op || !isInFlight(op.status)) return;
-    const t = setInterval(async () => {
-      const r = await fetch(`/api/operations/${op.id}`);
-      if (r.ok) {
-        const next = (await r.json()) as Operation;
-        setOp(next);
-        if (!isInFlight(next.status)) {
-          notifyOperationsChanged();
-          router.refresh();
-        }
-      }
-    }, 3000);
-    return () => clearInterval(t);
-  }, [op, router]);
+  // Follow the move whoever approves it: the Tasks panel can start or dismiss it while this panel is open.
+  useOperationWatch(op, {
+    onUpdate: (next) => setOp(next),
+    onGone: () => reset(),
+    onSettled: () => { notifyOperationsChanged(); router.refresh(); },
+  });
 
   if (me !== undefined && me?.is_admin !== true) return null;
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Operation } from "@/lib/api";
 import { notifyOperationsChanged } from "@/lib/operationsBus";
 import { isInFlight } from "@/lib/operationStatus";
+import { useOperationWatch } from "@/lib/useOperationWatch";
 
 /** The preview -> approve -> follow -> result box every PyXie write uses. The parent makes the dry run and hands the operation in;
  * this shows what will happen, asks for the go-ahead, then follows the operation until it finishes. `autoApprove` skips the
@@ -40,18 +41,12 @@ export default function OpPreview({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (!isInFlight(op.status)) return;
-    const t = setInterval(async () => {
-      const r = await fetch(`/api/operations/${op.id}`);
-      if (r.ok) {
-        const next = (await r.json()) as Operation;
-        setOp(next);
-        if (!isInFlight(next.status)) { notifyOperationsChanged(); onFinished?.(); }
-      }
-    }, 2000);
-    return () => clearInterval(t);
-  }, [op, onFinished]);
+  // Follows the operation whoever approves it: the Tasks panel or another tab can start or dismiss it while this box is open.
+  useOperationWatch(op, {
+    onUpdate: (next) => setOp(next),
+    onGone: () => onClose(),
+    onSettled: () => { notifyOperationsChanged(); onFinished?.(); },
+  }, 2000);
 
   function cancel() {
     if (op.status === "awaiting_approval") fetch(`/api/operations/${op.id}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dismissed: true }) }).catch(() => {});

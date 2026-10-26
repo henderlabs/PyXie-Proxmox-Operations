@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { notifyOperationsChanged } from "@/lib/operationsBus";
 import { isInFlight } from "@/lib/operationStatus";
+import { useOperationWatch } from "@/lib/useOperationWatch";
 import { useMe } from "@/lib/useMe";
 
 type DryRunOperation = {
@@ -58,6 +59,13 @@ export default function ApplyRightsizingForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const me = useMe();
+  // Follows the resize whoever approves it: the Tasks panel can start or dismiss it while this form is open. Approved elsewhere, the
+  // form closes and the trigger says it is applying until the resize finishes.
+  useOperationWatch(dryRun, {
+    onUpdate: (next) => { setDryRun(next); if (next.status !== "awaiting_approval") setExpanded(false); },
+    onGone: () => { setDryRun(null); setExpanded(false); notifyOperationsChanged(); router.refresh(); },
+    onSettled: () => { setDryRun(null); setExpanded(false); notifyOperationsChanged(); router.refresh(); },
+  });
   if (me !== undefined && me?.is_admin !== true) return null;
 
   async function preview() {
@@ -139,6 +147,9 @@ export default function ApplyRightsizingForm({
     }
   }
 
+  if (!expanded && dryRun && dryRun.status !== "awaiting_approval") {
+    return <span className="text-xs text-muted">Applying… (see Tasks)</span>;
+  }
   if (!expanded && linkStyle) {
     return <button type="button" onClick={() => setExpanded(true)} className="text-xs text-accent hover:underline">{triggerLabel ?? "Apply…"}</button>;
   }
