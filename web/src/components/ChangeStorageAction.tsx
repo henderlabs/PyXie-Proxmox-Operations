@@ -30,10 +30,22 @@ export default function ChangeStorageAction({
   const [error, setError] = useState<string | null>(null);
 
   const nodeName = nodes.find((n) => n.id === nodeId)?.name ?? "this host";
+  // The storages this host can put VM disks on (active, and set up for VM images): the same list the Add disk form uses.
+  // Until it loads, or if it cannot be read, every reachable storage is offered and the preview still refuses an unusable one.
+  const [holdsDisks, setHoldsDisks] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    fetch(`/api/vm-create/options?cluster_id=${clusterId}`).then((r) => (r.ok ? r.json() : null)).then((d: { nodes?: { name: string; storages: { name: string }[] }[] } | null) => {
+      const n = d?.nodes?.find((x) => x.name === nodeName);
+      if (n) setHoldsDisks(new Set(n.storages.map((x) => x.name)));
+    }).catch(() => {});
+  }, [open, clusterId, nodeName]);
+
   // Storages this VM's host can reach: the cluster's shared storage and this host's own local storage.
   const options = storage
     .filter((s) => !s.is_missing && s.cluster_id === clusterId && (s.scope === "cluster-shared" || (s.scope === "node-local" && s.node_id === nodeId)) && !["pbs", "iscsi"].includes(s.type ?? ""))
     .filter((s) => !(diskSlot && s.name === diskStorage))
+    .filter((s) => !holdsDisks || holdsDisks.has(s.name))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   // Follow a running move.
@@ -97,7 +109,7 @@ export default function ChangeStorageAction({
       <div className="font-medium text-text mb-1">{diskSlot ? `Move ${diskSlot} of ${workloadName}` : `Change storage for ${workloadName}`}</div>
       {!op ? (
         <>
-          <p className="text-muted mb-2">Copies the VM&apos;s disks to another storage on {nodeName}, one disk at a time, while it keeps running. Each old copy is deleted only after Proxmox reports its copy finished. Disks already on the chosen storage are left alone.</p>
+          <p className="text-muted mb-2">{diskSlot ? `Copies ${diskSlot} to another storage on ${nodeName} while the VM keeps running. The old copy is deleted only after Proxmox reports the copy finished.` : `Copies the VM's disks to another storage on ${nodeName}, one disk at a time, while it keeps running. Each old copy is deleted only after Proxmox reports its copy finished. Disks already on the chosen storage are left alone.`}</p>
           <label className="block text-muted mb-1">{diskSlot ? `Move ${diskSlot} to` : "Move the disks to"}</label>
           <select className="bg-surface border border-border rounded px-2 py-1.5 text-sm w-full mb-2" value={target} onChange={(e) => setTarget(e.target.value)}>
             <option value="">Choose a storage…</option>
@@ -120,13 +132,13 @@ export default function ChangeStorageAction({
         </div>
       ) : isInFlight(op.status) ? (
         <div>
-          <div className="text-text mb-1">Moving {workloadName}&apos;s disks to {res?.target_storage}…</div>
+          <div className="text-text mb-1">{diskSlot ? `Moving ${diskSlot} of ${workloadName} to ${res?.target_storage}…` : `Moving ${workloadName}'s disks to ${res?.target_storage}…`}</div>
           <MigrationBars op={op} />
           <div className="text-muted mt-1">You can leave this page: progress is also in the Tasks panel.</div>
         </div>
       ) : op.status === "completed" ? (
         <div>
-          <div className="text-good mb-2">Done: the disks are on {res?.target_storage}, checked against Proxmox.</div>
+          <div className="text-good mb-2">{diskSlot ? `Done: ${diskSlot} is on ${res?.target_storage}, checked against Proxmox.` : `Done: the disks are on ${res?.target_storage}, checked against Proxmox.`}</div>
           <button onClick={reset} className="text-muted hover:text-text">close</button>
         </div>
       ) : op.status === "failed" ? (
