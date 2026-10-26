@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Node, Operation, StorageItem } from "@/lib/api";
 import { notifyOperationsChanged } from "@/lib/operationsBus";
+import { useOperationWatch } from "@/lib/useOperationWatch";
 import { isInFlight } from "@/lib/operationStatus";
 import { useMe } from "@/lib/useMe";
 
@@ -46,6 +47,12 @@ export default function MigrateWorkloadAction({
   const [recommendation, setRecommendation] = useState<RecommendCandidate[] | null>(null);
   const [recommendLoading, setRecommendLoading] = useState(false);
   const [op, setOp] = useState<Operation | null>(null);
+  // Follows the operation whoever approves it: the Tasks panel can start or dismiss it while this panel is open.
+  useOperationWatch(op, {
+    onUpdate: (next) => setOp(next),
+    onGone: () => { collapse(); router.refresh(); },
+    onSettled: () => { notifyOperationsChanged(); router.refresh(); },
+  });
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const me = useMe();
