@@ -11,6 +11,7 @@ import MetricChart from "@/components/MetricChart";
 import WorkloadLifecycleButtons from "@/components/WorkloadLifecycleButtons";
 import MigrateWorkloadAction from "@/components/MigrateWorkloadAction";
 import ChangeStorageAction from "@/components/ChangeStorageAction";
+import ApplyRightsizingForm from "@/components/ApplyRightsizingForm";
 import { StorageBadge, StorageFree } from "@/components/StorageBadge";
 import { storageInfo } from "@/lib/storagePlacement";
 import ConsoleViewer, { useConsoleInfo } from "@/components/ConsoleViewer";
@@ -573,7 +574,7 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
         );
       })()}
       <Card>
-        <div className="flex flex-wrap items-start justify-between"><CardTitle>Compute</CardTitle>{!lxc && canEdit && <MachineCpuAction workloadId={workloadId} workloadName={workloadName} running={running} onDone={notifyOperationsChanged} />}{lxc && canEdit && <CtResizeAction workloadId={workloadId} cores={cfg.cores} memoryMb={cfg.memory_mb} swapMb={cfg.swap_mb ?? null} onDone={notifyOperationsChanged} />}</div>
+        <div className="flex flex-wrap items-start justify-between"><CardTitle>Compute</CardTitle>{!lxc && canEdit && <div className="flex flex-wrap items-start justify-end gap-x-4 gap-y-2"><ApplyRightsizingForm linkStyle triggerLabel="Edit vCPUs and memory…" workloadId={workloadId} workloadName={workloadName} currentCores={cfg.vcpus ?? null} currentMemoryBytes={cfg.memory_mb ? cfg.memory_mb * 1024 * 1024 : null} suggestedCores={null} suggestedMemoryBytes={null} /><MachineCpuAction workloadId={workloadId} workloadName={workloadName} running={running} onDone={notifyOperationsChanged} /></div>}{lxc && canEdit && <CtResizeAction workloadId={workloadId} cores={cfg.cores} memoryMb={cfg.memory_mb} swapMb={cfg.swap_mb ?? null} onDone={notifyOperationsChanged} />}</div>
         {defs && defs.deviations.length > 0 && (
           <div className="mb-3 px-3 py-2 rounded border border-warn/40 bg-warn/10 text-warn text-xs">
             Differs from your defaults: {defs.deviations.map((d) => `${d.label} is ${Array.isArray(d.actual) ? (d.actual as string[]).join(", ") : d.actual === null || d.actual === undefined ? "default" : String(d.actual)}, the default is ${String(d.default ?? "default")} (${d.source})`).join("; ")}. Settings &gt; Defaults &amp; templates changes the defaults; Edit machine &amp; CPU type changes this VM.
