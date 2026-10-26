@@ -32,6 +32,7 @@ export default function ApplyRightsizingForm({
   suggestedMemoryBytes,
   recommendationId,
   triggerLabel,
+  linkStyle,
 }: {
   workloadId: string;
   workloadName: string;
@@ -46,6 +47,8 @@ export default function ApplyRightsizingForm({
    * Rightsizing table renders the suggestion text itself ("4 → 3 vCPU")
    * as the button instead of a generic "Apply…". */
   triggerLabel?: React.ReactNode;
+  /** Show the trigger as a plain text link (like Edit machine & CPU type…) instead of a button. */
+  linkStyle?: boolean;
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
@@ -136,6 +139,9 @@ export default function ApplyRightsizingForm({
     }
   }
 
+  if (!expanded && linkStyle) {
+    return <button type="button" onClick={() => setExpanded(true)} className="text-xs text-accent hover:underline">{triggerLabel ?? "Apply…"}</button>;
+  }
   if (!expanded) {
     return (
       <button
