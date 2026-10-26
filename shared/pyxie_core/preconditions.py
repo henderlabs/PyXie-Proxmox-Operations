@@ -31,6 +31,16 @@ class MigrationPrecondition:
     snapshot: dict = field(default_factory=dict)
 
 
+# Console sessions (the noVNC, SPICE and terminal windows in Proxmox's web interface) show up as active tasks on the guest for as
+# long as the window is open, but they do not stop it migrating: the window just disconnects.
+CONSOLE_TASK_TYPES = frozenset({"vncproxy", "vncshell", "spiceproxy", "termproxy"})
+
+
+def tasks_that_conflict(tasks) -> list:
+    """The active Proxmox tasks on a guest that really do conflict with moving it: everything except open console sessions."""
+    return [t for t in (tasks or []) if str(t.get("type") or "") not in CONSOLE_TASK_TYPES]
+
+
 def revalidate_live_migration(
     client: PveClient,
     *,
@@ -108,7 +118,7 @@ def revalidate_live_migration(
     # 100 matching inside a task for vmid 1100). Exact server-side vmid filtering
     # avoids both problems at once.
     try:
-        conflicting = client.tasks(source_node, limit=50, source="active", vmid=vmid) or []
+        conflicting = tasks_that_conflict(client.tasks(source_node, limit=50, source="active", vmid=vmid))
     except Exception:
         conflicting = []
     if conflicting:

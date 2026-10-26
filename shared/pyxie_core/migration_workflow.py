@@ -55,6 +55,14 @@ def pick_destination_storage(candidates, destination_node_id):
     return shared[0] if shared else None
 
 
+def with_revalidation_block(dry_run_result, reasons) -> dict:
+    """Keep why the final check blocked a move, where the page shows it: the operation's reasons list (what the Migrate panel
+    prints under "Blocked") as well as revalidation_blocking_reasons. The preview's own reasons stay after them."""
+    base = dict(dry_run_result or {})
+    now = [f"Blocked at the final check, just before the move: {r}" for r in reasons]
+    return {**base, "revalidation_blocking_reasons": list(reasons), "reasons": now + list(base.get("reasons") or [])}
+
+
 def _migration_timeout_seconds(ctx: dict) -> float:
     disk_bytes = ctx.get("expected_disk_bytes")
     if ctx.get("target_storage_name") and disk_bytes:
@@ -454,6 +462,8 @@ def execute_migration(db: Session, operation_id) -> Operation:
                     require_running=was_running,
                 )
                 if not precheck.ok:
+                    op.dry_run_result = with_revalidation_block(op.dry_run_result, precheck.reasons)
+                    db.commit()
                     return block_operation(
                         db, op, blocking_safety_rules=["SAFE-MIGRATE-001"],
                         actor="system",
@@ -485,7 +495,7 @@ def execute_migration(db: Session, operation_id) -> Operation:
                     # Recorded so a blocked-at-revalidation operation isn't as
                     # opaque as a blocked-at-precheck one -- an operator can
                     # see WHY, not just that it was blocked.
-                    op.dry_run_result = {**(op.dry_run_result or {}), "revalidation_blocking_reasons": hard_reasons}
+                    op.dry_run_result = with_revalidation_block(op.dry_run_result, hard_reasons)
                     db.commit()
                     return block_operation(
                         db, op, blocking_safety_rules=sorted(set(hard_blocks)), actor="system",
