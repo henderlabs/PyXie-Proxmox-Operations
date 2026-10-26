@@ -31,14 +31,16 @@ export default function ChangeStorageAction({
 
   const nodeName = nodes.find((n) => n.id === nodeId)?.name ?? "this host";
   // The storages this host can put VM disks on (active, and set up for VM images): the same list the Add disk form uses.
-  // Until it loads, or if it cannot be read, every reachable storage is offered and the preview still refuses an unusable one.
+  // The list is read live from every host, so it takes a few seconds: the dropdown says Loading until it arrives. If it cannot be
+  // read, every reachable storage is offered and the preview still refuses an unusable one.
   const [holdsDisks, setHoldsDisks] = useState<Set<string> | null>(null);
+  const [listReady, setListReady] = useState(false);
   useEffect(() => {
     if (!open) return;
     fetch(`/api/vm-create/options?cluster_id=${clusterId}`).then((r) => (r.ok ? r.json() : null)).then((d: { nodes?: { name: string; storages: { name: string }[] }[] } | null) => {
       const n = d?.nodes?.find((x) => x.name === nodeName);
       if (n) setHoldsDisks(new Set(n.storages.map((x) => x.name)));
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setListReady(true));
   }, [open, clusterId, nodeName]);
 
   // Storages this VM's host can reach: the cluster's shared storage and this host's own local storage.
@@ -111,9 +113,9 @@ export default function ChangeStorageAction({
         <>
           <p className="text-muted mb-2">{diskSlot ? `Copies ${diskSlot} to another storage on ${nodeName} while the VM keeps running. The old copy is deleted only after Proxmox reports the copy finished.` : `Copies the VM's disks to another storage on ${nodeName}, one disk at a time, while it keeps running. Each old copy is deleted only after Proxmox reports its copy finished. Disks already on the chosen storage are left alone.`}</p>
           <label className="block text-muted mb-1">{diskSlot ? `Move ${diskSlot} to` : "Move the disks to"}</label>
-          <select className="bg-surface border border-border rounded px-2 py-1.5 text-sm w-full mb-2" value={target} onChange={(e) => setTarget(e.target.value)}>
-            <option value="">Choose a storage…</option>
-            {options.map((s) => (
+          <select disabled={!listReady} className="bg-surface border border-border rounded px-2 py-1.5 text-sm w-full mb-2 disabled:opacity-60" value={target} onChange={(e) => setTarget(e.target.value)}>
+            <option value="">{listReady ? "Choose a storage…" : "Loading storages…"}</option>
+            {listReady && options.map((s) => (
               <option key={s.id} value={s.name}>
                 {s.name} ({s.scope === "cluster-shared" ? "shared" : "local to " + nodeName}{s.capacity_bytes ? `, ${Math.round(((s.capacity_bytes - (s.used_bytes ?? 0)) / 1024 ** 3))} GB free` : ""})
               </option>

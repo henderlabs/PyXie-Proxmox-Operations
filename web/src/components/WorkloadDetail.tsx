@@ -13,6 +13,7 @@ import MigrateWorkloadAction from "@/components/MigrateWorkloadAction";
 import ChangeStorageAction from "@/components/ChangeStorageAction";
 import ApplyRightsizingForm from "@/components/ApplyRightsizingForm";
 import { StorageBadge, StorageFree } from "@/components/StorageBadge";
+import AutoRefresh from "@/components/AutoRefresh";
 import { storageInfo } from "@/lib/storagePlacement";
 import ConsoleViewer, { useConsoleInfo } from "@/components/ConsoleViewer";
 import SnapshotsTab from "@/components/SnapshotsTab";
@@ -473,6 +474,8 @@ export default function WorkloadDetail({
 
   return (
     <div>
+      {/* The host, storage and state come from the server: re-read them while the page is open so a migration or storage move made elsewhere shows up. */}
+      <AutoRefresh seconds={30} />
       {overview.node.maintenance_mode && (
         <div className="mb-3 px-3 py-2 rounded border border-warn/40 bg-warn/10 text-warn text-sm">
           Its host {overview.node.name} is in maintenance mode.
