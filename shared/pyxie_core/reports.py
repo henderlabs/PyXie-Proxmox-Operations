@@ -604,7 +604,7 @@ def build_vhealth(db: Session, scope: Scope) -> list[dict]:
             add("warning", "Details out of date", detail=f"Config/disk/NIC details last collected {cfg.collected_at:%Y-%m-%d %H:%M} UTC", since=cfg.collected_at, **who)
 
     alloc: dict = {}
-    for w in db.query(Workload).filter(Workload.is_missing.is_(False)).all():
+    for w in db.query(Workload).filter(Workload.is_missing.is_(False), Workload.status == "running").all():  # a stopped guest uses no RAM
         alloc[w.node_id] = alloc.get(w.node_id, 0) + (w.memory_bytes or 0)
     for nid in ctx["node_ids"]:
         n = ctx["nodes"][nid]
@@ -612,7 +612,7 @@ def build_vhealth(db: Session, scope: Scope) -> list[dict]:
         if n.mem_total_bytes and alloc.get(nid):
             pct = alloc[nid] / n.mem_total_bytes * 100
             if pct >= HOST_MEM_ALLOC_WARN_PCT:
-                add("warning", "Host memory overcommitted", detail=f"{pct:.0f}% of host memory is allocated to guests (warns at {HOST_MEM_ALLOC_WARN_PCT}%)", **who)
+                add("warning", "Host memory overcommitted", detail=f"{pct:.0f}% of host memory is allocated to running guests (warns at {HOST_MEM_ALLOC_WARN_PCT}%)", **who)
         if n.maintenance_mode:
             add("info", "Host in maintenance", detail=n.maintenance_reason or "Maintenance mode is on", since=n.maintenance_mode_since, **who)
 

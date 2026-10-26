@@ -21,6 +21,11 @@ TASK_LOOKBACK_DAYS = 7
 DEFAULT_STORAGE_WARNING_PCT = 85
 
 
+def running_allocated_bytes(workloads) -> int:
+    """Memory configured for the guests on a node that are running. A stopped guest uses no RAM, so it does not count toward
+    overcommit: a node is only over its RAM when the guests actually running need more than it has."""
+    return sum((w.memory_bytes or 0) for w in workloads if getattr(w, "status", None) == "running" and not getattr(w, "is_missing", False))
+
 def vmid_from_upid(upid: str | None) -> int | None:
     """A Proxmox task id reads UPID:node:pid:pstart:starttime:type:id:user: and the id is the guest's VMID for a guest task. Pure."""
     parts = (upid or "").split(":")
@@ -247,10 +252,7 @@ def evaluate_findings(db: Session) -> dict:
             versions_by_cluster.setdefault(n.cluster_id, set()).add(n.pve_version)
 
         if n.mem_total_bytes:
-            allocated = sum(
-                (w.memory_bytes or 0)
-                for w in db.query(Workload).filter(Workload.node_id == n.id, Workload.is_missing.is_(False)).all()
-            )
+            allocated = running_allocated_bytes(db.query(Workload).filter(Workload.node_id == n.id, Workload.is_missing.is_(False)).all())
             if allocated > n.mem_total_bytes:
                 overcommit_bytes = allocated - n.mem_total_bytes
                 overcommit_pct = round(100 * overcommit_bytes / n.mem_total_bytes, 1)
@@ -261,7 +263,7 @@ def evaluate_findings(db: Session) -> dict:
                         "object_id": n.id,
                         "category": "capacity",
                         "severity": "warning",
-                        "title": f"Node '{n.name}' has allocated memory {overcommit_pct}% over physical RAM",
+                        "title": f"Node '{n.name}' has running guests allocated {overcommit_pct}% over physical RAM",
                         "evidence": {
                             "node": n.name,
                             "allocated_bytes": allocated,
