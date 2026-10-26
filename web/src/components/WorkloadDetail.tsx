@@ -11,6 +11,8 @@ import MetricChart from "@/components/MetricChart";
 import WorkloadLifecycleButtons from "@/components/WorkloadLifecycleButtons";
 import MigrateWorkloadAction from "@/components/MigrateWorkloadAction";
 import ChangeStorageAction from "@/components/ChangeStorageAction";
+import { StorageBadge, StorageFree } from "@/components/StorageBadge";
+import { storageInfo } from "@/lib/storagePlacement";
 import ConsoleViewer, { useConsoleInfo } from "@/components/ConsoleViewer";
 import SnapshotsTab from "@/components/SnapshotsTab";
 import DeleteWorkloadAction from "@/components/DeleteWorkloadAction";
@@ -240,6 +242,7 @@ export function WorkloadDetailPanel({
   initialTasks,
   profile,
   clusterNodes,
+  storage,
 }: {
   workload: Workload;
   findings: PanelFinding[];
@@ -252,7 +255,10 @@ export function WorkloadDetailPanel({
   profile?: Profile;
   /** Hosts in this workload's cluster, for the Preferred host choice. */
   clusterNodes: Node[];
+  /** The cluster's storages, for the shared/local badges and the Placement card. The table row does not load them. */
+  storage?: StorageItem[];
 }) {
+  const hostNode = clusterNodes.find((n) => n.id === w.node_id);
   const [timeframe, setTimeframe] = useState<Timeframe>("hour");
   const [localProfile, setLocalProfile] = useState<ProfileValues>({
     sensitivity: w.sensitivity,
@@ -302,6 +308,7 @@ export function WorkloadDetailPanel({
               <CardTitle>Status</CardTitle>
               <dl>
                 <Row label="Status" value={<StatusBadge status={w.is_missing ? "unknown" : status} />} />
+                <Row label="Host" value={hostNode ? <span className="inline-flex items-center gap-2"><Link href={`/infrastructure/nodes/${hostNode.id}`} className="text-accent hover:underline">{hostNode.name}</Link><StatusBadge status={hostNode.status} />{hostNode.maintenance_mode && <span className="text-warn text-xs">maintenance mode</span>}</span> : "—"} />
                 <Row label="HA state" value={st?.ha?.managed ? st.ha.state || "managed" : w.ha_state || "none"} />
                 <Row label="Start at boot" value={cfg ? (cfg.start_at_boot ? "Yes" : "No") : "—"} />
                 {!lxc && <Row label="Guest agent" value={cfg ? (cfg.agent_enabled ? "Enabled" : "Not enabled") : "—"} />}
@@ -324,7 +331,7 @@ export function WorkloadDetailPanel({
                 <div className="flex items-center justify-between"><CardTitle>Hardware</CardTitle><button type="button" onClick={() => onTabChange("hardware")} className="px-2 py-0.5 rounded border border-border text-xs text-accent hover:bg-surface2">Edit hardware</button></div>
                 <dl>
                   <Row label="CPU / RAM" value={`${cfg.vcpus ?? "—"} vCPU · ${formatMemoryGb(cfg.memory_mb)}`} />
-                  <Row label="Disks" value={cfg.disks.filter((d) => d.kind === "disk").map((d) => `${d.size ?? "?"} on ${d.storage ?? "?"}`).join(", ") || "—"} />
+                  <Row label="Disks" value={cfg.disks.filter((d) => d.kind === "disk").length === 0 ? "—" : <div className="space-y-0.5">{cfg.disks.filter((d) => d.kind === "disk").map((d) => <div key={d.key}>{d.size ?? "?"} on {d.storage ?? "?"}{d.storage && storage ? <StorageBadge info={storageInfo(d.storage, storage, w.cluster_id, w.node_id, hostNode?.name ?? "")} /> : null}</div>)}</div>} />
                   <Row label="Network" value={cfg.nets.map((n) => `${n.bridge ?? "?"}${n.vlan_tag ? ` (VLAN ${n.vlan_tag})` : ""}`).join(", ") || "—"} />
                   {!lxc && <Row label="BIOS" value={cfg.bios || "—"} />}
                 </dl>
@@ -380,7 +387,7 @@ export function WorkloadDetailPanel({
         </div>
       )}
 
-      {tab === "hardware" && <Hardware cfg={cfg} lxc={lxc} loading={live === null} workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} running={status === "running"} canEdit={!w.is_missing} clusterId={w.cluster_id} nodeName={nodeNameOf(w, clusterNodes)} />}
+      {tab === "hardware" && <Hardware nodeId={w.node_id} nodes={clusterNodes} storage={storage} cfg={cfg} lxc={lxc} loading={live === null} workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} running={status === "running"} canEdit={!w.is_missing} clusterId={w.cluster_id} nodeName={nodeNameOf(w, clusterNodes)} />}
 
       {tab === "tasks" && (
         <Card>
@@ -517,16 +524,17 @@ export default function WorkloadDetail({
         </div>
       </div>
 
-      <WorkloadDetailPanel workload={w} findings={overview.findings} live={live} tab={tab} onTabChange={setTab} initialTasks={tasks} clusterNodes={nodes.filter((n) => n.cluster_id === w.cluster_id)} />
+      <WorkloadDetailPanel workload={w} findings={overview.findings} live={live} tab={tab} onTabChange={setTab} initialTasks={tasks} storage={storage} clusterNodes={nodes.filter((n) => n.cluster_id === w.cluster_id)} />
     </div>
   );
 }
 
-function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdit, clusterId, nodeName }: { cfg: ConfigSummary | null; lxc: boolean; loading: boolean; workloadId: string; workloadName: string; running: boolean; canEdit: boolean; clusterId: string; nodeName: string }) {
+function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdit, clusterId, nodeName, nodeId, nodes, storage }: { nodeId?: string; nodes?: Node[]; storage?: StorageItem[];  cfg: ConfigSummary | null; lxc: boolean; loading: boolean; workloadId: string; workloadName: string; running: boolean; canEdit: boolean; clusterId: string; nodeName: string }) {
   const me = useMe();
   const admin = me === undefined || me?.is_admin === true;
   const [nicEdit, setNicEdit] = useState<NicEditRequest | null>(null);
   const [diskReq, setDiskReq] = useState<DiskRequest | null>(null);
+  const [moveDisk, setMoveDisk] = useState<{ slot: string; storage: string | null } | null>(null);
   // SDN networks set the VLAN themselves: look up each bridge's network name and VLAN so the table can say so
   const [sdnNets, setSdnNets] = useState<Record<string, { alias: string | null; tag: number | null }>>({});
   useEffect(() => {
@@ -551,6 +559,19 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
   }
   return (
     <div className="space-y-4">
+      {storage && nodes && nodeId && canEdit && !lxc && (() => {
+        const host = nodes.find((n) => n.id === nodeId);
+        const used = [...new Set(cfg.disks.filter((x) => x.kind === "disk" && x.storage).map((x) => x.storage as string))];
+        return (
+          <Card>
+            <CardTitle>Placement</CardTitle>
+            <dl>
+              <Row label="Runs on" value={<span className="inline-flex flex-wrap items-center gap-2">{host ? <Link href={`/infrastructure/nodes/${host.id}`} className="text-accent hover:underline">{host.name}</Link> : "—"}{host && <StatusBadge status={host.status} />}<MigrateWorkloadAction workloadId={workloadId} workloadName={workloadName} clusterId={clusterId} currentNodeId={nodeId} nodes={nodes} storage={storage} /></span>} />
+              <Row label="Disks live on" value={<div className="space-y-1">{used.length === 0 ? "—" : used.map((n) => { const info = storageInfo(n, storage, clusterId, nodeId, host?.name ?? nodeName); return <div key={n}>{n}<StorageBadge info={info} /><StorageFree info={info} /></div>; })}<ChangeStorageAction workloadId={workloadId} workloadName={workloadName} nodeId={nodeId} clusterId={clusterId} nodes={nodes} storage={storage} /></div>} />
+            </dl>
+          </Card>
+        );
+      })()}
       <Card>
         <div className="flex flex-wrap items-start justify-between"><CardTitle>Compute</CardTitle>{!lxc && canEdit && <MachineCpuAction workloadId={workloadId} workloadName={workloadName} running={running} onDone={notifyOperationsChanged} />}{lxc && canEdit && <CtResizeAction workloadId={workloadId} cores={cfg.cores} memoryMb={cfg.memory_mb} swapMb={cfg.swap_mb ?? null} onDone={notifyOperationsChanged} />}</div>
         {defs && defs.deviations.length > 0 && (
@@ -586,14 +607,14 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
                     return !lxc && canEdit && admin && !diskReq ? <button type="button" title="Change whether this disk is in backups" onClick={() => setDiskReq({ action: "edit_options", disk: { key: d.key, volume: d.volume, size: d.size, options: d.options } })} className="hover:underline">{pill}</button> : pill;
                   })()}
                 </td>
-                <td className="pr-3">{d.storage || "—"}</td>
+                <td className="pr-3">{d.storage || "—"}{(() => { if (!d.storage || !storage || !nodeId) return null; const info = storageInfo(d.storage, storage, clusterId, nodeId, nodeName); return info.scope === "unknown" ? null : <div className="mt-0.5"><StorageBadge info={info} /><StorageFree info={info} /></div>; })()}</td>
                 <td className="pr-3">{d.empty ? "empty" : d.size || "—"}{!lxc && canEdit && d.kind === "cdrom" ? <div><CdromAction workloadId={workloadId} clusterId={clusterId} nodeName={nodeName} slot={d.key} current={d.volume} label={d.empty ? "Insert ISO…" : "Change / eject…"} onDone={notifyOperationsChanged} /></div> : null}{canEdit && !d.empty && d.kind === "disk" && (lxc ? /^(rootfs|mp\d+)$/ : /^(scsi|virtio|sata|ide)\d+$/).test(d.key) ? <div><GrowDiskAction workloadId={workloadId} disk={d.key} sizeText={d.size} onDone={notifyOperationsChanged} /></div> : null}</td>
                 <td className="text-muted text-xs break-all">{d.empty ? "" : `${d.volume}${Object.keys(d.options).length ? " · " + Object.entries(d.options).map(([k, v]) => `${k}=${v}`).join(", ") : ""}`}</td>
                 <td className="text-right whitespace-nowrap text-xs">{canEdit && admin && !diskReq && (() => {
                   const di = { key: d.key, volume: d.volume, size: d.size, options: d.options };
                   const btn = (label: string, action: DiskRequest["action"], cls = "text-accent hover:underline mr-3") => <button key={action} type="button" onClick={() => setDiskReq({ action, disk: di })} className={cls}>{label}</button>;
                   if (lxc) return d.kind === "disk" && d.key.startsWith("mp") ? btn("Detach", "detach", "text-accent hover:underline") : d.kind === "unused" ? <>{btn("Attach…", "attach")}{btn("Delete…", "delete_unused", "text-bad hover:underline")}</> : null;
-                  if (d.kind === "disk") return <>{btn("Options…", "edit_options")}{btn("Detach", "detach")}{btn("Move to VM…", "move_to_vm", "text-accent hover:underline")}</>;
+                  if (d.kind === "disk") return <>{btn("Options…", "edit_options")}{storage && nodes && nodeId && !moveDisk && <button type="button" onClick={() => setMoveDisk({ slot: d.key, storage: d.storage })} className="text-accent hover:underline mr-3">Move storage…</button>}{btn("Detach", "detach")}{btn("Move to VM…", "move_to_vm", "text-accent hover:underline")}</>;
                   if (d.kind === "cdrom") return btn("Remove drive", "remove_cdrom", "text-bad hover:underline");
                   if (d.kind === "unused") return <>{btn("Attach…", "attach")}{btn("Move to VM…", "move_to_vm")}{btn("Delete…", "delete_unused", "text-bad hover:underline")}</>;
                   return null;
@@ -605,6 +626,7 @@ function Hardware({ cfg, lxc, loading, workloadId, workloadName, running, canEdi
             {!lxc && canEdit && <tr className="border-t border-border"><td colSpan={5} className="py-1.5">{admin && !diskReq && <button type="button" onClick={() => setDiskReq({ action: "add" })} className="text-xs text-accent hover:underline mr-4">+ Add disk</button>}<CdromAction workloadId={workloadId} clusterId={clusterId} nodeName={nodeName} slot={null} label="+ Add CD/DVD drive" onDone={notifyOperationsChanged} /></td></tr>}
           </tbody>
         </table>
+        {moveDisk && storage && nodes && nodeId && <ChangeStorageAction key={moveDisk.slot} startOpen diskSlot={moveDisk.slot} diskStorage={moveDisk.storage} onClose={() => { setMoveDisk(null); notifyOperationsChanged(); }} workloadId={workloadId} workloadName={workloadName} nodeId={nodeId} clusterId={clusterId} nodes={nodes} storage={storage} />}
         {diskReq && <DiskPanel key={`${diskReq.action}-${diskReq.disk?.key ?? "new"}`} workloadId={workloadId} clusterId={clusterId} nodeName={nodeName} request={diskReq} lxc={lxc} onClose={() => { setDiskReq(null); notifyOperationsChanged(); }} />}
       </Card>
       <Card>

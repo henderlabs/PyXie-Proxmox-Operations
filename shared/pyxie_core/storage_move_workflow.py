@@ -32,13 +32,20 @@ def _load_context(db, workload: Workload):
     return node, cluster, target
 
 
-def movable_disks(db, workload: Workload, target_storage: str) -> list[dict]:
-    """The VM's disks that are not already on the target (CD-ROMs and empty drives are never moved)."""
-    rows = db.query(WorkloadDisk).filter(WorkloadDisk.workload_id == workload.id, WorkloadDisk.is_cdrom.is_(False)).all()
+def pick_movable(rows, target_storage: str, only_slot: str | None = None) -> list[dict]:
+    """Which of the VM's disk rows need to move to the target. CD-ROMs and empty drives are never moved; `only_slot` limits
+    the move to that one disk (the per-disk "Move storage" action). Pure."""
     return sorted(
-        ({"slot": d.slot, "storage": d.storage, "size_bytes": d.size_bytes or 0} for d in rows if d.storage and d.storage != target_storage and d.volume != "none"),
+        ({"slot": d.slot, "storage": d.storage, "size_bytes": d.size_bytes or 0} for d in rows
+         if d.storage and d.storage != target_storage and d.volume != "none" and (only_slot is None or d.slot == only_slot)),
         key=lambda d: d["slot"],
     )
+
+
+def movable_disks(db, workload: Workload, target_storage: str, only_slot: str | None = None) -> list[dict]:
+    """The VM's disks that are not already on the target (see pick_movable)."""
+    rows = db.query(WorkloadDisk).filter(WorkloadDisk.workload_id == workload.id, WorkloadDisk.is_cdrom.is_(False)).all()
+    return pick_movable(rows, target_storage, only_slot)
 
 
 def check_target(storage_rows: list[dict], name: str, needed_bytes: int) -> list[str]:
@@ -57,12 +64,14 @@ def check_target(storage_rows: list[dict], name: str, needed_bytes: int) -> list
     return problems
 
 
-def dry_run_storage_move(db, workload: Workload, *, target_storage: str, actor: str, correlation_id=None) -> Operation:
+def dry_run_storage_move(db, workload: Workload, *, target_storage: str, actor: str, correlation_id=None, only_slot: str | None = None) -> Operation:
     if workload.type != "vm":
         raise StorageMoveError("only VM (qemu) storage changes are implemented, not containers")
     node, cluster, target = _load_context(db, workload)
-    disks = movable_disks(db, workload, target_storage)
+    disks = movable_disks(db, workload, target_storage, only_slot)
     if not disks:
+        if only_slot:
+            raise StorageMoveError(f"{only_slot} on {vm_label(workload)} does not need to move: it is already on '{target_storage}', or it is not a disk that can be moved")
         raise StorageMoveError(f"none of {vm_label(workload)}'s disks needs to move: they are all on '{target_storage}' already")
     was_running = workload.status == "running"
     needed = sum(d["size_bytes"] for d in disks)
