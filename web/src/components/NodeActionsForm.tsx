@@ -20,10 +20,19 @@ import { WrenchIcon, PlugIcon, PackageIcon, ClockIcon, ChecklistIcon } from "@/c
 // that got repetitive across six buttons and read as clutter.
 const ACTIONS = [
   {
+    id: "evacuate-node",
+    key: "node-maintenance/enter",
+    label: "Evacuate Node",
+    description: "Moves every guest off the node (live-migrates what can move, gracefully shuts down what can't) and marks it out of service. Nothing is updated or rebooted. Exit Maintenance Mode puts the node back in service.",
+    caption: "moves every guest off and marks the node out of service, then stops there: no update, no reboot. Nothing moves back on its own.",
+    icon: PlugIcon,
+    group: "mode" as const,
+  },
+  {
     id: "exit-maintenance",
     key: "node-maintenance/exit",
     label: "Exit Maintenance Mode",
-    description: "Only for a node a Full Maintenance run left in maintenance mode: restarts anything that run shut down and marks the node available again. Does not migrate anything back onto it.",
+    description: "Only for a node left in maintenance mode (by Evacuate Node or a Full Maintenance run): restarts anything that was shut down and marks the node available again. Does not migrate anything back onto it.",
     icon: PlugIcon,
     group: "mode" as const,
   },
@@ -164,6 +173,30 @@ export default function NodeActionsForm({
   const [leaveEmpty, setLeaveEmpty] = useState(false);
   const me = useMe();
   const isAdmin = me === undefined || me?.is_admin === true;
+
+  // Evacuate Node leaves the node in maintenance mode, which Auto-balance never
+  // fills; this note only matters while a cluster's Auto-balance is running
+  // (recommend or auto-approve, and not paused), so it is fetched and shown
+  // only then, next to an evacuation preview that is still live.
+  const [autoBalance, setAutoBalance] = useState<{ cluster_id: string; config: { mode: string; paused_until: string | null }; nodes: { id: string }[] }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auto-balance")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => { if (!cancelled && Array.isArray(d)) setAutoBalance(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const evacuating = ops.filter((o) => o.operation_type_id === "node.enter_maintenance" && !isTerminal(o.status));
+  const evacuatingNodeIds = new Set(evacuating.map((o) => o.node_id));
+  const autoBalanceNote = autoBalance.filter(
+    (c) =>
+      ["recommend", "auto_approve"].includes(c.config.mode) &&
+      !(c.config.paused_until && new Date(c.config.paused_until).getTime() > Date.now()) &&
+      c.nodes.some((n) => evacuatingNodeIds.has(n.id))
+  );
+  const evacuatingCount = evacuating.length;
+  const evacuatingNames = evacuating.map((o) => nodes.find((n) => n.id === o.node_id)?.name).filter(Boolean).join(", ") || "the node";
 
   const allSelected = nodes.length > 0 && selectedNodeIds.length === nodes.length;
 
@@ -495,16 +528,16 @@ export default function NodeActionsForm({
       <div>
         <label className="block text-xs text-muted mb-1.5">Actions</label>
         <div className="flex flex-wrap gap-2">
-          {(["check-updates", "apply-updates", "full-maintenance", "reboot-node"] as const).map((id) => {
+          {(["evacuate-node", "check-updates", "apply-updates", "full-maintenance", "reboot-node"] as const).map((id) => {
             const a = ACTIONS.find((x) => x.id === id)!;
-            return <ActionButton key={a.id} a={a} variant={a.id === "full-maintenance" ? "full" : a.id === "reboot-node" ? "mode" : "action"} />;
+            return <ActionButton key={a.id} a={a} variant={a.id === "full-maintenance" ? "full" : a.id === "reboot-node" || a.id === "evacuate-node" ? "mode" : "action"} />;
           })}
           {anyInMaintenance && <ActionButton a={ACTIONS.find((x) => x.id === "exit-maintenance")!} variant="mode" />}
         </div>
         {isAdmin && noSelection && (
           <p className="text-xs text-muted mt-1.5">Select one or more nodes or backup servers above to enable these actions.</p>
         )}
-        {anyInMaintenance && <p className="text-xs text-muted mt-1.5">A node is in maintenance mode (left by a Full Maintenance run): Exit Maintenance Mode brings it back into service.</p>}
+        {anyInMaintenance && <p className="text-xs text-muted mt-1.5">A node is in maintenance mode (left by Evacuate Node or a Full Maintenance run): Exit Maintenance Mode brings it back into service.</p>}
         {ACTIONS.map((a) =>
           "caption" in a ? (
             <p key={a.id} className="text-xs text-muted mt-1.5">
@@ -545,6 +578,17 @@ export default function NodeActionsForm({
       </p>
 
       {error && <div className="text-sm text-bad">{error}</div>}
+      {autoBalanceNote.length > 0 && (
+        <div className="rounded border border-warn bg-warn/10 p-3 text-sm" role="note">
+          <div className="font-medium text-warn">
+            Auto-balance is on for {autoBalanceNote.length === 1 ? "this cluster" : "these clusters"}
+          </div>
+          <p className="text-xs mt-1">
+            Turn it off until {evacuatingNames} {evacuatingCount === 1 ? "is" : "are"} back, or it may start moving guests back once the node leaves maintenance mode.
+            Pause it on the <Link href="/operations/balance" className="text-accent hover:underline">Balance Load page</Link>.
+          </p>
+        </div>
+      )}
       {ops.length > 0 && (
         <div className="space-y-3">
           {ops.map((op) => (
