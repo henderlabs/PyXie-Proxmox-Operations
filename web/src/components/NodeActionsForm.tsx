@@ -387,12 +387,14 @@ export default function NodeActionsForm({
         : variant === "full"
         ? "border-proxmox hover:bg-proxmox/10"
         : "border-accent hover:bg-accent/10";
+    // Exit Maintenance Mode is always shown but only clickable when a selected node is actually in maintenance mode.
+    const nothingToExit = a.id === "exit-maintenance" && !nodes.some((n) => n.maintenance_mode && selectedNodeIds.includes(n.id));
     return (
       <button
         onClick={() => runPreview(a.key, a.id === "apply-updates")}
-        disabled={(selectedNodeIds.length === 0 && selectedPbsIds.length === 0) || pending}
-        title={a.description}
-        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border disabled:opacity-50 ${styles}`}
+        disabled={(selectedNodeIds.length === 0 && selectedPbsIds.length === 0) || pending || nothingToExit}
+        title={nothingToExit ? "Select a node that is in maintenance mode to use this. " + a.description : a.description}
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border disabled:opacity-50 disabled:cursor-not-allowed ${styles}`}
       >
         <Icon className="w-4 h-4" />
         {a.label}
@@ -527,13 +529,15 @@ export default function NodeActionsForm({
 
       <div>
         <label className="block text-xs text-muted mb-1.5">Actions</label>
-        <div className="flex flex-wrap gap-2">
-          {(["evacuate-node", "check-updates", "apply-updates", "full-maintenance", "reboot-node"] as const).map((id) => {
-            const a = ACTIONS.find((x) => x.id === id)!;
-            return <ActionButton key={a.id} a={a} variant={a.id === "full-maintenance" ? "full" : a.id === "reboot-node" || a.id === "evacuate-node" ? "mode" : "action"} />;
-          })}
-          {anyInMaintenance && <ActionButton a={ACTIONS.find((x) => x.id === "exit-maintenance")!} variant="mode" />}
-        </div>
+        {/* Two fixed rows: taking a node in and out of service, then patching. */}
+        {([["evacuate-node", "exit-maintenance", "reboot-node"], ["check-updates", "apply-updates", "full-maintenance"]] as const).map((row, i) => (
+          <div key={i} className={`flex flex-wrap gap-2 ${i > 0 ? "mt-2" : ""}`}>
+            {row.map((id) => {
+              const a = ACTIONS.find((x) => x.id === id)!;
+              return <ActionButton key={a.id} a={a} variant={a.id === "full-maintenance" ? "full" : a.group === "mode" ? "mode" : "action"} />;
+            })}
+          </div>
+        ))}
         {isAdmin && noSelection && (
           <p className="text-xs text-muted mt-1.5">Select one or more nodes or backup servers above to enable these actions.</p>
         )}
