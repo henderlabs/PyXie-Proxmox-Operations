@@ -1,4 +1,4 @@
-# PyXie Manager
+# PyXie Proxmox Operations
 
 Browser-based Proxmox VE (PVE) operations console: inventory, historical
 metrics, findings/recommendations, capacity/rightsizing, backup/protection

@@ -31,7 +31,7 @@ come up right.
 
 ## 1. Get GitHub access to this repo **[manual -- network-dependent]**
 
-The repository is public, so `git clone https://github.com/henderlabs/pyxie-manager.git`
+The repository is public, so `git clone https://github.com/henderlabs/PyXie-Proxmox-Operations.git`
 needs no login. The options below only matter if you pull from a private mirror
 or fork. Pick ONE of these, based on what your network actually allows (test
 both if you're not sure):
@@ -65,7 +65,7 @@ is common on corporate networks with deep packet inspection):
 ## 2. Clone the repo **[manual, one command]**
 
 ```bash
-git clone https://github.com/henderlabs/pyxie-manager.git ~/pyxie-manager
+git clone https://github.com/henderlabs/PyXie-Proxmox-Operations.git ~/pyxie-manager
 ```
 (or the `git@github.com:...` form if you used Option A.)
 

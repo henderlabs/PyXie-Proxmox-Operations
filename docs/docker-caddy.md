@@ -71,7 +71,7 @@ A new installation takes about 15 minutes. Commands run as the login user on the
 1. **Get the code.** Use your own checkout directory; the in-app updater works from it later.
    ```bash
    sudo apt-get install -y git
-   git clone https://github.com/henderlabs/pyxie-manager.git ~/pyxie-manager
+   git clone https://github.com/henderlabs/PyXie-Proxmox-Operations.git ~/pyxie-manager
    cd ~/pyxie-manager
    ```
 2. **Install Docker** (as root; this also puts your user in the `docker` group, so log out and back in afterwards):

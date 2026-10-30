@@ -2,7 +2,7 @@
 # PyXie Manager -- full install, one run: OS packages, app deploy, first
 # service start. Clone the repo first, then run this once as root:
 #
-#   git clone https://github.com/henderlabs/pyxie-manager.git ~/pyxie-manager
+#   git clone https://github.com/henderlabs/PyXie-Proxmox-Operations.git ~/pyxie-manager
 #   cd ~/pyxie-manager && sudo bash ops/install/install.sh
 #
 # Deploys as whichever user ran `sudo` (override with PYXIE_USER=... if
