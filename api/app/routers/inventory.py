@@ -182,7 +182,7 @@ def _attach_allocated_memory(db: Session, nodes: list[Node]) -> None:
 
 @router.get("/nodes", response_model=list[schemas.NodeOut])
 def list_nodes(db: Session = Depends(get_db)):
-    nodes = db.query(Node).order_by(Node.name).all()
+    nodes = db.query(Node).filter(Node.forgotten_at.is_(None)).order_by(Node.name).all()  # removed (forgotten) hosts are hidden everywhere
     _attach_allocated_memory(db, nodes)
     return nodes
 
@@ -310,6 +310,26 @@ def disconnect_node_ssh_host_key(
     )
     db.commit()
     return {"disconnected": True}
+
+
+@router.post("/nodes/{node_id}/forget", dependencies=[Depends(require_admin)])
+def forget_node_endpoint(node_id: uuid.UUID, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """'Remove host': forget a host PVE no longer lists. App-side only (never touches the host or the cluster); history and the
+    audit log are kept. Refused for any host PVE still lists as a cluster member."""
+    from pyxie_core.node_forget import forget_block_reason, forget_node
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(404, "node not found")
+    why = forget_block_reason(node)
+    if why:
+        raise HTTPException(409, why)
+    dropped = forget_node(db, node)
+    write_audit_event(
+        db, event_category="inventory", event_type="node.forgotten", actor=user.email, actor_type="user", site_id=node.site_id,
+        metadata={"node_id": str(node_id), "node": node.name, **dropped},
+    )
+    db.commit()
+    return {"removed": True, "node": node.name, **dropped}
 
 
 @router.get("/nodes/{node_id}/host-maintenance-status")

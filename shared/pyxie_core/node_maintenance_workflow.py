@@ -25,6 +25,7 @@ from .credentials import CredentialNotConfigured, HostNotAddressable, load_host_
 from .host_maintenance_client import HostMaintenanceClient, HostMaintenanceConnectionError, HostMaintenanceProtocolError
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
+from .vm_locks import lock_context
 from .maintenance import _has_pci_passthrough, _qemu_config, _quorum_after_removal, flag_onboot, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -162,7 +163,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                     blocked_workloads.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
                                                "reasons": ["PCI/device passthrough -- no safe automated path"]})
                     continue
-                block_reasons = [r for r in (vm_lock_reason(wl.vmid, config), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r]
+                block_reasons = [r for r in (vm_lock_reason(wl.vmid, config, **lock_context(db, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r]
                 if block_reasons:
                     blocked_workloads.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name, "reasons": block_reasons})
                     continue

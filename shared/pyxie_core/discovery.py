@@ -297,6 +297,7 @@ def _run_discovery_inner(db: Session, target: PveTarget, actor: str = "system") 
                     node.pending_updates = client.node_apt_update_count(node_name)
                 node.last_seen = now()
                 node.is_missing = False
+                node.forgotten_at = None  # PVE lists it again: a forgotten host that rejoined comes back by itself
                 seen_node_ids.add(node.id)
                 node_name_by_id[node.id] = node_name
                 summary["nodes"] += 1
@@ -644,6 +645,10 @@ def _upsert_workload(db: Session, cluster: Cluster, node: Node, data: dict, wtyp
         wl.pool = data.get("pool") or None
     wl.is_template = bool(data.get("template")) and str(data.get("template")) not in ("0", "False")
     wl.ha_state = (data.get("hastate") or None)
+    lock = (data.get("lock") or None)
+    if lock != wl.pve_lock:  # a new or different lock restarts its clock; an unlocked guest clears both
+        wl.pve_lock = lock
+        wl.pve_lock_since = now() if lock else None
     wl.last_seen = now()
     wl.is_missing = False
     return wl

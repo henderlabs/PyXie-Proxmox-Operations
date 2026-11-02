@@ -352,6 +352,7 @@ _JOB_TIMEOUT_BY_TYPE = {
     "workload.hw_change": 3600,  # optional snapshot + shutdown + config + start
     "workload.resize": 600,  # shutdown + config PUT + start, generous margin over each's own wait_for_task timeout
     "host.reboot": 1800,
+    "host.clear_locks": 600,
     "pbs.update": 3900,
     "pbs.reboot": 1800,
     "pbs.datastore_change": 300,
@@ -436,6 +437,9 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "host.reboot":
         from pyxie_core.reboot_workflow import approve as approve_reboot
         return approve_reboot(db, op, approved_by=actor)
+    if op.operation_type_id == "host.clear_locks":
+        from pyxie_core.clear_lock_workflow import approve as approve_clear_locks
+        return approve_clear_locks(db, op, approved_by=actor)
     if op.operation_type_id == "pbs.storage_add":
         from pyxie_core.pbs_storage_workflow import approve as approve_pbs_store
         return approve_pbs_store(db, op, approved_by=actor)
@@ -849,6 +853,19 @@ def create_host_reboot_dry_run(payload: NodeIdRequest, user=Depends(get_current_
     return _serialize(op)
 
 
+@router.post("/stale-lock-clears/dry-run", dependencies=[Depends(require_admin)])
+def create_clear_locks_dry_run(payload: NodeIdRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Preview clearing the stale VM locks on one node (needs host wrapper 1.2.0+). Nothing is cleared until approved."""
+    from pyxie_core.clear_lock_workflow import dry_run_clear_locks
+    node = db.query(Node).filter(Node.id == payload.node_id).one_or_none()
+    if node is None:
+        raise HTTPException(404, "node not found")
+    existing = _existing_live_op(db, "host.clear_locks", node.id)
+    if existing is not None:
+        return _serialize(existing)
+    return _serialize(dry_run_clear_locks(db, node, actor=user.email))
+
+
 class MaintenanceRunRequest(BaseModel):
     node_id: uuid.UUID
     force_reboot: bool = False
@@ -907,6 +924,44 @@ class BalanceRequest(BaseModel):
     destination_node_id: uuid.UUID | None = None
     # Balance Load page: throw away the plan that is waiting (never one that is running) and build a fresh one.
     replace: bool = False
+    # Bulk Migrate review step: {workload_id: {"destination_node_id"?, "destination_storage_id"?}}
+    choices: dict[str, dict] | None = None
+
+
+def _blocker_info(op: Operation) -> dict:
+    """What is holding the single Balance Load / Bulk Migrate slot, for a banner that can name it and link to it."""
+    ctx = op.context or {}
+    return {
+        "id": str(op.id), "status": op.status,
+        "kind": "Bulk Migrate" if ctx.get("mode") == "bulk_migrate" else "Balance Load",
+        "created_by": op.created_by, "created_at": op.created_at.isoformat() if op.created_at else None,
+        "workloads": len(ctx.get("migrate_plan") or []),
+    }
+
+
+def _blocker_sentence(info: dict) -> str:
+    return (f"{info['kind']} created by {info['created_by'] or 'someone'} ({info['workloads']} workload"
+            f"{'' if info['workloads'] == 1 else 's'}) is {info['status'].replace('_', ' ')} -- open it in the Tasks panel and approve, "
+            "cancel, or dismiss it first")
+
+
+@router.post("/cluster-rebalance/bulk-review", dependencies=[Depends(require_admin)])
+def bulk_migrate_review(payload: BalanceRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Bulk Migrate review step: plans the ticked VMs exactly as the preview would but creates NO operation. Also says what,
+    if anything, is already holding the Balance Load / Bulk Migrate slot."""
+    from pyxie_core.balance_workflow import BalanceWorkflowError, dry_run_bulk_migrate
+    existing = _existing_live_op(db, "cluster.rebalance", None)
+    blocker = _blocker_info(existing) if existing is not None else None
+    if not payload.workload_ids:
+        raise HTTPException(400, "no VMs selected")
+    try:
+        res = dry_run_bulk_migrate(
+            db, actor=user.email, workload_ids=payload.workload_ids,
+            destination_node_id=payload.destination_node_id, review_only=True,
+        )
+    except BalanceWorkflowError as exc:
+        return {"blocker": blocker, "migrate_plan": [], "skipped_workloads": [], "error": str(exc)}
+    return {"blocker": blocker, **res}
 
 
 def _record_manual_balance_check(db: Session, op: Operation, actor: str, node_ids) -> None:
@@ -957,11 +1012,11 @@ def create_balance_dry_run(payload: BalanceRequest, user=Depends(get_current_use
         # Balance Load, silently handing back someone else's pending plan
         # would show the wrong VMs, so say so instead.
         if existing is not None:
-            raise HTTPException(409, "a Balance Load or Bulk Migrate is already awaiting approval or running -- approve, cancel, or dismiss it first")
+            raise HTTPException(409, _blocker_sentence(_blocker_info(existing)))
         try:
             op = dry_run_bulk_migrate(
                 db, actor=user.email, workload_ids=payload.workload_ids,
-                destination_node_id=payload.destination_node_id,
+                destination_node_id=payload.destination_node_id, choices=payload.choices,
             )
         except BalanceWorkflowError as exc:
             raise HTTPException(400, str(exc))

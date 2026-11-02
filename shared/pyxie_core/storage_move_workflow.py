@@ -64,6 +64,18 @@ def check_target(storage_rows: list[dict], name: str, needed_bytes: int) -> list
     return problems
 
 
+def tpm_live_move_problem(disks: list[dict], was_running: bool) -> str | None:
+    """Proxmox refuses to move a TPM state disk while the VM runs ("cannot move TPM state while VM is running"), so the
+    preview says so up front instead of the task failing. None when nothing is in the way. Pure."""
+    if not was_running:
+        return None
+    tpm = sorted(d["slot"] for d in disks if str(d["slot"]).startswith("tpmstate"))
+    if not tpm:
+        return None
+    return (f"{', '.join(tpm)} is the VM's TPM (virtual security chip) disk, and Proxmox cannot move it while the VM is running: "
+            "shut the VM down first, then change its storage")
+
+
 def dry_run_storage_move(db, workload: Workload, *, target_storage: str, actor: str, correlation_id=None, only_slot: str | None = None) -> Operation:
     if workload.type != "vm":
         raise StorageMoveError("only VM (qemu) storage changes are implemented, not containers")
@@ -87,6 +99,10 @@ def dry_run_storage_move(db, workload: Workload, *, target_storage: str, actor: 
     if workload.status not in ("running", "stopped"):
         reasons.append(f"workload status is '{workload.status}': not safe to move its disks right now")
         blocking.append("SAFE-MIGRATE-001")
+    tpm_problem = tpm_live_move_problem(disks, was_running)
+    if tpm_problem:
+        reasons.append(tpm_problem)
+        blocking.append("SAFE-STORAGE-003")
     free = None
     try:
         client, _cred = build_pve_client(db, target)
@@ -214,6 +230,11 @@ def execute_storage_move(db, operation_id) -> Operation:
             release_locks_for_operation(db, op.id)
             if problems:
                 return fail_operation(db, op, error="read-back after the move didn't match: " + "; ".join(problems))
+            try:
+                from .report_collection import refresh_workload_disks
+                refresh_workload_disks(db, workload, config)
+            except Exception:  # noqa: BLE001 -- the move succeeded; the next report collection fixes the inventory anyway
+                db.rollback()
             try:
                 from .discovery import run_discovery
                 run_discovery(db, target, actor="operation")

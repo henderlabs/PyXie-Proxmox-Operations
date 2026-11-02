@@ -205,9 +205,57 @@ def dry_run_balance(
     return enter_stage(db, op, status="awaiting_approval", stage="awaiting_approval", actor=actor)
 
 
+def _storage_options(db: Session, cluster_id, node_id) -> list[dict]:
+    """Storages a VM could land on for a move to `node_id`: that node's own local pools plus the cluster-shared ones."""
+    rows = (
+        db.query(Storage)
+        .filter(Storage.cluster_id == cluster_id, (Storage.scope == "cluster-shared") | (Storage.node_id == node_id))
+        .order_by(Storage.name)
+        .all()
+    )
+    return [
+        {"id": str(r.id), "name": r.name, "scope": r.scope,
+         "free_bytes": (r.capacity_bytes - r.used_bytes) if r.capacity_bytes is not None and r.used_bytes is not None else None}
+        for r in rows if r.status != "inactive"
+    ]
+
+
+def _apply_bulk_choices(db: Session, migrate_plan: list[dict], choices: dict) -> None:
+    """Per-VM picks made on the review step. A destination must be one the plan already offered for that VM; a storage must be
+    one of the destination's options. Raises BalanceWorkflowError instead of silently ignoring a bad pick."""
+    by_id = {m["workload_id"]: m for m in migrate_plan}
+    for wid, ch in choices.items():
+        item = by_id.get(str(wid))
+        if item is None:
+            continue
+        dest = (ch or {}).get("destination_node_id")
+        if dest and dest != item["destination_node_id"]:
+            cand = next((c for c in item.get("candidates", []) if c.get("node_id") == str(dest)), None)
+            if cand is None:
+                raise BalanceWorkflowError(f"{item.get('name')}: that node was not offered as a destination")
+            rec = recommend_storage_for_candidate(db, dest, bool(item.get("currently_on_shared")), storage_preference=item.get("storage_preference"))
+            item["destination_node_id"] = str(dest)
+            item["destination_node"] = cand["node_name"]
+            item["destination_storage_id"] = rec["id"] if rec else None
+            item["storage_options"] = _storage_options(db, _cluster_of_node(db, dest), dest)
+            item["manually_set"] = True
+        stor = (ch or {}).get("destination_storage_id")
+        if stor:
+            if str(stor) not in {o["id"] for o in item.get("storage_options", [])}:
+                raise BalanceWorkflowError(f"{item.get('name')}: that storage is not available on {item['destination_node']}")
+            item["destination_storage_id"] = str(stor)
+            item["manually_set"] = True
+
+
+def _cluster_of_node(db: Session, node_id):
+    n = db.query(Node).filter(Node.id == node_id).one()
+    return n.cluster_id
+
+
 def dry_run_bulk_migrate(
     db: Session, *, actor: str, workload_ids: list, destination_node_id=None,
-) -> Operation:
+    choices: dict | None = None, review_only: bool = False,
+):
     """Bulk Migrate: the same reviewable/editable cluster.rebalance plan, but
     for exactly the VMs the operator ticked on the Maintenance page rather
     than whatever the balance scoring pass suggests. One line per VM (ranked
@@ -225,6 +273,11 @@ def dry_run_bulk_migrate(
     Smallest VMs are planned first so one large, slow move (a big database)
     doesn't hold up the rest and runs last by default; the order is just
     the list order, nothing else depends on it.
+
+    review_only=True plans exactly the same way but creates NOTHING and returns {"migrate_plan", "skipped_workloads",
+    "requested"} so the UI can show one line per VM (with storage options, locks, TPM) before an operation exists.
+    `choices` ({workload_id: {"destination_node_id"?, "destination_storage_id"?}}) are the operator's per-VM picks from
+    that review; they are applied to the plan as manual overrides.
     """
     if not workload_ids:
         raise BalanceWorkflowError("no VMs selected")
@@ -291,7 +344,22 @@ def dry_run_bulk_migrate(
                     skipped.append({**row, "reasons": ["its current node is not in inventory"]})
                     continue
                 running = wl.status == "running"
-                if running and _has_pci_passthrough(_qemu_config(client, src.name, wl)):
+                cfg_raw = _qemu_config(client, src.name, wl)
+                cfg = cfg_raw or {}
+                lock = cfg.get("lock")
+                if lock:
+                    from .vm_locks import lock_context
+                    ctx = lock_context(db, wl)
+                    state = ctx.get("state")
+                    why = (
+                        f"STALE {lock} lock for {ctx['age']}, no task running for it: run `qm unlock {wl.vmid}` on {src.name}, then select it again"
+                        if state == "stale" else
+                        f"{lock} lock held by a running task: wait for it to finish" if state == "active" else
+                        f"locked ({lock}) -- Proxmox refuses changes to it until the lock is cleared"
+                    )
+                    skipped.append({**row, "locked": str(lock), "lock_state": state, "reasons": [why]})
+                    continue
+                if running and _has_pci_passthrough(cfg_raw):
                     skipped.append({**row, "reasons": ["PCI/device passthrough -- no safe automated path"]})
                     continue
 
@@ -336,7 +404,13 @@ def dry_run_bulk_migrate(
                     # offline move (cheap on shared storage). Both editable
                     # per line in the plan preview.
                     "transport": "live" if running else "offline",
+                    "power": wl.status,
+                    "storage_options": _storage_options(db, cluster.id, destination.id),
                 }
+                tpm_slot = next((k for k in cfg if str(k).startswith("tpmstate")), None)
+                if tpm_slot:
+                    item["has_tpm"] = True
+                    item["tpm_storage"] = str(cfg.get(tpm_slot, "")).split(":")[0]
                 if dest_node is not None:
                     # An explicit "send them all to X" is a manual pick, so a
                     # later Re-score leaves it alone instead of silently
@@ -344,6 +418,11 @@ def dry_run_bulk_migrate(
                     # (including earlier moves in this batch) above.
                     item["manually_set"] = True
                 migrate_plan.append(item)
+
+    if review_only:
+        return {"migrate_plan": migrate_plan, "skipped_workloads": skipped, "requested": len(wanted)}
+    if choices:
+        _apply_bulk_choices(db, migrate_plan, choices)
 
     if not migrate_plan:
         detail = "; ".join(f"{(r.get('name') or r['workload_id'])}: {r['reasons'][0]}" for r in skipped[:6]) or "nothing to move"

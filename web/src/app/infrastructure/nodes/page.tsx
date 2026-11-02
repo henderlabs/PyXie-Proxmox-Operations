@@ -30,7 +30,8 @@ async function SiteOverview({ siteId }: { siteId: string }) {
 
   const siteClusters = clusters.filter((c) => c.site_id === site.id);
   const clusterIds = new Set(siteClusters.map((c) => c.id));
-  const siteNodes = nodes.filter((n) => clusterIds.has(n.cluster_id));
+  // Nodes PVE no longer lists (is_missing, e.g. after pvecm delnode) are not part of the site totals.
+  const siteNodes = nodes.filter((n) => clusterIds.has(n.cluster_id) && !n.is_missing);
   const siteWorkloads = workloads.filter((w) => clusterIds.has(w.cluster_id));
   const onlineCount = siteNodes.filter((n) => n.status === "online").length;
   const totalUpdates = siteNodes.reduce((sum, n) => sum + (n.pending_updates ?? 0), 0);
@@ -79,7 +80,9 @@ async function ClusterOverview({ clusterId }: { clusterId?: string }) {
   const cluster = clusters.find((c) => c.id === (clusterId ?? clusters[0]?.id));
   if (!cluster) return <EmptyState message={<NoInfrastructureHint subject="clusters" />} />;
 
-  const clusterNodes = nodes.filter((n) => n.cluster_id === cluster.id);
+  const allClusterNodes = nodes.filter((n) => n.cluster_id === cluster.id);
+  // Removed nodes stay in the table behind "Show removed" but never count toward the totals.
+  const clusterNodes = allClusterNodes.filter((n) => !n.is_missing);
   const clusterWorkloads = workloads.filter((w) => w.cluster_id === cluster.id);
   const onlineCount = clusterNodes.filter((n) => n.status === "online").length;
   const withStats = clusterNodes.filter((n) => n.cpu_usage_pct != null);
@@ -143,7 +146,7 @@ async function ClusterOverview({ clusterId }: { clusterId?: string }) {
       <div className="col-span-2 min-w-0">
       <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-2">Nodes in this cluster</div>
       <NodesTable
-        nodes={clusterNodes}
+        nodes={allClusterNodes}
         clusterId={cluster.id}
         tierSuggestions={tierSuggestions}
         storage={storage}

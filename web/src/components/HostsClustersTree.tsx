@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import type { Cluster, Node, Site } from "@/lib/api";
 import { MapPinIcon, ClusterIcon, ServerIcon } from "@/components/Icons";
+import { nodeLiveState } from "@/lib/nodeState";
 
 // vSphere-style "Hosts and Clusters" inventory tree. Sites/Clusters hold
 // almost nothing on their own -- Nodes carries all the
@@ -47,7 +48,7 @@ export default function HostsClustersTree({
               <span className="truncate">{site.name}</span>
             </Link>
             {siteClusters.map((cluster) => {
-              const clusterNodes = nodes.filter((n) => n.cluster_id === cluster.id);
+              const clusterNodes = nodes.filter((n) => n.cluster_id === cluster.id && !n.is_missing);
               return (
                 <div key={cluster.id}>
                   <Link
@@ -74,8 +75,16 @@ export default function HostsClustersTree({
                     >
                       <ServerIcon className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">{node.name}</span>
+                      {nodeLiveState(node) !== "online" && (
+                        <span
+                          className={`ml-auto text-[9px] uppercase font-bold px-1 rounded ${nodeLiveState(node) === "just_offline" ? "bg-warn/20 text-warn" : "bg-muted/20 text-muted"}`}
+                          title={nodeLiveState(node) === "just_offline" ? "Just stopped answering" : "Offline"}
+                        >
+                          {nodeLiveState(node) === "just_offline" ? "Down" : "Offline"}
+                        </span>
+                      )}
                       <span
-                        className={`ml-auto w-1.5 h-1.5 rounded-full shrink-0 ${node.status === "online" ? "bg-good" : "bg-muted"}`}
+                        className={`${nodeLiveState(node) === "online" ? "ml-auto " : ""}w-1.5 h-1.5 rounded-full shrink-0 ${nodeLiveState(node) === "online" ? "bg-good" : nodeLiveState(node) === "just_offline" ? "bg-warn" : "bg-muted"}`}
                         title={node.status}
                       />
                     </Link>

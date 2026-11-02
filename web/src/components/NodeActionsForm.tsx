@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { HostMaintenanceStatus, Node, Operation, StorageItem } from "@/lib/api";
+import type { HostMaintenanceStatus, Node, Operation, StorageItem, Workload } from "@/lib/api";
 import OperationCard from "@/components/OperationCard";
 import DefaultStorageSelect from "@/components/DefaultStorageSelect";
 import { Table } from "@/components/Table";
@@ -10,7 +10,8 @@ import { Meter } from "@/components/Gauges";
 import { notifyOperationsChanged, onOperationsChanged } from "@/lib/operationsBus";
 import { useMe } from "@/lib/useMe";
 import { isInFlight, isTerminal } from "@/lib/operationStatus";
-import { formatBytes, isOverprovisioned, overprovisionedPct } from "@/lib/format";
+import { formatBytes, formatRelativeTime, isOverprovisioned, overprovisionedPct } from "@/lib/format";
+import { nodeLiveState } from "@/lib/nodeState";
 import { WrenchIcon, PlugIcon, PackageIcon, ClockIcon, ChecklistIcon } from "@/components/Icons";
 
 // "Wx" stage numbers are an internal build-tracking label, not something an
@@ -22,7 +23,7 @@ const ACTIONS = [
   {
     id: "evacuate-node",
     key: "node-maintenance/enter",
-    label: "Evacuate Node",
+    label: "Evacuate / Maint Mode",
     description: "Moves every guest off the node (live-migrates what can move, gracefully shuts down what can't) and marks it out of service. Nothing is updated or rebooted. Exit Maintenance Mode puts the node back in service.",
     caption: "moves every guest off and marks the node out of service, then stops there: no update, no reboot. Nothing moves back on its own.",
     icon: PlugIcon,
@@ -32,7 +33,7 @@ const ACTIONS = [
     id: "exit-maintenance",
     key: "node-maintenance/exit",
     label: "Exit Maintenance Mode",
-    description: "Only for a node left in maintenance mode (by Evacuate Node or a Full Maintenance run): restarts anything that was shut down and marks the node available again. Does not migrate anything back onto it.",
+    description: "Only for a node left in maintenance mode (by Evacuate / Maint Mode or a Full Maintenance run): restarts anything that was shut down and marks the node available again. Does not migrate anything back onto it.",
     icon: PlugIcon,
     group: "mode" as const,
   },
@@ -94,6 +95,7 @@ const isPbs = (r: Row): r is PbsRow => "__pbs" in r;
 
 export default function NodeActionsForm({
   nodes,
+  workloads = [],
   backupServers = [],
   hostMaintenanceByNode: hostMaintenance,
   storage,
@@ -112,6 +114,7 @@ export default function NodeActionsForm({
   // page both independently fetching it) means it fetches exactly once,
   // client-side, non-blocking, after the page shell has already painted.
   nodes: Node[];
+  workloads?: Workload[];
   backupServers?: BackupServerRow[];
   hostMaintenanceByNode: Record<string, HostMaintenanceStatus | null>;
   storage: StorageItem[];
@@ -140,6 +143,16 @@ export default function NodeActionsForm({
   // some deployments run shared-first, so it needs to be pickable here
   // just like a specific local pool.
   const sharedStorage = useMemo(() => storage.filter((s) => s.scope === "cluster-shared"), [storage]);
+  // Per-node workload counts for the Workloads column (present guests only).
+  const workloadCounts = useMemo(() => {
+    const out: Record<string, { running: number; stopped: number }> = {};
+    for (const w of workloads) {
+      if (w.is_missing) continue;
+      const c = (out[w.node_id] ||= { running: 0, stopped: 0 });
+      if (w.status === "running") c.running += 1; else c.stopped += 1;
+    }
+    return out;
+  }, [workloads]);
   const [defaultStorage, setDefaultStorage] = useState<Record<string, string | null>>(defaultStorageByNode);
   const [selectedNodeIds, setSelectedNodeIdsState] = useState<string[]>(initialNodeId ? [initialNodeId] : []);
   function setSelectedNodeIds(updater: string[] | ((prev: string[]) => string[])) {
@@ -174,7 +187,7 @@ export default function NodeActionsForm({
   const me = useMe();
   const isAdmin = me === undefined || me?.is_admin === true;
 
-  // Evacuate Node leaves the node in maintenance mode, which Auto-balance never
+  // Evacuate / Maint Mode leaves the node in maintenance mode, which Auto-balance never
   // fills; this note only matters while a cluster's Auto-balance is running
   // (recommend or auto-approve, and not paused), so it is fetched and shown
   // only then, next to an evacuation preview that is still live.
@@ -198,7 +211,9 @@ export default function NodeActionsForm({
   const evacuatingCount = evacuating.length;
   const evacuatingNames = evacuating.map((o) => nodes.find((n) => n.id === o.node_id)?.name).filter(Boolean).join(", ") || "the node";
 
-  const allSelected = nodes.length > 0 && selectedNodeIds.length === nodes.length;
+  // Offline nodes (PVE reports them down or they stopped answering) cannot be picked for any action.
+  const selectable = nodes.filter((n) => nodeLiveState(n) !== "offline");
+  const allSelected = selectable.length > 0 && selectedNodeIds.length === selectable.length;
 
   useEffect(() => {
     onSelectionChange?.(selectedNodeIds);
@@ -216,7 +231,7 @@ export default function NodeActionsForm({
   }
 
   function toggleAll() {
-    setSelectedNodeIds(allSelected ? [] : nodes.map((n) => n.id));
+    setSelectedNodeIds(allSelected ? [] : selectable.map((n) => n.id));
     setOps([]);
   }
 
@@ -416,7 +431,7 @@ export default function NodeActionsForm({
               render: (n) => isPbs(n) ? (
                 <input type="checkbox" checked={selectedPbsIds.includes(n.id)} onChange={() => togglePbs(n.id)} />
               ) : (
-                <input type="checkbox" checked={selectedNodeIds.includes(n.id)} onChange={() => toggleNode(n.id)} />
+                <input type="checkbox" checked={selectedNodeIds.includes(n.id)} disabled={nodeLiveState(n) === "offline"} title={nodeLiveState(n) === "offline" ? `${n.name} is offline: actions are unavailable` : undefined} onChange={() => toggleNode(n.id)} />
               ),
             },
             {
@@ -442,6 +457,16 @@ export default function NodeActionsForm({
                       title={n.maintenance_reason ? `Maintenance mode: ${n.maintenance_reason}` : "In maintenance mode"}
                     >
                       Maintenance
+                    </span>
+                  )}
+                  {nodeLiveState(n) === "offline" && (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted/20 text-muted uppercase tracking-wide" title="PVE reports this node offline, or it stopped answering. Its numbers are not shown and it cannot be selected.">
+                      Offline <span className="normal-case">· last seen {formatRelativeTime(n.last_seen)}</span>
+                    </span>
+                  )}
+                  {nodeLiveState(n) === "just_offline" && (
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-warn/20 text-warn uppercase tracking-wide" title="This node just stopped answering (hung, rebooting or powered off). Numbers shown are the last known.">
+                      Just went offline <span className="normal-case">· {formatRelativeTime(n.last_seen)}</span>
                     </span>
                   )}
                   {isOverprovisioned(n) && (
@@ -474,13 +499,28 @@ export default function NodeActionsForm({
             },
             {
               header: "CPU",
-              render: (n) => <Meter value={isPbs(n) ? (n.status?.cpu != null ? n.status.cpu * 100 : null) : n.cpu_usage_pct} width={56} />,
+              render: (n) => (!isPbs(n) && nodeLiveState(n) === "offline") ? <span className="text-muted text-xs">—</span> : <Meter value={isPbs(n) ? (n.status?.cpu != null ? n.status.cpu * 100 : null) : n.cpu_usage_pct} width={56} />,
               sortValue: (n) => (isPbs(n) ? (n.status?.cpu ?? 0) * 100 : n.cpu_usage_pct),
             },
             {
               header: "RAM",
-              render: (n) => <Meter value={isPbs(n) ? (n.status?.memory ? (100 * n.status.memory.used) / n.status.memory.total : null) : n.mem_usage_pct} width={56} />,
+              render: (n) => (!isPbs(n) && nodeLiveState(n) === "offline") ? <span className="text-muted text-xs">—</span> : <Meter value={isPbs(n) ? (n.status?.memory ? (100 * n.status.memory.used) / n.status.memory.total : null) : n.mem_usage_pct} width={56} />,
               sortValue: (n) => (isPbs(n) ? (n.status?.memory ? n.status.memory.used / n.status.memory.total : 0) * 100 : n.mem_usage_pct),
+            },
+            {
+              header: "Workloads",
+              tooltip: "Running workloads on this node; stopped ones in brackets. Handy for spotting empty nodes before an evacuation.",
+              render: (n) => {
+                if (isPbs(n) || nodeLiveState(n) === "offline") return <span className="text-muted text-xs">—</span>;
+                const c = workloadCounts[n.id] || { running: 0, stopped: 0 };
+                return (
+                  <span className="text-sm tabular-nums" title={`${c.running} running, ${c.stopped} stopped`}>
+                    {c.running}
+                    {c.stopped > 0 && <span className="text-muted text-xs"> (+{c.stopped} stopped)</span>}
+                  </span>
+                );
+              },
+              sortValue: (n) => (isPbs(n) ? -1 : (workloadCounts[n.id]?.running ?? 0)),
             },
             {
               header: "Storage",
@@ -541,7 +581,7 @@ export default function NodeActionsForm({
         {isAdmin && noSelection && (
           <p className="text-xs text-muted mt-1.5">Select one or more nodes or backup servers above to enable these actions.</p>
         )}
-        {anyInMaintenance && <p className="text-xs text-muted mt-1.5">A node is in maintenance mode (left by Evacuate Node or a Full Maintenance run): Exit Maintenance Mode brings it back into service.</p>}
+        {anyInMaintenance && <p className="text-xs text-muted mt-1.5">A node is in maintenance mode (left by Evacuate / Maint Mode or a Full Maintenance run): Exit Maintenance Mode brings it back into service.</p>}
         {ACTIONS.map((a) =>
           "caption" in a ? (
             <p key={a.id} className="text-xs text-muted mt-1.5">

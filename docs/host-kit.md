@@ -25,3 +25,20 @@ a **warning** "Host wrapper on X is outdated" (category *Host wrapper*, e-mailab
 On a node that is already set up, running the script again upgrades it, and the script's last lines say there is nothing more to do in PyXie (the host key stays pinned). Only a first install asks you to pin the host key.
 
 **Impact:** once the wrapper is installed, applying updates from PyXie can reboot that node (kernel updates need it). Use Full Maintenance so its VMs move off first. Installing the wrapper does not reboot anything.
+
+## Stale VM locks (wrapper 1.2.0)
+
+Proxmox sets a `lock:` on a VM while a backup, migration or snapshot task runs and removes it when the task ends. If the task
+dies, or cannot write the VM config at that moment (for example the 02:00 backup while the cluster filesystem is briefly cut
+off), the lock stays and every later backup or migration of that VM is refused. Proxmox's API cannot remove a lock for a
+non-root account, so PyXie does it through two new wrapper subcommands (no arguments, no wildcard in sudoers):
+
+- `locks`: read only. Lists the locked VMs on this node, whether a task is running for each, and whether the wrapper would
+  call the lock stale.
+- `unlock-stale`: runs `qm unlock` on this node's locked VMs that pass every check: no running task for the VM, a lock type of
+  backup, migrate, snapshot, snapshot-delete or rollback, and the VM config untouched for 30 minutes. It re-reads each one right
+  before acting and never touches a lock with a live task.
+
+PyXie shows a Health finding for a lock it has seen for 30 minutes (a fixed default; the policy key `locks.stale_after_minutes` overrides it) with no
+task for that VM on any node. "Preview clearing stale locks" builds an approval-gated operation; hosts still on wrapper 1.1.0
+show the `qm unlock <vmid>` command to run yourself instead. Install the new kit on a node the usual way (see above).

@@ -364,6 +364,7 @@ def evaluate_findings(db: Session) -> dict:
     current.extend(_liveness_findings(db))
     current.extend(_snapshot_findings(db))
     current.extend(_wrapper_findings(db))
+    current.extend(_stale_lock_findings(db))
     current.extend(_pbs_server_findings(db))
     current.extend(_stale_inventory_findings(db))
     current.extend(_edge_findings(db))
@@ -454,6 +455,50 @@ def _stale_inventory_findings(db: Session) -> list[dict]:
             },
         }
     ]
+
+
+def _stale_lock_threshold(db: Session) -> int:
+    from .vm_locks import DEFAULT_STALE_AFTER_MINUTES
+    policy = db.query(Policy).filter(Policy.key == "locks.stale_after_minutes", Policy.scope_type == "organization").one_or_none()
+    if policy and isinstance(policy.value, dict) and "minutes" in policy.value:
+        try:
+            return int(policy.value["minutes"])
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_STALE_AFTER_MINUTES
+
+
+def _stale_lock_findings(db: Session) -> list[dict]:
+    """A guest locked by Proxmox with no task running for it anywhere, for longer than the stale threshold. It silently fails
+    the nightly backup and blocks migration/evacuation. Closes itself once the lock is gone."""
+    from .vm_locks import locked_guests
+    now = datetime.now(timezone.utc)
+    out: list[dict] = []
+    for g in locked_guests(db, now, _stale_lock_threshold(db)):
+        if g["state"] != "stale":
+            continue
+        wl = g["workload"]
+        label = wl.name or wl.vmid
+        out.append(
+            {
+                "dedupe_key": f"vm.stale_lock:{wl.id}",
+                "object_type": "workload",
+                "object_id": wl.id,
+                "category": "vm_lock",
+                "severity": "warning",
+                "title": f"VM '{label}' ({wl.vmid}) has a stale {g['lock']} lock on {g['node']}",
+                "evidence": {
+                    "vmid": wl.vmid, "name": wl.name, "node": g["node"], "node_id": str(wl.node_id), "lock": g["lock"],
+                    "locked_since": g["since"].isoformat() if g["since"] else None, "locked_for": g["age"],
+                    "workload_ids": [str(wl.id)],
+                    "command": f"qm unlock {wl.vmid}",
+                    "fix": f"No task is running for this VM on any node, so the {g['lock']} lock is left over. It makes the nightly backup fail "
+                           f"(\"VM is locked ({g['lock']})\") and blocks migration and evacuation. Run the command on {g['node']}, "
+                           "or use Clear stale lock once the host kit supports it. This finding closes by itself when the lock is gone.",
+                },
+            }
+        )
+    return out
 
 
 def _wrapper_findings(db: Session) -> list[dict]:

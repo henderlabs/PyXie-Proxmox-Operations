@@ -135,6 +135,7 @@ export default function MaintenanceWorkspace({
           <CardTitle>Nodes</CardTitle>
           <NodeActionsForm
             nodes={nodes}
+            workloads={workloads}
             backupServers={pbsServers}
             hostMaintenanceByNode={hostMaintenance}
             storage={storage}

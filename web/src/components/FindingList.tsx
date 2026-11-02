@@ -20,6 +20,30 @@ export default function FindingList({ findings, view }: { findings: Finding[]; v
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const canTriage = isAdmin && view !== "resolved";
+  const [lockMsg, setLockMsg] = useState<Record<string, string>>({});
+
+  async function previewClear(findingId: string, nodeId: string) {
+    setLockMsg((m) => ({ ...m, [findingId]: "working" }));
+    try {
+      const res = await fetch("/api/operations/stale-lock-clears/dry-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ node_id: nodeId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      const reasons: string[] = data?.dry_run_result?.reasons ?? [];
+      const msg =
+        data.status === "awaiting_approval"
+          ? "Preview ready: approve it in the Tasks panel (Awaiting approval). " + (reasons[0] ?? "")
+          : data.status === "completed"
+          ? reasons[0] ?? "Nothing to clear."
+          : "Blocked: " + (reasons[0] ?? "see the Tasks panel");
+      setLockMsg((m) => ({ ...m, [findingId]: msg }));
+    } catch (e) {
+      setLockMsg((m) => ({ ...m, [findingId]: (e as Error).message }));
+    }
+  }
 
   async function act(ids: string[], action: "acknowledge" | "dismiss" | "reopen") {
     setPending(true);
@@ -104,6 +128,44 @@ export default function FindingList({ findings, view }: { findings: Finding[]; v
                   {!f.active && f.resolved_at && <> · resolved {new Date(f.resolved_at).toLocaleString()}</>}
                   {f.triage === "dismissed" && <> · comes back as a new alert only if it clears and happens again, or gets worse</>}
                 </div>
+                {f.category === "vm_lock" && f.evidence && (() => {
+                  const e = f.evidence as { node?: string; node_id?: string; lock?: string; locked_for?: string; command?: string; fix?: string; workload_ids?: string[] };
+                  return (
+                    <div className="text-xs mt-1 ml-[70px] space-y-1">
+                      <div className="text-muted">{e.lock} lock seen for {e.locked_for}. {e.fix}</div>
+                      {e.command && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted">Run on {e.node}:</span>
+                          <code className="bg-surface2 border border-border rounded px-2 py-0.5 font-mono">{e.command}</code>
+                          <button
+                            type="button"
+                            className="text-accent hover:underline"
+                            onClick={() => { try { navigator.clipboard.writeText(e.command || ""); } catch { /* clipboard blocked: select the text instead */ } }}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-3">
+                        {e.node_id && (
+                          <button
+                            type="button"
+                            className="px-2 py-0.5 rounded border border-accent text-accent hover:bg-accent/10 disabled:opacity-50"
+                            disabled={lockMsg[f.id] === "working"}
+                            title="Builds a preview of clearing every stale lock on this node (needs host wrapper 1.2.0 or newer). Nothing is cleared until you approve it in the Tasks panel."
+                            onClick={() => previewClear(f.id, e.node_id!)}
+                          >
+                            Preview clearing stale locks on {e.node}
+                          </button>
+                        )}
+                        {e.workload_ids?.[0] && (
+                          <a href={`/infrastructure/workloads/${e.workload_ids[0]}`} className="text-accent hover:underline">Open this VM</a>
+                        )}
+                      </div>
+                      {lockMsg[f.id] && lockMsg[f.id] !== "working" && <div className="text-muted">{lockMsg[f.id]}</div>}
+                    </div>
+                  );
+                })()}
                 {f.category === "task" && f.evidence && (() => {
                   const e = f.evidence as { started_at?: string | null; workload_id?: string | null; node_id?: string | null };
                   const href = e.workload_id ? `/infrastructure/workloads/${e.workload_id}?tab=tasks` : e.node_id ? `/infrastructure/nodes/${e.node_id}` : "/platform/logging";

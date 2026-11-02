@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
+from .vm_locks import lock_context
 from .maintenance import _qemu_config, _quorum_after_removal, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -106,7 +107,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
             liveness = scan_vm_liveness(client, [(node.name, w.vmid) for w in running_vms])
             for wl in running_vms:
                 block_reasons = [
-                    r for r in (vm_lock_reason(wl.vmid, _qemu_config(client, node.name, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r
+                    r for r in (vm_lock_reason(wl.vmid, _qemu_config(client, node.name, wl), **lock_context(db, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r
                 ]
                 if block_reasons:
                     unmigratable.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name, "reasons": block_reasons})

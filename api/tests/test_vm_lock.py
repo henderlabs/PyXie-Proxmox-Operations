@@ -20,3 +20,10 @@ def test_backup_lock_says_wait_not_unlock():
 def test_other_locks_get_a_generic_message_with_the_vmid():
     r = vm_lock_reason(55, {"lock": "clone"})
     assert "(clone)" in r and "qm unlock 55" in r
+
+
+def test_a_stale_lock_says_so_and_a_live_task_says_wait():
+    stale = vm_lock_reason(9, {"lock": "backup"}, state="stale", age="2 d 3 h")
+    assert "STALE LOCK" in stale and "2 d 3 h" in stale and "qm unlock 9" in stale
+    active = vm_lock_reason(9, {"lock": "backup"}, state="active", age="5 min")
+    assert "running right now" in active and "qm unlock" not in active.replace("Never clear", "")

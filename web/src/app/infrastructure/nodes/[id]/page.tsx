@@ -8,6 +8,7 @@ import { formatBytes } from "@/lib/format";
 import NodeWorkloadsTable from "@/components/tables/NodeWorkloadsTable";
 import StatusBadge from "@/components/StatusBadge";
 import { ServerIcon, WrenchIcon } from "@/components/Icons";
+import RemoveHostButton from "@/components/RemoveHostButton";
 
 export default async function NodeDetailPage({ params }: { params: { id: string } }) {
   const [node, workloads, tasks, hostMaintenance] = await Promise.all([
@@ -41,6 +42,39 @@ export default async function NodeDetailPage({ params }: { params: { id: string 
       />
 
       <div className="col-span-2 min-w-0">
+      {(node.maintenance_mode || node.is_missing) && (
+        <Card className="mb-4">
+          <CardTitle>Decommission {node.name}</CardTitle>
+          {(() => {
+            const left = workloads.filter((w) => !w.is_missing).length;
+            const steps: { done: boolean; label: React.ReactNode }[] = [
+              { done: left === 0, label: left === 0 ? "Evacuate: no workloads are left on this host." : `Evacuate: ${left} workload${left === 1 ? " is" : "s are"} still on this host (use Evacuate / Maint Mode).` },
+              {
+                done: node.is_missing,
+                label: node.is_missing
+                  ? "Leave the cluster: PVE no longer lists this host."
+                  : <>Leave the cluster: PVE still lists it. Power it off, then run <code>pvecm delnode {node.name}</code> on a remaining node (PyXie does not run this for you; it needs quorum).</>,
+              },
+            ];
+            return (
+              <ol className="text-sm space-y-1.5 list-decimal ml-5">
+                {steps.map((st, i) => (
+                  <li key={i}>
+                    <span className={`text-[10px] font-semibold uppercase tracking-wide mr-2 ${st.done ? "text-good" : "text-warn"}`}>{st.done ? "Done" : "Next"}</span>
+                    {st.label}
+                  </li>
+                ))}
+                <li>
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide mr-2 ${node.is_missing ? "text-warn" : "text-muted"}`}>{node.is_missing ? "Next" : "Waiting"}</span>
+                  Remove it from PyXie.{" "}
+                  <RemoveHostButton nodeId={node.id} nodeName={node.name} stillMember={!node.is_missing} redirectTo="/infrastructure/nodes" />
+                </li>
+              </ol>
+            );
+          })()}
+        </Card>
+      )}
+
       <Card className="mb-4">
         <CardTitle>Recent Tasks</CardTitle>
         <div className="space-y-1 text-sm">

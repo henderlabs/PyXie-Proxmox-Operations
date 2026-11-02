@@ -102,6 +102,7 @@ class Node(Base):
     ssh_host_key_pinned_at = Column(DateTime(timezone=True), nullable=True)
     wrapper_version = Column(String, nullable=True)  # host-maintenance wrapper version last seen on this node
     wrapper_checked_at = Column(DateTime(timezone=True), nullable=True)
+    forgotten_at = Column(DateTime(timezone=True), nullable=True)  # an operator removed this (already gone from PVE) host from PyXie; history stays, discovery clears it if PVE lists the host again
     ssh_host_key_pinned_by = Column(String, nullable=True)
     cpu_usage_pct = Column(Float, nullable=True)
     mem_usage_pct = Column(Float, nullable=True)
@@ -159,6 +160,8 @@ class Workload(Base):
     is_template = Column(Boolean, nullable=False, default=False, server_default="false")  # Proxmox template flag (VMs only)
     pool = Column(String, nullable=True)  # Proxmox resource pool the guest is a member of (cluster resources `pool`); null = none
     ha_state = Column(String, nullable=True)
+    pve_lock = Column(String, nullable=True)  # the guest's Proxmox `lock:` (backup, migrate, snapshot, ...) as of the last discovery; null = unlocked
+    pve_lock_since = Column(DateTime(timezone=True), nullable=True)  # when PyXie first saw THIS lock; a lock has no timestamp in Proxmox, so age is "seen locked for"
     sensitivity = Column(String, nullable=False, default="standard")  # standard | restricted -- restricted may not land on a trust_tier=low node
     downtime_tolerance = Column(String, nullable=False, default="standard")  # low | standard | high -- 'low' means CANNOT tolerate downtime (critical); also may not land on trust_tier=low
     placement_notes = Column(Text, nullable=True)  # PyXie-only free text -- why this profile was set, never synced from/to PVE

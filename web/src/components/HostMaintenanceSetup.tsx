@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { HostMaintenanceCredentialRecord, HostMaintenanceStatus, Node } from "@/lib/api";
 import { useMe } from "@/lib/useMe";
+import RemoveHostButton from "@/components/RemoveHostButton";
 
 export default function HostMaintenanceSetup({
   targetId,
@@ -198,8 +199,8 @@ function NodeReadinessRow({
 
   return (
     <div className="px-3 py-2">
-      <div className="flex items-center justify-between">
-        <span className="text-text font-medium flex items-center gap-2">
+      <div className="flex items-start justify-between gap-3">
+        <span className="text-text font-medium flex items-center gap-2 min-w-0">
           {node.name}
           {node.maintenance_mode && (
             <span
@@ -210,13 +211,31 @@ function NodeReadinessRow({
             </span>
           )}
         </span>
-        {!pinned ? (
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-warn">Key not pinned</span>
-        ) : reachable ? (
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-good">Ready</span>
-        ) : (
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-bad">Unreachable</span>
-        )}
+        {/* status + action in one right-aligned group so state reads straight down the list */}
+        <span className="flex items-center gap-2 shrink-0">
+          {node.is_missing ? (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted" title="PVE no longer lists this host">Removed</span>
+          ) : !pinned ? (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-warn">Key not pinned</span>
+          ) : reachable ? (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-good">Ready</span>
+          ) : (
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-bad">Unreachable</span>
+          )}
+          {node.is_missing ? (
+            <RemoveHostButton nodeId={node.id} nodeName={node.name} stillMember={false} />
+          ) : (
+            pinned && !confirmingDisconnect && isAdmin && (
+              <button
+                onClick={() => setConfirmingDisconnect(true)}
+                title="Forgets this host's pinned SSH key so PyXie stops managing it. It does not remove the host from the cluster or from PyXie's inventory."
+                className="px-2 py-1 rounded text-[11px] font-medium bg-ink text-on-ink border border-bad hover:bg-bad/10"
+              >
+                Disconnect maintenance access
+              </button>
+            )
+          )}
+        </span>
       </div>
 
       {!pinned && !probeResult && isAdmin && (
@@ -267,14 +286,6 @@ function NodeReadinessRow({
         </div>
       )}
 
-      {pinned && !confirmingDisconnect && isAdmin && (
-        <button
-          onClick={() => setConfirmingDisconnect(true)}
-          className="mt-1.5 px-2 py-1 rounded text-[11px] font-medium bg-ink text-on-ink border border-bad hover:bg-bad/10"
-        >
-          Disconnect
-        </button>
-      )}
       {confirmingDisconnect && isAdmin && (
         <div className="mt-1.5 text-[11px] bg-surface2/60 border border-border rounded p-2">
           <div className="text-muted">

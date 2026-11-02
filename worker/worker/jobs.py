@@ -228,6 +228,9 @@ def execute_operation_job(operation_id: str):
         elif op.operation_type_id == "host.reboot":
             from pyxie_core.reboot_workflow import execute_reboot
             result = execute_reboot(db, operation_id)
+        elif op.operation_type_id == "host.clear_locks":
+            from pyxie_core.clear_lock_workflow import execute_clear_locks
+            result = execute_clear_locks(db, operation_id)
         elif op.operation_type_id == "pbs.storage_add":
             from pyxie_core.pbs_storage_workflow import execute_pbs_storage_add
             result = execute_pbs_storage_add(db, operation_id)
@@ -332,6 +335,7 @@ def resume_inflight_operations():
         "storage.ct_template_delete": 900,
         "workload.hw_change": 3600,
         "host.reboot": 1800,
+        "host.clear_locks": 600,
         "pbs.update": 3900,
         "pbs.reboot": 1800,
         "pbs.datastore_change": 300,
