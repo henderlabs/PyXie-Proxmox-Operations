@@ -124,7 +124,7 @@ function pageFor(operationTypeId: string, context?: Record<string, unknown> | nu
     return "/infrastructure/workloads/pools";
   }
   if (workloadId && operationTypeId.startsWith("workload.") && operationTypeId !== "workload.network_vlan_change") {
-    return `/infrastructure/workloads/${workloadId}?tab=${["workload.disk_change", "workload.disk_grow", "workload.hw_change", "workload.nic_change", "workload.ct_nic_change", "workload.cdrom_change"].includes(operationTypeId) ? "hardware" : "tasks"}`;
+    return `/infrastructure/workloads/${workloadId}?tab=${["workload.disk_change", "workload.disk_grow", "workload.hw_change", "workload.nic_change", "workload.ct_nic_change", "workload.cdrom_change"].includes(operationTypeId) ? "hardware" : operationTypeId === "workload.config_change" ? "config" : "tasks"}`;
   }
   if (operationTypeId === "protection.backup_retention") {
     return "/operations/protection";
@@ -301,6 +301,13 @@ function TaskRow({ op, onApproved, isAdmin }: { op: Operation; onApproved: () =>
       )}
       {op.approver && op.approver !== op.initiated_by && (
         <div className="text-[11px] text-muted truncate mt-0.5">approved by {op.approver}</div>
+      )}
+      {op.queued_behind && (
+        <div className="text-[11px] text-warn mt-0.5" title="Operations run one at a time today; this one starts when the running one finishes.">
+          Queued behind: {op.queued_behind.label}
+          {op.queued_behind.running_minutes != null ? ` (running ${op.queued_behind.running_minutes} min` : " ("}
+          {op.queued_behind.progress_pct != null ? `${op.queued_behind.running_minutes != null ? ", " : ""}${Math.round(op.queued_behind.progress_pct)}% done)` : ")"}
+        </div>
       )}
       {inFlight && (op.operation_type_id === "vm.live_migrate" || op.operation_type_id === "workload.move_storage") ? <MigrationBars op={op} /> : inFlight && <ProgressBar pct={op.progress?.pct ?? null} />}
       {op.status === "failed" && op.error && <div className="text-[11px] text-bad mt-1">{op.error}</div>}

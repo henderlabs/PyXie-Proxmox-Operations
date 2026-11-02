@@ -24,6 +24,7 @@ const TYPE_LABELS: Record<string, string> = {
   "pbs.maintenance": "Backup Server Maintenance",
   "host.reboot": "Host Reboot",
   "host.clear_locks": "Clear Stale VM Locks",
+  "workload.config_change": "Change Configuration",
   "maintenance.run": "Full Maintenance Run",
   "node.enter_maintenance": "Evacuate / Maint Mode",
   "node.exit_maintenance": "Exit Maintenance Mode",

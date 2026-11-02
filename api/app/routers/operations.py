@@ -1,5 +1,6 @@
 import copy
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -78,6 +79,43 @@ def _with_storage_names(op: Operation) -> dict | None:
     return out
 
 
+_RUNNING_STATUSES = ("revalidating", "executing", "monitoring", "verifying")
+
+
+def _queued_behind(op: Operation) -> dict | None:
+    """For an approved operation that has not started: the top-level operation currently holding the single operations worker.
+    A label only, nothing about ordering depends on it. None when it is not waiting behind anything."""
+    if op.status != "approved":
+        return None
+    from sqlalchemy.orm import object_session
+    from pyxie_core.notifications import OPERATION_LABELS
+    db = object_session(op)
+    if db is None:
+        return None
+    ahead = (
+        db.query(Operation)
+        .filter(Operation.status.in_(_RUNNING_STATUSES), Operation.parent_operation_id.is_(None), Operation.id != op.id)
+        .order_by(Operation.created_at)
+        .first()
+    )
+    if ahead is None:
+        return None
+    subject = None
+    if ahead.workload_id:
+        wl = db.query(Workload).filter(Workload.id == ahead.workload_id).one_or_none()
+        subject = (wl.name or str(wl.vmid)) if wl else None
+    if subject is None and ahead.node_id:
+        nd = db.query(Node).filter(Node.id == ahead.node_id).one_or_none()
+        subject = nd.name if nd else None
+    started = ahead.approved_at or ahead.created_at
+    minutes = int((datetime.now(timezone.utc) - started).total_seconds() // 60) if started else None
+    return {
+        "id": str(ahead.id), "operation_type_id": ahead.operation_type_id,
+        "label": OPERATION_LABELS.get(ahead.operation_type_id, ahead.operation_type_id) + (f" {subject}" if subject else ""),
+        "running_minutes": minutes, "progress_pct": (ahead.progress or {}).get("pct") if isinstance(ahead.progress, dict) else None,
+    }
+
+
 def _serialize(op: Operation) -> dict:
     initiator = _resolve_actor(op, "created_by")
     approver = _resolve_actor(op, "approved_by")
@@ -89,6 +127,7 @@ def _serialize(op: Operation) -> dict:
         "approver": _actor_label(op, approver),
         "approver_email": approver if approver and "@" in approver else None,
         "id": str(op.id),
+        "queued_behind": _queued_behind(op),
         "operation_type_id": op.operation_type_id,
         "correlation_id": str(op.correlation_id),
         "plan_id": str(op.plan_id) if op.plan_id else None,
@@ -231,10 +270,12 @@ def create_migration_dry_run(payload: MigrationDryRunRequest, user=Depends(get_c
         destination_storage = db.query(Storage).filter(Storage.id == payload.destination_storage_id).one_or_none()
         if destination_storage is None:
             raise HTTPException(404, "destination storage not found")
+    # A stopped VM cannot be live-migrated; Proxmox re-registers it (offline migration), so pick that for it instead of refusing.
+    transport = "offline" if (payload.transport == "live" and workload.status == "stopped") else payload.transport
     try:
         op = dry_run_migration(
             db, workload, destination_node, actor=user.email, destination_storage=destination_storage,
-            transport=payload.transport,
+            transport=transport,
         )
     except MigrationWorkflowError as exc:
         raise HTTPException(400, str(exc))
@@ -353,6 +394,7 @@ _JOB_TIMEOUT_BY_TYPE = {
     "workload.resize": 600,  # shutdown + config PUT + start, generous margin over each's own wait_for_task timeout
     "host.reboot": 1800,
     "host.clear_locks": 600,
+    "workload.config_change": 300,
     "pbs.update": 3900,
     "pbs.reboot": 1800,
     "pbs.datastore_change": 300,
@@ -440,6 +482,9 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id == "host.clear_locks":
         from pyxie_core.clear_lock_workflow import approve as approve_clear_locks
         return approve_clear_locks(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.config_change":
+        from pyxie_core.config_change_workflow import approve as approve_config_change
+        return approve_config_change(db, op, approved_by=actor)
     if op.operation_type_id == "pbs.storage_add":
         from pyxie_core.pbs_storage_workflow import approve as approve_pbs_store
         return approve_pbs_store(db, op, approved_by=actor)
@@ -722,6 +767,8 @@ _OPTIONAL_PLAN_KEYS_BY_TYPE = {
 
 
 class StoppedRelocationUpdateRequest(BaseModel):
+    # Enter Maintenance Mode only, for a stopped guest with Start at boot on: turn Start at boot off for the window (restored on exit).
+    boot_off: bool | None = None
     included: bool | None = None
     destination_node_id: uuid.UUID | None = None
     transport: str | None = None
@@ -732,8 +779,8 @@ def update_stopped_relocation(
     operation_id: uuid.UUID, workload_id: uuid.UUID, payload: StoppedRelocationUpdateRequest,
     user=Depends(get_current_user), db: Session = Depends(get_db),
 ):
-    if payload.included is None and payload.destination_node_id is None and payload.transport is None:
-        raise HTTPException(400, "nothing to update -- pass included, destination_node_id, and/or transport")
+    if payload.included is None and payload.destination_node_id is None and payload.transport is None and payload.boot_off is None:
+        raise HTTPException(400, "nothing to update -- pass included, destination_node_id, transport and/or boot_off")
     if payload.transport is not None and payload.transport not in ("live", "offline"):
         raise HTTPException(400, "transport must be 'live' or 'offline'")
 
@@ -767,7 +814,15 @@ def update_stopped_relocation(
         storage_rec = recommend_storage_for_candidate(db, destination_node.id, bool(item.get("currently_on_shared")))
         item["destination_node_id"] = str(destination_node.id)
         item["destination_node"] = destination_node.name
-        item["destination_storage_id"] = storage_rec["id"] if storage_rec else None
+        # A guest already on shared storage keeps its disks (config-only move); only local-disk guests get a copy target.
+        item["destination_storage_id"] = None if item.get("currently_on_shared") else (storage_rec["id"] if storage_rec else None)
+
+    if payload.boot_off is not None:
+        if op.operation_type_id != "node.enter_maintenance":
+            raise HTTPException(400, "turning Start at boot off for the window is only available for Evacuate / Maint Mode")
+        if not item.get("starts_on_boot"):
+            raise HTTPException(400, "this guest does not have Start at boot on")
+        item["boot_off"] = payload.boot_off
 
     if payload.transport is not None:
         # Only meaningful for a currently-RUNNING workload (a shutdown_plan
@@ -864,6 +919,63 @@ def create_clear_locks_dry_run(payload: NodeIdRequest, user=Depends(get_current_
     if existing is not None:
         return _serialize(existing)
     return _serialize(dry_run_clear_locks(db, node, actor=user.email))
+
+
+class ConfigChangeRequest(BaseModel):
+    workload_id: uuid.UUID
+    changes: dict[str, object] = {}
+    revert: list[str] = []
+
+
+@router.post("/workload-config/dry-run", dependencies=[Depends(require_admin)])
+def create_config_change_dry_run(payload: ConfigChangeRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Preview changing guest configuration options (and/or discarding pending ones). Nothing is written until approved."""
+    from pyxie_core.config_change_workflow import ConfigChangeError, dry_run_config_change
+    workload = db.query(Workload).filter(Workload.id == payload.workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        op = dry_run_config_change(db, workload, changes=payload.changes, revert=payload.revert, actor=user.email)
+    except ConfigChangeError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+@router.get("/workload-config/{workload_id}")
+def read_workload_config(workload_id: uuid.UUID, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Everything the Config tab shows for one guest: each editable option with its current and pending value, what changing it does
+    (live / after restart), the Proxmox privilege it needs and whether PyXie's account has it, and the options edited elsewhere."""
+    from pyxie_core.config_change_workflow import ConfigChangeError, _kind, read_guest
+    from pyxie_core.guest_config import GROUP_ORDER, OWN_PANEL, SPECS, agent_enabled, comparable, parse_startup, pending_keys
+    workload = db.query(Workload).filter(Workload.id == workload_id).one_or_none()
+    if workload is None:
+        raise HTTPException(404, "workload not found")
+    try:
+        live = read_guest(db, workload)
+    except ConfigChangeError as exc:
+        raise HTTPException(502, str(exc))
+    kind = _kind(workload)
+    cfg, privs = live["config"], live["privileges"]
+    pend = {p["key"]: p for p in pending_keys(live["pending"])}
+    fields = []
+    for key, spec in SPECS[kind].items():
+        raw = cfg.get(key)
+        value = agent_enabled(raw) if key == "agent" else comparable(spec, raw)
+        p = pend.get(key)
+        fields.append({
+            "key": key, "label": spec["label"], "group": spec["group"], "type": spec["type"], "apply": spec["apply"], "priv": spec["priv"],
+            "priv_ok": None if privs is None else spec["priv"] in privs, "value": value,
+            "startup": parse_startup(raw) if spec["type"] == "startup" else None,
+            "pending": (None if p is None else ("(removed)" if p["delete"] else p["pending"])),
+            "choices": spec.get("choices"), "min": spec.get("min"), "max": spec.get("max"), "hint": spec.get("hint"), "max_length": spec.get("max") if spec["type"] == "text" else None,
+        })
+    own = [{"key": k, "where": w, "value": cfg.get(k)} for k, w in OWN_PANEL.items() if k in cfg or workload.type == "vm"]
+    return {
+        "workload_id": str(workload.id), "name": workload.name, "vmid": workload.vmid, "kind": kind, "status": workload.status, "node": live["node"],
+        "digest": cfg.get("digest"), "lock": cfg.get("lock"), "privileges_known": privs is not None,
+        "groups": [g for g in GROUP_ORDER if any(f["group"] == g for f in fields)], "fields": fields, "own_panel": own,
+        "pending": [{"key": k, "value": v["value"], "pending": v["pending"], "delete": v["delete"]} for k, v in pend.items()],
+    }
 
 
 class MaintenanceRunRequest(BaseModel):

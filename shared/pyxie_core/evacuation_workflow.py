@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
 from .vm_locks import lock_context
+from .stopped_guests import stopped_shared_item
 from .maintenance import _qemu_config, _quorum_after_removal, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -140,7 +141,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                     "candidates": [
                         {
                             "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                            "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                            "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                         }
                         for c in ranked
                     ],
@@ -164,10 +165,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                     })
                     continue
                 if on_shared:
-                    stopped_no_action.append({
-                        "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
-                        "reasons": ["stopped, and its disk is on shared storage -- no action needed to evacuate this node"],
-                    })
+                    stopped_relocation_required.append(stopped_shared_item(db, client, node, wl, candidates_all, nodes_by_id, simulated_added_bytes, "stopped, and its disk is on shared storage -- no action needed to evacuate this node -- optional: move it too (offline, config only, nothing is copied)"))
                 else:
                     # Never required for a temporary evacuation (the whole
                     # point of "stopped" is it isn't costing this node
@@ -210,7 +208,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],

@@ -386,17 +386,19 @@ def dry_run_bulk_migrate(
                 current_storage = current_storage_name(client, src, wl)
                 effective_pref = wl.storage_preference or get_cluster_storage_preference(db, cluster.id)
                 storage_rec = recommend_storage_for_candidate(db, destination.id, currently_on_shared, storage_preference=effective_pref)
+                # A guest whose disks are already on shared storage keeps them (no copy) unless its preference is explicitly "local".
+                keep_current = bool(currently_on_shared) and effective_pref != "local"
                 item = {
                     "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
                     "destination_node_id": str(destination.id), "destination_node": destination.name,
-                    "destination_storage_id": storage_rec["id"] if storage_rec else None,
+                    "destination_storage_id": None if keep_current else (storage_rec["id"] if storage_rec else None),
                     "currently_on_shared": currently_on_shared,
                     "current_storage": current_storage,
                     "storage_preference": effective_pref,
                     "candidates": [
                         {
                             "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                            "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                            "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                         }
                         for c in ranked
                     ],

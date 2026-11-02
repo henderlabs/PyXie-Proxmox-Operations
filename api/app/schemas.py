@@ -70,6 +70,7 @@ class NodeOut(OrmModel):
     maintenance_mode_by: Optional[str] = None
     last_seen: datetime
     is_missing: bool
+    avoid_as_destination: bool = False
     # Sum of running workloads' configured memory_bytes on this node --
     # attached by the router (not a real column, see inventory.py) so the
     # UI can warn when a node is running with configured VM memory close

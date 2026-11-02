@@ -228,6 +228,9 @@ def execute_operation_job(operation_id: str):
         elif op.operation_type_id == "host.reboot":
             from pyxie_core.reboot_workflow import execute_reboot
             result = execute_reboot(db, operation_id)
+        elif op.operation_type_id == "workload.config_change":
+            from pyxie_core.config_change_workflow import execute_config_change
+            result = execute_config_change(db, operation_id)
         elif op.operation_type_id == "host.clear_locks":
             from pyxie_core.clear_lock_workflow import execute_clear_locks
             result = execute_clear_locks(db, operation_id)
@@ -336,6 +339,7 @@ def resume_inflight_operations():
         "workload.hw_change": 3600,
         "host.reboot": 1800,
         "host.clear_locks": 600,
+        "workload.config_change": 300,
         "pbs.update": 3900,
         "pbs.reboot": 1800,
         "pbs.datastore_change": 300,

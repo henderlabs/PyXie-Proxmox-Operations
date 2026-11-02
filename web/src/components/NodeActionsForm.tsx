@@ -143,6 +143,9 @@ export default function NodeActionsForm({
   // some deployments run shared-first, so it needs to be pickable here
   // just like a specific local pool.
   const sharedStorage = useMemo(() => storage.filter((s) => s.scope === "cluster-shared"), [storage]);
+  const meAdmin = useMe();
+  const isAdminUser = meAdmin?.is_admin === true;
+  const [avoidByNode, setAvoidByNode] = useState<Record<string, boolean>>(() => Object.fromEntries(nodes.map((n) => [n.id, !!n.avoid_as_destination])));
   // Per-node workload counts for the Workloads column (present guests only).
   const workloadCounts = useMemo(() => {
     const out: Record<string, { running: number; stopped: number }> = {};
@@ -506,6 +509,25 @@ export default function NodeActionsForm({
               header: "RAM",
               render: (n) => (!isPbs(n) && nodeLiveState(n) === "offline") ? <span className="text-muted text-xs">—</span> : <Meter value={isPbs(n) ? (n.status?.memory ? (100 * n.status.memory.used) / n.status.memory.total : null) : n.mem_usage_pct} width={56} />,
               sortValue: (n) => (isPbs(n) ? (n.status?.memory ? n.status.memory.used / n.status.memory.total : 0) * 100 : n.mem_usage_pct),
+            },
+            {
+              header: "Avoid",
+              tooltip: "Never pick this node automatically as a migration destination (use it for a host about to be upgraded or drained). You can still choose it by hand in a plan.",
+              render: (n) => isPbs(n) ? <span className="text-muted text-xs">—</span> : (
+                <input
+                  type="checkbox"
+                  checked={!!avoidByNode[n.id]}
+                  disabled={!isAdminUser}
+                  aria-label={`Avoid ${n.name} as an automatic destination`}
+                  onChange={async (e) => {
+                    const avoid = e.target.checked;
+                    setAvoidByNode((m) => ({ ...m, [n.id]: avoid }));
+                    const res = await fetch(`/api/nodes/${n.id}/avoid-destination`, { method: "PUT", body: JSON.stringify({ avoid }) });
+                    if (!res.ok) setAvoidByNode((m) => ({ ...m, [n.id]: !avoid }));
+                  }}
+                />
+              ),
+              sortValue: (n) => (isPbs(n) ? -1 : avoidByNode[n.id] ? 1 : 0),
             },
             {
               header: "Workloads",

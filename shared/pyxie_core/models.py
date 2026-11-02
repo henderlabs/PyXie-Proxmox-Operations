@@ -102,6 +102,7 @@ class Node(Base):
     ssh_host_key_pinned_at = Column(DateTime(timezone=True), nullable=True)
     wrapper_version = Column(String, nullable=True)  # host-maintenance wrapper version last seen on this node
     wrapper_checked_at = Column(DateTime(timezone=True), nullable=True)
+    avoid_as_destination = Column(Boolean, nullable=False, default=False, server_default="false")  # never auto-picked as a migration destination (about to be upgraded or drained); still selectable by hand
     forgotten_at = Column(DateTime(timezone=True), nullable=True)  # an operator removed this (already gone from PVE) host from PyXie; history stays, discovery clears it if PVE lists the host again
     ssh_host_key_pinned_by = Column(String, nullable=True)
     cpu_usage_pct = Column(Float, nullable=True)

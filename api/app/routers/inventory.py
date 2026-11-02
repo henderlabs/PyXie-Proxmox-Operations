@@ -312,6 +312,25 @@ def disconnect_node_ssh_host_key(
     return {"disconnected": True}
 
 
+class AvoidDestinationRequest(BaseModel):
+    avoid: bool
+
+
+@router.put("/nodes/{node_id}/avoid-destination", dependencies=[Depends(require_admin)])
+def set_avoid_destination(node_id: uuid.UUID, payload: AvoidDestinationRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Mark a node (about to be upgraded or drained) so migration planning never picks it automatically. A human can still choose it."""
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(404, "node not found")
+    node.avoid_as_destination = payload.avoid
+    write_audit_event(
+        db, event_category="inventory", event_type="node.avoid_destination", actor=user.email, actor_type="user", site_id=node.site_id,
+        metadata={"node_id": str(node_id), "node": node.name, "avoid": payload.avoid},
+    )
+    db.commit()
+    return {"node": node.name, "avoid_as_destination": node.avoid_as_destination}
+
+
 @router.post("/nodes/{node_id}/forget", dependencies=[Depends(require_admin)])
 def forget_node_endpoint(node_id: uuid.UUID, user=Depends(get_current_user), db: Session = Depends(get_db)):
     """'Remove host': forget a host PVE no longer lists. App-side only (never touches the host or the cluster); history and the

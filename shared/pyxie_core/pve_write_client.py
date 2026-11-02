@@ -675,6 +675,21 @@ class PveMaintenanceClient:
         data = {"tags": ";".join(tags)} if tags else {"delete": "tags"}
         self._request("PUT", f"/nodes/{node}/{kind}/{vmid}/config", data=data)
 
+    def set_guest_config(self, node: str, vmid: int, *, kind: str, set_keys: dict, delete: list, revert: list, digest: str | None = None) -> None:
+        """PUT /nodes/{node}/qemu|lxc/{vmid}/config: set options, delete options, revert pending ones, in one call. `digest` makes Proxmox
+        refuse the write if the config changed since it was read. Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change the guest configuration"))
+        data = dict(set_keys)
+        if delete:
+            data["delete"] = ",".join(delete)
+        if revert:
+            data["revert"] = ",".join(revert)
+        if digest:
+            data["digest"] = digest
+        if data:
+            self._request("PUT", f"/nodes/{node}/{'qemu' if kind == 'vm' else 'lxc'}/{vmid}/config", data=data)
+
     def start_vm(self, node: str, vmid: int) -> str:
         """POST /nodes/{node}/qemu/{vmid}/status/start."""
         if not _mutations_enabled():

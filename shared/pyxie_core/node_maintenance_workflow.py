@@ -21,11 +21,13 @@ for any reason at all, patching or not.
 from sqlalchemy.orm import Session
 
 from . import lifecycle_workflow
-from .credentials import CredentialNotConfigured, HostNotAddressable, load_host_maintenance_credentials
+from .credentials import CredentialNotConfigured, HostNotAddressable, load_host_maintenance_credentials, load_pve_credentials
+from .pve_write_client import PveMaintenanceClient
 from .host_maintenance_client import HostMaintenanceClient, HostMaintenanceConnectionError, HostMaintenanceProtocolError
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
 from .vm_locks import lock_context
+from .stopped_guests import stopped_shared_item
 from .maintenance import _has_pci_passthrough, _qemu_config, _quorum_after_removal, flag_onboot, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -198,7 +200,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                         "candidates": [
                             {
                                 "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                             }
                             for c in ranked
                         ],
@@ -242,7 +244,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -271,13 +273,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                     })
                     continue
                 if on_shared:
-                    stopped_no_action.append(flag_onboot(
-                        {
-                            "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
-                            "reasons": ["stopped, and its disk is on shared storage -- no action needed for maintenance mode"],
-                        },
-                        _qemu_config(client, node.name, wl),
-                    ))
+                    stopped_relocation_required.append(stopped_shared_item(db, client, node, wl, candidates_all, nodes_by_id, simulated_added_bytes, "stopped, and its disk is on shared storage -- no action needed for maintenance mode -- optional: move it too (offline, config only, nothing is copied)"))
                 else:
                     # Never required -- entering maintenance mode is
                     # temporary (the node stays in the cluster and comes
@@ -305,7 +301,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -396,6 +392,23 @@ def execute_enter_maintenance(db: Session, operation_id) -> Operation:
             op = enter_stage(db, op, status="evacuating", stage="evacuating")
 
         if op.status == "evacuating":
+            # Stopped guests whose Start at boot the operator chose to turn off for this window. Done FIRST, before anything moves, so a
+            # missing PVE privilege fails the operation cleanly. The original value (on) is recorded and put back on Exit Maintenance Mode.
+            boot_disabled = list(ctx.get("boot_disabled", []))
+            boot_todo = [i for i in ctx.get("stopped_relocation_required", [])
+                         if i.get("boot_off") and not i.get("included") and i["workload_id"] not in boot_disabled]
+            if boot_todo:
+                try:
+                    with PveMaintenanceClient(load_pve_credentials(db, target, "maintenance")) as writer:
+                        for item in boot_todo:
+                            writer.set_vm_config_keys(node.name, item["vmid"], {"onboot": 0})
+                            boot_disabled.append(item["workload_id"])
+                            ctx["boot_disabled"] = boot_disabled
+                            save_progress()
+                except Exception as exc:  # noqa: BLE001
+                    release_locks_for_operation(db, op.id)
+                    return fail_operation(db, op, error=f"could not turn Start at boot off for the maintenance window (the PVE account needs VM.Config.Options): {exc}")
+
             for item in migrate_plan:
                 if item["workload_id"] in completed_migrations or item["workload_id"] in completed_shutdowns:
                     continue
@@ -641,6 +654,7 @@ def dry_run_exit_maintenance(db: Session, node: Node, *, actor: str) -> Operatio
     reasons: list[str] = []
     blocking_rules: list[str] = []
     restart_plan = []
+    entry = None
 
     if not node.maintenance_mode:
         reasons.append(f"{node.name} is not currently in maintenance mode")
@@ -666,16 +680,26 @@ def dry_run_exit_maintenance(db: Session, node: Node, *, actor: str) -> Operatio
             if workload is not None and not workload.is_missing and workload.status == "stopped":
                 restart_plan.append({"workload_id": str(workload.id), "vmid": workload.vmid, "name": workload.name})
 
+    boot_restore_plan = []
+    if node.maintenance_mode and entry is not None:
+        for wid in (entry.context or {}).get("boot_disabled", []):
+            workload = db.query(Workload).filter(Workload.id == wid).one_or_none()
+            if workload is not None and not workload.is_missing and workload.node_id == node.id:
+                boot_restore_plan.append({"workload_id": str(workload.id), "vmid": workload.vmid, "name": workload.name})
+        if boot_restore_plan:
+            reasons.append("Start at boot will be turned back on for: " + ", ".join(i["name"] or str(i["vmid"]) for i in boot_restore_plan) + " (it was turned off for this maintenance window).")
+
     dry_run_result = {
         "node": node.name,
         "eligible": len(blocking_rules) == 0,
         "reasons": reasons,
         "blocking_safety_rules": blocking_rules,
         "restart_plan": restart_plan,
+        "boot_restore_plan": boot_restore_plan,
         "note": "exiting does not migrate anything back onto this node -- workloads live-migrated off during "
                 "entry stay wherever they were sent; only guests this run itself shut down get restarted.",
     }
-    context = {"node": node.name, "restart_plan": restart_plan}
+    context = {"node": node.name, "restart_plan": restart_plan, "boot_restore_plan": boot_restore_plan}
 
     if blocking_rules:
         return enter_stage(db, op, status="blocked", stage="dry_run", dry_run_result=dry_run_result, blocking_safety_rules=blocking_rules, context=context, actor=actor)
@@ -726,6 +750,22 @@ def execute_exit_maintenance(db: Session, operation_id) -> Operation:
                     # nicety, not a safety requirement -- note it and move on.
                 restarted.append(item["workload_id"])
                 save_progress()
+
+            # Put Start at boot back exactly as it was (it was on) for the guests the entry operation turned it off for.
+            boot_restored = list(ctx.get("boot_restored", []))
+            boot_plan = [i for i in ctx.get("boot_restore_plan", []) if i["workload_id"] not in boot_restored]
+            if boot_plan:
+                cluster_, target_ = _load_context(db, node)
+                try:
+                    with PveMaintenanceClient(load_pve_credentials(db, target_, "maintenance")) as writer:
+                        for item in boot_plan:
+                            writer.set_vm_config_keys(node.name, item["vmid"], {"onboot": 1})
+                            boot_restored.append(item["workload_id"])
+                            ctx["boot_restored"] = boot_restored
+                            save_progress()
+                except Exception as exc:  # noqa: BLE001
+                    release_locks_for_operation(db, op.id)
+                    return fail_operation(db, op, error=f"could not turn Start at boot back on: {exc}. Set it back on by hand for: " + ", ".join(i["name"] or str(i["vmid"]) for i in boot_plan))
 
             op = enter_stage(db, op, status="verifying", stage="verifying")
 

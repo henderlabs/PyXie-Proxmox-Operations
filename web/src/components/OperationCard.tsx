@@ -104,6 +104,7 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "pbs.job_change": "Backup Server Job Change",
   "host.reboot": "Host Reboot",
   "host.clear_locks": "Clear Stale VM Locks",
+  "workload.config_change": "Change Configuration",
   "maintenance.run": "Full Maintenance Run",
   "node.enter_maintenance": "Evacuate / Maint Mode",
   "node.exit_maintenance": "Exit Maintenance Mode",
@@ -279,7 +280,7 @@ const OPTIONAL_PLAN_KEYS_BY_TYPE: Record<string, string[]> = {
 
 type PlanCandidate = {
   node_id: string; node_name: string; score: number;
-  blocked: boolean; blocking_reasons: string[]; reasons: string[];
+  blocked: boolean; blocking_reasons: string[]; reasons: string[]; projected_mem_pct?: number | null;
 };
 type MigratePlanItem = {
   workload_id: string; vmid: number; name: string | null;
@@ -326,6 +327,11 @@ type OptionalPlanItem = {
   // running.
   currently_running?: boolean;
   transport?: "live" | "offline";
+  // A stopped guest with Start at boot on: a reboot of this host would power it on.
+  starts_on_boot?: boolean;
+  // Enter Maintenance Mode: turn Start at boot off for the window (restored on exit).
+  boot_off?: boolean;
+  currently_on_shared?: boolean;
 };
 
 function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey: string; onUpdated: (updated: Operation) => void }) {
@@ -408,6 +414,34 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
     }
   }
 
+  async function changeOptionalBoot(item: OptionalPlanItem, bootOff: boolean) {
+    setSavingId(item.workload_id);
+    setSaveError(null);
+    try {
+      const res = await fetch(`/api/operations/${op.id}/stopped-relocation/${item.workload_id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ boot_off: bootOff }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setSaveError(data.error || data.detail || "Could not change this");
+        return;
+      }
+      onUpdated(data as Operation);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  // "Move all stopped guests" / "Leave all where they are": one call per guest, in order, each saved before the next.
+  async function setAllStopped(include: boolean) {
+    for (const it of optionalItems) {
+      if (it.currently_running || !it.destination_node_id || !!it.included === include) continue;
+      await changeOptionalIncluded(it, include);
+    }
+  }
+
   async function changeOptionalDestination(item: OptionalPlanItem, nodeId: string) {
     if (nodeId === item.destination_node_id) return;
     setSavingId(item.workload_id);
@@ -485,6 +519,19 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
             <> — {optionalItems.length} not required to move{includedOptionalCount > 0 ? ` (${includedOptionalCount} opted in)` : ""}</>
           )}
         </div>
+        {isAdmin && op.status === "awaiting_approval" && optionalItems.some((i) => !i.currently_running && i.destination_node_id) && (
+          <span className="inline-flex items-center gap-2 text-[11px] text-muted mr-3">
+            Stopped guests:
+            <button type="button" onClick={() => setAllStopped(true)} disabled={savingId !== null} className="text-accent hover:underline disabled:opacity-50"
+              title="Mark every stopped guest to be relocated (offline, config only for shared storage). For a host that is leaving the cluster.">
+              Relocate all
+            </button>
+            <button type="button" onClick={() => setAllStopped(false)} disabled={savingId !== null} className="text-accent hover:underline disabled:opacity-50"
+              title="Leave every stopped guest registered here (the default).">
+              Leave all
+            </button>
+          </span>
+        )}
         {plan.length > 0 && isAdmin && (
           <button
             onClick={rescore}
@@ -583,6 +630,7 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
                 <option key={c.node_id} value={c.node_id}>
                   {c.node_name}
                   {c.blocked ? ` — ⚠ ${c.blocking_reasons[0] || "flagged"}` : ` (score ${c.score})`}
+                  {c.projected_mem_pct != null ? ` · RAM ${c.projected_mem_pct}% after` : ""}
                 </option>
               ))}
             </select>
@@ -624,6 +672,14 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
             >
               {item.currently_running ? "Running" : "Stopped"}
             </span>
+            {item.starts_on_boot && (
+              <span
+                className="shrink-0 text-[10px] uppercase tracking-wide text-warn font-semibold border border-warn/40 rounded px-1 py-0.5"
+                title={(item.reasons || [])[0]}
+              >
+                starts on reboot
+              </span>
+            )}
             {/* Spells out both outcomes in words instead of a bare
                 checkbox next to an already-filled destination, which read
                 as an already-made decision rather than a real choice --
@@ -637,6 +693,18 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
               <option value="stay">{item.currently_running ? "Shut down in place" : "Leave stopped"}</option>
               <option value="move">{item.currently_running ? "Migrate instead" : "Relocate"}</option>
             </select>
+            {!item.included && !item.currently_running && item.starts_on_boot && op.operation_type_id === "node.enter_maintenance" && (
+              <select
+                value={item.boot_off ? "off" : "keep"}
+                disabled={savingId === item.workload_id || op.status !== "awaiting_approval" || !isAdmin}
+                onChange={(e) => changeOptionalBoot(item, e.target.value === "off")}
+                title="Start at boot is on, so rebooting this host would power the guest on. Leave stopped turns Start at boot off for the maintenance window and puts it back exactly as it was on Exit Maintenance Mode. Needs the PVE account to have VM.Config.Options."
+                className="w-56 shrink-0 bg-surface2 border border-border rounded px-1.5 py-1 text-xs text-left disabled:opacity-50"
+              >
+                <option value="keep">Leave as is (powers on at reboot)</option>
+                <option value="off">Leave stopped (Start at boot off for the window)</option>
+              </select>
+            )}
             {item.included && item.currently_running && (
               <select
                 value={item.transport || "live"}

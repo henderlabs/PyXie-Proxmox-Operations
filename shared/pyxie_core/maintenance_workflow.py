@@ -31,6 +31,7 @@ from . import host_update_workflow, lifecycle_workflow, reboot_workflow
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
 from .vm_locks import lock_context
+from .stopped_guests import stopped_shared_item
 from .maintenance import _quorum_after_removal, _has_pci_passthrough, _qemu_config, flag_onboot, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -165,7 +166,7 @@ def dry_run_maintenance(
                         "candidates": [
                             {
                                 "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                             }
                             for c in ranked
                         ],
@@ -204,7 +205,7 @@ def dry_run_maintenance(
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -231,11 +232,7 @@ def dry_run_maintenance(
                                                          "included": False})
                     continue
                 if on_shared:
-                    stopped_no_action.append(flag_onboot(
-                        {"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
-                         "reasons": ["stopped, and its disk is on shared storage -- no action needed for this reboot"]},
-                        _qemu_config(client, node.name, wl),
-                    ))
+                    stopped_relocation_required.append(stopped_shared_item(db, client, node, wl, candidates_all, nodes_by_id, simulated_added_bytes, "stopped, and its disk is on shared storage -- no action needed for this reboot -- optional: move it too (offline, config only, nothing is copied)"))
                 else:
                     # Never required -- a stopped guest costs this node
                     # nothing either way, and for a plain temporary reboot
@@ -275,7 +272,7 @@ def dry_run_maintenance(
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],

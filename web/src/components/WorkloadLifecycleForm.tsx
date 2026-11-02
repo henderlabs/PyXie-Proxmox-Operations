@@ -313,7 +313,9 @@ export default function WorkloadLifecycleForm({
         setRecommendation(data.candidates || []);
         if (data.top_pick) {
           setDestNodeId(data.top_pick.node_id);
-          setDestStorageId(data.top_pick.recommended_storage?.id || "");
+          // Disks already on shared storage stay there by default (no copy); only local-disk guests get a recommended pool.
+          const onShared = currentStorageByWorkload[workloadId]?.scope === "cluster-shared";
+          setDestStorageId(onShared ? "" : data.top_pick.recommended_storage?.id || "");
         }
       })
       .finally(() => {
@@ -734,6 +736,12 @@ export default function WorkloadLifecycleForm({
                 ))}
               </select>
             </div>
+            {workload?.status === "stopped" && (
+              <p className="text-xs text-muted w-full">
+                <span className="text-text font-medium">Offline migration</span>: this VM is stopped, so Proxmox simply re-registers it on the destination
+                (nothing runs). Disks on shared storage are not copied; a local disk is copied to the storage you pick.
+              </p>
+            )}
           </>
         )}
         <button
