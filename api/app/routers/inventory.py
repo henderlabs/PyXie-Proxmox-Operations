@@ -182,7 +182,7 @@ def _attach_allocated_memory(db: Session, nodes: list[Node]) -> None:
 
 @router.get("/nodes", response_model=list[schemas.NodeOut])
 def list_nodes(db: Session = Depends(get_db)):
-    nodes = db.query(Node).order_by(Node.name).all()
+    nodes = db.query(Node).filter(Node.forgotten_at.is_(None)).order_by(Node.name).all()  # removed (forgotten) hosts are hidden everywhere
     _attach_allocated_memory(db, nodes)
     return nodes
 
@@ -312,8 +312,56 @@ def disconnect_node_ssh_host_key(
     return {"disconnected": True}
 
 
+class AvoidDestinationRequest(BaseModel):
+    avoid: bool
+
+
+@router.put("/nodes/{node_id}/avoid-destination", dependencies=[Depends(require_admin)])
+def set_avoid_destination(node_id: uuid.UUID, payload: AvoidDestinationRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """Mark a node (about to be upgraded or drained) so migration planning never picks it automatically. A human can still choose it."""
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(404, "node not found")
+    node.avoid_as_destination = payload.avoid
+    write_audit_event(
+        db, event_category="inventory", event_type="node.avoid_destination", actor=user.email, actor_type="user", site_id=node.site_id,
+        metadata={"node_id": str(node_id), "node": node.name, "avoid": payload.avoid},
+    )
+    db.commit()
+    return {"node": node.name, "avoid_as_destination": node.avoid_as_destination}
+
+
+@router.post("/nodes/{node_id}/forget", dependencies=[Depends(require_admin)])
+def forget_node_endpoint(node_id: uuid.UUID, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """'Remove host': forget a host PVE no longer lists. App-side only (never touches the host or the cluster); history and the
+    audit log are kept. Refused for any host PVE still lists as a cluster member."""
+    from pyxie_core.node_forget import forget_block_reason, forget_node
+    node = db.query(Node).filter(Node.id == node_id).one_or_none()
+    if node is None:
+        raise HTTPException(404, "node not found")
+    why = forget_block_reason(node)
+    if why:
+        raise HTTPException(409, why)
+    dropped = forget_node(db, node)
+    write_audit_event(
+        db, event_category="inventory", event_type="node.forgotten", actor=user.email, actor_type="user", site_id=node.site_id,
+        metadata={"node_id": str(node_id), "node": node.name, **dropped},
+    )
+    db.commit()
+    return {"removed": True, "node": node.name, **dropped}
+
+
 @router.get("/nodes/{node_id}/host-maintenance-status")
 def get_node_host_maintenance_status(node_id: uuid.UUID, db: Session = Depends(get_db)):
+    """The readiness check below plus a plain-language state (see pyxie_core.wrapper_state) and the PVE target the host kit link is made for."""
+    from pyxie_core.wrapper_state import wrapper_state
+    out = _host_maintenance_status(node_id, db)
+    node = db.query(Node).filter(Node.id == node_id).one()
+    cluster = db.query(Cluster).filter(Cluster.id == node.cluster_id).one()
+    return {**out, "pve_target_id": str(cluster.pve_target_id), **{"wrapper_" + k: v for k, v in wrapper_state(out).items() if k != "error"}}
+
+
+def _host_maintenance_status(node_id: uuid.UUID, db: Session):
     """Live readiness check for Stage W4 on this specific node -- never
     cached, always a fresh (short-timeout) probe, since 'is this actually
     reachable right now' is the whole point."""

@@ -9,6 +9,7 @@ import redis
 from rq import Queue, Worker
 from sqlalchemy.exc import OperationalError
 
+from pyxie_core import op_lanes
 from pyxie_core.db import SessionLocal
 from pyxie_core.models import AppSettings
 
@@ -25,7 +26,8 @@ conn = redis.from_url(REDIS_URL)
 # execute_operation_job -> a per-operation-type workflow module.
 POLLING_QUEUE = "polling"
 ANALYSIS_QUEUE = "analysis"
-OPERATIONS_QUEUE = "operations"
+OPERATIONS_QUEUE = op_lanes.BULK_QUEUE
+QUICK_QUEUE = op_lanes.QUICK_QUEUE
 
 polling_q = Queue(POLLING_QUEUE, connection=conn)
 analysis_q = Queue(ANALYSIS_QUEUE, connection=conn)
@@ -135,6 +137,11 @@ PRELOAD_MODULES = (
     "pyxie_core.pbs_server",
     "pyxie_core.operations_engine",
     "pyxie_core.auto_balance",
+    "pyxie_core.auto_clear_locks",
+    "pyxie_core.op_lanes",
+    "pyxie_core.op_claims",
+    "pyxie_core.slots",
+    "pyxie_core.parallel_children",
     "pyxie_core.report_collection",
 )
 
@@ -150,51 +157,138 @@ def _preload():
 
     for name in PRELOAD_MODULES:
         importlib.import_module(name)
+    # httpx imports httpcore (and builds its TLS context) inside Client(...), not at import time: that is the import the first
+    # discovery pass was still waiting on (py-spy: HTTPTransport.__init__ -> _ModuleLock.acquire in the forked job). Build one of
+    # each kind of client now so nothing is left to import lazily.
+    import httpx
+    for verify in (True, False):
+        httpx.Client(verify=verify).close()
 
 
 OPS_ROLE_ENV = "PYXIE_WORKER_ROLE"
+QUICK_LANE_ENV = "PYXIE_QUICK_LANE"  # "1" when this install runs a quick-lane worker (Platform > Settings > Workers)
 
 
-def _supervise_operations_worker():
+def _bulk_worker_count() -> int:
+    """How many long-job workers: 1 unless the Large profile is chosen (limits.bulk_workers, 2 to 4)."""
+    try:
+        from pyxie_core.models import Policy
+        db = SessionLocal()
+        try:
+            prof = db.query(Policy).filter(Policy.key == "workers.profile", Policy.scope_type == "organization").one_or_none()
+            if not (prof and isinstance(prof.value, dict) and prof.value.get("profile") == "large"):
+                return 1
+            n = db.query(Policy).filter(Policy.key == "limits.bulk_workers", Policy.scope_type == "organization").one_or_none()
+            return max(1, min(4, int(n.value.get("count")))) if n and isinstance(n.value, dict) else 1
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        log.exception("could not read limits.bulk_workers; running one long-job worker")
+        return 1
+
+
+def _quick_lane_wanted() -> bool:
+    """Whether the operator chose "Standard: quick + bulk" (policy workers.profile). Read once at container start; a change applies at the
+    next worker restart. Any trouble reading it means the single worker PyXie has always had."""
+    try:
+        from pyxie_core.models import Policy
+        db = SessionLocal()
+        try:
+            p = db.query(Policy).filter(Policy.key == "workers.profile", Policy.scope_type == "organization").one_or_none()
+            return bool(p and isinstance(p.value, dict) and p.value.get("profile") in ("standard", "large"))
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001
+        log.exception("could not read workers.profile; running a single operations worker")
+        return False
+
+
+def _supervise_operations_worker(quick_lane: bool, slot: int = 1):
     """Runs the operations queue in its own process, restarted if it ever exits. Approved operations (a rebalance, a
     migration, a reboot) used to wait behind whatever the one worker was doing -- the 5-minute inventory poll, which on a
     large cluster takes a minute or more (6 minutes right after a restart) -- and while a long operation ran, polling
     stopped. Separate processes, same container: nothing changes for installs, compose or the updater."""
-    env = dict(os.environ, **{OPS_ROLE_ENV: "operations"})
+    env = dict(os.environ, **{OPS_ROLE_ENV: "operations", QUICK_LANE_ENV: "1" if quick_lane else "0", "PYXIE_WORKER_ID": f"bulk-{slot}"})
+    _supervise([sys.executable, "-m", "worker.main"], env, "operations worker")
+
+
+def _supervise_quick_worker():
+    """The quick lane: its own process for short actions, so a shutdown never waits behind a disk copy."""
+    env = dict(os.environ, **{OPS_ROLE_ENV: "operations-quick", QUICK_LANE_ENV: "1", "PYXIE_WORKER_ID": "quick-1"})
+    _supervise([sys.executable, "-m", "worker.main"], env, "quick-lane worker")
+
+
+def _supervise(cmd, env, label):
     while True:
-        proc = subprocess.Popen([sys.executable, "-m", "worker.main"], env=env)
+        proc = subprocess.Popen(cmd, env=env)
         code = proc.wait()
-        log.warning("operations worker exited (code %s); restarting in 5s", code)
+        log.warning("%s exited (code %s); restarting in 5s", label, code)
         time.sleep(5)
 
 
 def run_operations_worker():
-    """The operations-only process: resumes anything that was mid-flight when the container last stopped, then
-    works the operations queue and nothing else."""
+    """The bulk (or only) operations process: resumes anything of its lanes that was mid-flight when the container last stopped,
+    then works the operations queue and nothing else. With the quick lane off it also drains the quick queue, so nothing queued
+    while the lane was on is ever stranded."""
     _wait_for_db()
+    quick_lane = os.environ.get(QUICK_LANE_ENV) == "1"
+    lanes = ("bulk",) if quick_lane else ("quick", "bulk")
     try:
         from worker.jobs import resume_inflight_operations
-        result = resume_inflight_operations()
+        # one long-job worker resumes what a restart interrupted; the others would only race it (a claim stops double runs anyway)
+        result = resume_inflight_operations(lanes) if os.environ.get("PYXIE_WORKER_ID", "bulk-1") == "bulk-1" else {"skipped": "bulk-1 resumes"}
         log.info("resume_inflight_operations on startup: %s", result)
     except Exception:
         log.exception("resume_inflight_operations failed on startup -- any mid-flight operations "
                       "will stay in their current status until manually re-enqueued or the next restart")
-    log.info("operations worker listening on: %s", OPERATIONS_QUEUE)
-    Worker([OPERATIONS_QUEUE], connection=conn).work(with_scheduler=False)
+    queues = [OPERATIONS_QUEUE] + ([] if quick_lane else [QUICK_QUEUE])
+    log.info("operations worker listening on: %s", ", ".join(queues))
+    Worker(queues, connection=conn).work(with_scheduler=False)
+
+
+def _quick_heartbeat():
+    """While this process lives, the key that tells the API and the other workers to route quick actions here stays set."""
+    while True:
+        try:
+            conn.set(op_lanes.QUICK_ALIVE_KEY, "1", ex=op_lanes.QUICK_ALIVE_SECONDS)
+        except Exception:  # noqa: BLE001
+            log.warning("quick-lane heartbeat could not be written")
+        time.sleep(15)
+
+
+def run_quick_worker():
+    _wait_for_db()
+    try:
+        from worker.jobs import resume_inflight_operations
+        log.info("resume_inflight_operations (quick lane) on startup: %s", resume_inflight_operations(("quick",)))
+    except Exception:
+        log.exception("resume_inflight_operations failed on startup (quick lane)")
+    threading.Thread(target=_quick_heartbeat, daemon=True).start()
+    log.info("quick-lane worker listening on: %s", QUICK_QUEUE)
+    Worker([QUICK_QUEUE], connection=conn).work(with_scheduler=False)
 
 
 def main():
-    if os.environ.get(OPS_ROLE_ENV) == "operations":
+    role = os.environ.get(OPS_ROLE_ENV)
+    if role == "operations":
         run_operations_worker()
+        return
+    if role == "operations-quick":
+        run_quick_worker()
         return
 
     _preload()  # before any thread starts: see _preload
     threading.Thread(target=scheduler_loop, daemon=True).start()
     threading.Thread(target=live_memory_loop, daemon=True).start()
     threading.Thread(target=liveness_loop, daemon=True).start()
-    threading.Thread(target=_supervise_operations_worker, daemon=True).start()
+    _wait_for_db()
+    quick_lane = _quick_lane_wanted()
+    for slot in range(1, _bulk_worker_count() + 1):
+        threading.Thread(target=_supervise_operations_worker, args=(quick_lane, slot), daemon=True).start()
+    if quick_lane:
+        threading.Thread(target=_supervise_quick_worker, daemon=True).start()
 
-    log.info("rq worker listening on: %s, %s (operations run in their own process)", POLLING_QUEUE, ANALYSIS_QUEUE)
+    log.info("rq worker listening on: %s, %s (operations run in their own process%s)", POLLING_QUEUE, ANALYSIS_QUEUE, " plus a quick lane" if quick_lane else "")
     Worker([POLLING_QUEUE, ANALYSIS_QUEUE], connection=conn).work(with_scheduler=False)
 
 

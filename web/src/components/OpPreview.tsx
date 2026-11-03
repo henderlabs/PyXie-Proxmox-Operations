@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { Operation } from "@/lib/api";
-import { notifyOperationsChanged } from "@/lib/operationsBus";
+import { abandonPlan, notifyOperationsChanged } from "@/lib/operationsBus";
 import { isInFlight } from "@/lib/operationStatus";
 import { useOperationWatch } from "@/lib/useOperationWatch";
 
@@ -10,7 +10,7 @@ import { useOperationWatch } from "@/lib/useOperationWatch";
  * this shows what will happen, asks for the go-ahead, then follows the operation until it finishes. `autoApprove` skips the
  * second click for small, already-confirmed changes (the user pressed Save). */
 export default function OpPreview({
-  op: initial, confirmLabel, doneText, progressText, danger = false, autoApprove = false, onFinished, onClose,
+  op: initial, confirmLabel, doneText, progressText, danger = false, autoApprove = false, confirmName, onFinished, onClose,
 }: {
   op: Operation;
   confirmLabel: string;
@@ -18,6 +18,8 @@ export default function OpPreview({
   progressText: string;
   danger?: boolean;
   autoApprove?: boolean;
+  /** When set, the approve button stays off until this exact text (a host name) is typed; the server checks it again. */
+  confirmName?: string | null;
   onFinished?: () => void;
   onClose: () => void;
 }) {
@@ -25,11 +27,12 @@ export default function OpPreview({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  const [typed, setTyped] = useState("");
 
   async function approve() {
     setPending(true); setError(null);
     try {
-      const r = await fetch(`/api/operations/${op.id}/approve`, { method: "POST" });
+      const r = await fetch(`/api/operations/${op.id}/approve`, { method: "POST", ...(confirmName ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm_name: typed.trim() }) } : {}) });
       const d = await r.json();
       if (!r.ok) { setError(d.error || "Approve failed"); return; }
       setOp(d); notifyOperationsChanged();
@@ -49,7 +52,7 @@ export default function OpPreview({
   }, 2000);
 
   function cancel() {
-    if (op.status === "awaiting_approval") fetch(`/api/operations/${op.id}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dismissed: true }) }).catch(() => {});
+    if (op.status === "awaiting_approval") abandonPlan(op.id);
     notifyOperationsChanged();
     onClose();
   }
@@ -80,8 +83,13 @@ export default function OpPreview({
         <div>
           <ul className="text-muted mb-2 list-disc list-inside">{reasons.map((r, i) => <li key={i}>{r}</li>)}</ul>
           {error && <div className="text-bad mb-2">{error}</div>}
+          {confirmName && (
+            <label className="block mb-2 text-text">Type <b>{confirmName}</b> to confirm:{" "}
+              <input value={typed} onChange={(e) => setTyped(e.target.value)} className="bg-surface2 border border-border rounded px-2 py-1 text-sm" autoComplete="off" />
+            </label>
+          )}
           <div className="flex gap-2 items-center">
-            <button disabled={pending} onClick={approve} className={`px-2 py-1 rounded bg-ink text-on-ink border ${btn} disabled:opacity-50`}>{pending ? "Starting…" : confirmLabel}</button>
+            <button disabled={pending || (!!confirmName && typed.trim() !== confirmName)} onClick={approve} className={`px-2 py-1 rounded bg-ink text-on-ink border ${btn} disabled:opacity-50`}>{pending ? "Starting…" : confirmLabel}</button>
             <button onClick={cancel} className="text-muted hover:text-text">cancel</button>
           </div>
         </div>

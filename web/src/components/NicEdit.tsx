@@ -24,6 +24,8 @@ export default function NicEditPanel({ workloadId, workloadName, running, reques
   const [mac, setMac] = useState(nic?.mac || "");
   const [firewall, setFirewall] = useState(!!nic?.firewall);
   const [linkDown, setLinkDown] = useState(!!nic?.link_down);
+  const [rate, setRate] = useState(nic?.rate ? String(parseFloat(nic.rate)) : "");
+  const [mtu, setMtu] = useState(nic?.mtu ? String(nic.mtu) : "");
   const [op, setOp] = useState<Operation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -54,6 +56,7 @@ export default function NicEditPanel({ workloadId, workloadName, running, reques
       const body = {
         workload_id: workloadId, action, net_id: action === "add" ? opts?.next_slot ?? null : nic?.key,
         model, bridge, tag: !sdnPick && tag.trim() ? parseInt(tag, 10) : null, firewall, mac: mac.trim() || null, link_down: linkDown,
+        manage_extras: true, rate: rate.trim() ? parseFloat(rate) : null, mtu: model === "virtio" && mtu.trim() ? parseInt(mtu, 10) : null,
       };
       const r = await fetch("/api/operations/workload-nic-change/dry-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json();
@@ -107,6 +110,16 @@ export default function NicEditPanel({ workloadId, workloadName, running, reques
             <div>
               <label className="block text-muted mb-1">MAC address</label>
               <input className={sel} value={mac} onChange={(e) => setMac(e.target.value)} placeholder={action === "add" ? "chosen by Proxmox" : ""} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="block text-muted mb-1">Bandwidth limit, MB/s (empty = none)</label>
+              <input type="number" min={0} step="any" className={sel} value={rate} onChange={(e) => setRate(e.target.value)} placeholder="no limit" />
+            </div>
+            <div>
+              <label className="block text-muted mb-1">MTU (virtio only; empty = default, 1 = bridge MTU)</label>
+              <input type="number" min={1} max={65520} className={sel} value={model === "virtio" ? mtu : ""} disabled={model !== "virtio"} onChange={(e) => setMtu(e.target.value)} placeholder="default" />
             </div>
           </div>
           <label className="flex items-center gap-2"><input type="checkbox" checked={firewall} onChange={(e) => setFirewall(e.target.checked)} /> Firewall (applies only where the Proxmox firewall is enabled)</label>

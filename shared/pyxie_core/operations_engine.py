@@ -198,11 +198,23 @@ def fail_stale_previews(db: Session, *, minutes: int = 15) -> int:
 
 
 def block_operation(db: Session, op: Operation, *, blocking_safety_rules: list[str], actor: str = "system") -> Operation:
+    from . import op_claims
+    # A task a person approved that finds its guest or host busy waits and retries (up to 6 h) instead of stopping with SAFE-LOCK-001.
+    if op_claims.should_defer(op.status, op.approved_by, op.parent_operation_id, blocking_safety_rules, _deferred_since(op), now()):
+        return op_claims.defer_operation(db, op)
     return enter_stage(db, op, status="blocked", blocking_safety_rules=blocking_safety_rules, actor=actor)
 
 
-def cancel_operation(db: Session, op: Operation, *, actor: str = "system") -> Operation:
-    return enter_stage(db, op, status="cancelled", error="Cancelled by user request.", actor=actor)
+def _deferred_since(op: Operation):
+    raw = (op.context or {}).get("deferred_since")
+    try:
+        return datetime.fromisoformat(raw) if raw else None
+    except ValueError:
+        return None
+
+
+def cancel_operation(db: Session, op: Operation, *, actor: str = "system", note: str | None = None) -> Operation:
+    return enter_stage(db, op, status="cancelled", error="Cancelled by user request." + (f" {note}" if note else ""), actor=actor)
 
 
 def check_cancel_requested(db: Session, op: Operation) -> Operation | None:

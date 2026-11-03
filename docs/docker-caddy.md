@@ -53,9 +53,17 @@ unreadable.
 ## TLS modes
 
 - **`internal`** — Caddy's own CA signs the cert. Browsers warn until you trust
-  the root. Export it:
-  `docker compose cp pyxie-manager-caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt`
-  and import it into the OS/browser trust store of the machines that use PyXie.
+  the root **once**. Two things keep this from being a daily annoyance:
+  - *Certificates live 72 hours* (`PYXIE_INTERNAL_CERT_LIFETIME`, default `72h`, at most `168h`). Caddy's own default is 12 hours, which renews about every
+    8 hours and makes browsers re-warn all day. A new certificate from the same root never needs a new trust step.
+  - *The root is one click away:* open `https://<PYXIE_HOSTNAME>/pyxie-ca/root.crt` to download it (the public certificate only, never a key).
+    Or export it from the server:
+    `docker compose cp pyxie-manager-caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt`
+    Then trust it once on each computer that uses PyXie:
+    - **macOS:** double-click the file, Keychain Access opens, add it to *System*, double-click it there, expand *Trust* and set *When using this certificate* to **Always Trust**.
+    - **Windows:** double-click the file, *Install Certificate*, *Local Machine*, *Place all certificates in the following store*, **Trusted Root Certification Authorities**.
+    - **Linux (Debian/Ubuntu):** copy it to `/usr/local/share/ca-certificates/pyxie-caddy-root.crt` and run `sudo update-ca-certificates`. Firefox keeps its own store: *Settings, Privacy and Security, View Certificates, Authorities, Import*.
+    Restart the browser afterwards. The warning is gone for good, including across renewals. The root is valid for 10 years; if the Caddy data volume is ever deleted a new root is made and this step repeats once.
 - **`file`** — put `pyxie.crt` (full chain) and `pyxie.key` in `./certs/` (this
   directory is gitignored). Caddy does not renew these.
 - **`acme`** — for an ACME-capable internal CA. Fill in

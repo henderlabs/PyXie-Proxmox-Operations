@@ -4,7 +4,7 @@ import { apiFetch, ApiError } from "@/lib/api";
 const fail = (e: unknown) => NextResponse.json({ error: (e as Error).message }, { status: e instanceof ApiError ? e.status : 500 });
 const ID = "[0-9a-fA-F-]{36}";
 const ALLOWED: Record<string, RegExp[]> = {
-  GET: [/^servers$/, /^namespaces$/, /^datastore-usage$/, new RegExp(`^servers/${ID}$`), new RegExp(`^servers/${ID}/credentials$`)],
+  GET: [/^servers$/, /^overview$/, new RegExp(`^servers/${ID}/rrd$`), /^namespaces$/, /^datastore-usage$/, new RegExp(`^servers/${ID}$`), new RegExp(`^servers/${ID}/credentials$`)],
   POST: [
     new RegExp(`^servers/${ID}/(refresh|test-access|ssh/generate|ssh/probe|ssh/check|host-kit/link|jobs/dry-run|datastores/dry-run|storage-add/dry-run|update/dry-run|reboot/dry-run|maintenance/dry-run)$`),
   ],

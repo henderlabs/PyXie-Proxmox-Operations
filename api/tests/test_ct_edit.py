@@ -5,7 +5,7 @@ def test_parse_and_fields():
     n = parse_ct_net("name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=192.168.1.50/24,gw=192.168.1.1,tag=20,firewall=1,type=veth,rate=10")
     assert n["name"] == "eth0" and n["type"] == "veth" and list(n)[-1] == "rate"
     f = ct_net_fields("name=eth1,bridge=vmbr1,ip=dhcp")
-    assert f == {"name": "eth1", "bridge": "vmbr1", "tag": None, "firewall": False, "ip": "dhcp", "gw": None, "mac": None}
+    assert f == {"name": "eth1", "bridge": "vmbr1", "tag": None, "firewall": False, "ip": "dhcp", "gw": None, "mac": None, "rate": None, "mtu": None}
 
 
 def test_build_keeps_unmanaged_settings():

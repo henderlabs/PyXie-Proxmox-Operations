@@ -2,18 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Prerequisites from "@/components/Prerequisites";
+import TrustCertificate from "@/components/TrustCertificate";
+import WrapperUpdatePanel from "@/components/WrapperUpdatePanel";
+import PbsWrapperUpdate from "@/components/PbsWrapperUpdate";
 
 type StepItem = { name: string; ok: boolean; detail: string };
 type SubStep = {
   key: string; label: string; state: "done" | "todo" | "waiting"; detail: string;
-  action: { kind: "generate_keypair" | "anchor" | "href"; label: string; target_id?: string | null; anchor?: string; href?: string } | null;
+  action: { kind: "generate_keypair" | "anchor" | "href" | "wrapper_update"; label: string; target_id?: string | null; anchor?: string; href?: string } | null;
 };
 type Step = {
   key: string; number: number; title: string; summary: string;
   state: "done" | "next" | "todo" | "waiting" | "optional";
   items?: StepItem[];
   substeps?: SubStep[];
-  action?: { label: string; anchor?: string; href?: string };
+  action?: { label: string; anchor?: string; href?: string; kind?: string; target_id?: string; name?: string };
 };
 export type SetupStatus = { steps: Step[]; progress: { done: number; total: number }; tls_mode?: string };
 type Check = { group: string; label: string; status: "ok" | "warn" | "fail" | "info"; detail: string; fix: string };
@@ -42,6 +45,8 @@ export default function SetupGuide({ initial }: { initial: SetupStatus }) {
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [subError, setSubError] = useState<string | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  const [pbsOpen, setPbsOpen] = useState(false);
 
   async function generateKeypair(targetId: string | null | undefined) {
     if (!targetId) return;
@@ -98,6 +103,7 @@ export default function SetupGuide({ initial }: { initial: SetupStatus }) {
         <span className="ml-auto text-xs text-muted">{done} of {total} done</span>
       </div>
       <Prerequisites collapsible />
+      {data.tls_mode === "internal" && <TrustCertificate />}
       <div className="h-1 rounded bg-border mb-3 overflow-hidden"><div className="h-full bg-good" style={{ width: `${Math.round((done / Math.max(total, 1)) * 100)}%` }} /></div>
 
       <div className="space-y-2">
@@ -131,7 +137,9 @@ export default function SetupGuide({ initial }: { initial: SetupStatus }) {
                         <span className="text-text">{ss.label}.</span> <span className="text-muted">{ss.detail}</span>
                         {ss.action && (
                           <span className="ml-2">
-                            {ss.action.kind === "generate_keypair" ? (
+                            {ss.action.kind === "wrapper_update" ? (
+                              <button type="button" onClick={() => setUpdateOpen((v) => !v)} className="px-2 py-0.5 rounded border border-accent text-accent hover:bg-accent/10">{updateOpen ? "Hide" : ss.action.label}</button>
+                            ) : ss.action.kind === "generate_keypair" ? (
                               <button type="button" disabled={busyKey === "keypair"} onClick={() => generateKeypair(ss.action!.target_id)}
                                 className="px-2 py-0.5 rounded border border-border hover:bg-surface2 disabled:opacity-50">{busyKey === "keypair" ? "Generating…" : ss.action.label}</button>
                             ) : ss.action.kind === "href" ? (
@@ -141,6 +149,7 @@ export default function SetupGuide({ initial }: { initial: SetupStatus }) {
                             )}
                           </span>
                         )}
+                        {ss.action?.kind === "wrapper_update" && updateOpen && ss.action.target_id && <WrapperUpdatePanel targetId={ss.action.target_id} onClose={() => { setUpdateOpen(false); refresh(); }} />}
                       </span>
                     </li>
                   ))}
@@ -157,7 +166,12 @@ export default function SetupGuide({ initial }: { initial: SetupStatus }) {
                 </div>
               ) : s.action ? (
                 <div className="ml-9 mt-2">
-                  {s.action.href ? (
+                  {s.action.kind === "pbs_wrapper_update" && s.action.target_id ? (
+                    <>
+                      <button type="button" onClick={() => setPbsOpen((v) => !v)} className="px-2.5 py-1 rounded border border-accent text-accent text-xs hover:bg-accent/10">{pbsOpen ? "Hide" : s.action.label}</button>
+                      {pbsOpen && <PbsWrapperUpdate targetId={s.action.target_id} name={s.action.name ?? "the backup server"} onClose={() => { setPbsOpen(false); refresh(); }} />}
+                    </>
+                  ) : s.action.href ? (
                     <a href={s.action.href} className="inline-block px-2.5 py-1 rounded border border-border text-xs hover:bg-surface2">{s.action.label} →</a>
                   ) : (
                     <button type="button" onClick={() => go(s.action!.anchor!)} className="px-2.5 py-1 rounded border border-border text-xs hover:bg-surface2">{s.action.label} ↓</button>

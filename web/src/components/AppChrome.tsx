@@ -6,6 +6,7 @@ import NavProgress from "@/components/NavProgress";
 import TopBar from "@/components/TopBar";
 import Sidebar from "@/components/Sidebar";
 import TaskPanel, { PANEL_WIDTH_PX } from "@/components/TaskPanel";
+import ActivityBanner from "@/components/ActivityBanner";
 
 export default function AppChrome({ children, version, instance }: { children: React.ReactNode; version: string; instance: string }) {
   const pathname = usePathname();
@@ -34,6 +35,7 @@ export default function AppChrome({ children, version, instance }: { children: R
         style={{ marginRight: showTasks && !narrow ? PANEL_WIDTH_PX : 0 }}
       >
         <TopBar instance={instance} />
+        <ActivityBanner />
         {children}
       </main>
       {showTasks && (narrow

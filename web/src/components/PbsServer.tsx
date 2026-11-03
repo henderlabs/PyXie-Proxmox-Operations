@@ -7,6 +7,7 @@ import OpPreview from "@/components/OpPreview";
 import { PbsAccountsBuilder, PbsHostWrapperBuilder } from "@/components/HostSetupBuilder";
 import PbsSshConnect from "@/components/PbsSshConnect";
 import PbsTokenSlot, { type PbsToken } from "@/components/PbsTokenSlot";
+import MetricChart from "@/components/MetricChart";
 import { notifyOperationsChanged } from "@/lib/operationsBus";
 import { useMe } from "@/lib/useMe";
 
@@ -87,11 +88,52 @@ export default function PbsServer({ id }: { id: string }) {
           </button>
         ))}
       </div>
-      {tab === "overview" && <Overview s={s} />}
+      {tab === "overview" && <><Overview s={s} /><PbsGraphs id={s.id} /></>}
       {tab === "datastores" && <Datastores s={s} canEdit={canEdit} reload={load} />}
       {tab === "jobs" && <Jobs s={s} canEdit={canEdit} reload={load} />}
       {tab === "patching" && <Card><CardTitle>Patching</CardTitle><div className="text-sm">Package updates for backup servers are managed on the <a href="/operations/maintenance#backup-servers" className="text-accent hover:underline">Maintenance page</a>, next to the Proxmox hosts. {s.status?.updates?.count ? <span className="text-warn">{s.status.updates.count} package(s) are waiting on this server.</span> : null}</div></Card>}
       {tab === "access" && <Access s={s} canEdit={canEdit} reload={load} />}
+    </div>
+  );
+}
+
+type RrdRow = { time: number; cpu?: number | null; iowait?: number | null; memused?: number | null; memtotal?: number | null; netin?: number | null; netout?: number | null; loadavg?: number | null };
+
+/** The server's own history, read live like the PVE host graphs. */
+function PbsGraphs({ id }: { id: string }) {
+  const [tf, setTf] = useState("day");
+  const [rows, setRows] = useState<RrdRow[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    call("GET", `servers/${id}/rrd?timeframe=${tf}`).then((d) => { if (live) { setRows(d.rows ?? []); setErr(d.error ?? null); setLoading(false); } }).catch((e) => { if (live) { setErr(e.message); setLoading(false); } });
+    return () => { live = false; };
+  }, [id, tf]);
+  const col = (f: (r: RrdRow) => number | null | undefined) => rows.map((r) => f(r) ?? null);
+  const times = rows.map((r) => r.time);
+  const memTotal = Math.max(0, ...rows.map((r) => r.memtotal ?? 0));
+  const rate = (v: number) => (v >= 1048576 ? `${(v / 1048576).toFixed(1)} MB/s` : `${(v / 1024).toFixed(0)} KB/s`);
+  return (
+    <div className="mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-muted">Graphs are the backup server&apos;s own history series, read live.</div>
+        <label className="text-sm text-muted flex items-center gap-2">Timeframe
+          <select className="bg-surface2 border border-border rounded px-2 py-1 text-sm text-text" value={tf} onChange={(e) => setTf(e.target.value)}>
+            <option value="hour">Hour</option><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option><option value="year">Year</option>
+          </select>
+        </label>
+      </div>
+      {err ? <div className="text-sm text-warn">Could not load the graphs: {err}</div> : (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <Card><MetricChart title="CPU usage" times={times} loading={loading} format={(v) => `${v < 10 ? v.toFixed(1) : v.toFixed(0)}%`}
+            series={[{ label: "CPU", color: "rgb(var(--c-accent))", area: true, values: col((r) => (r.cpu != null ? r.cpu * 100 : null)) }, { label: "IO delay", color: "rgb(var(--c-warn))", values: col((r) => (r.iowait != null ? r.iowait * 100 : null)) }]} /></Card>
+          <Card><MetricChart title="Server load" times={times} loading={loading} format={(v) => v.toFixed(1)} series={[{ label: "Load average", color: "rgb(var(--c-accent))", area: true, values: col((r) => r.loadavg) }]} /></Card>
+          <Card><MetricChart title="Memory usage" times={times} loading={loading} format={(v) => gb(v)} fixedMax={memTotal || undefined} series={[{ label: "Used", color: "rgb(var(--c-accent))", area: true, values: col((r) => r.memused) }]} /></Card>
+          <Card><MetricChart title="Network traffic" times={times} loading={loading} format={rate} series={[{ label: "In", color: "rgb(var(--c-good))", area: true, values: col((r) => r.netin) }, { label: "Out", color: "rgb(var(--c-accent))", values: col((r) => r.netout) }]} /></Card>
+        </div>
+      )}
     </div>
   );
 }

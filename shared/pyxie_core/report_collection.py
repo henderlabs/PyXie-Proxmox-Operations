@@ -243,6 +243,16 @@ def _fetch_one(client, node_name: str, wl: dict) -> dict:
 # -- storing ----------------------------------------------------------------
 
 
+def refresh_workload_disks(db: Session, wl: Workload, config: dict) -> None:
+    """Replace a guest's stored disk rows from a config Proxmox just returned. A storage move calls this right after its
+    read-back, so the inventory stops showing the old storage until the next scheduled report collection."""
+    t = now()
+    db.query(WorkloadDisk).filter(WorkloadDisk.workload_id == wl.id).delete()
+    for d in parse_disks(config, wl.type):
+        db.add(WorkloadDisk(workload_id=wl.id, collected_at=t, **d))
+    db.commit()
+
+
 def _store(db: Session, wl: Workload, r: dict):
     t = now()
     config = r["config"]

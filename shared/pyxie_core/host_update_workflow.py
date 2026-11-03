@@ -180,7 +180,8 @@ def dry_run_host_update(
     except MutationsDisabledError:
         raise  # never expected from a read-only dry-run path; surface loudly if it somehow happens
     except (HostMaintenanceConnectionError, HostMaintenanceProtocolError) as exc:
-        reasons.append(f"could not reach host-maintenance wrapper: {exc}")
+        from .wrapper_state import missing_wrapper_hint
+        reasons.append(f"could not reach host-maintenance wrapper: {exc}. {missing_wrapper_hint(node.name)}")
         blocking_rules.append("SAFE-HOSTCONN-001")
         return _api_list_only() if check_only else _blocked()
 
@@ -285,7 +286,7 @@ def execute_host_update(db: Session, operation_id) -> Operation:
                 with HostMaintenanceClient(hm_creds) as client:
                     client.refresh()
                     fresh_plan = client.plan()
-            except (HostMaintenanceConnectionError, HostMaintenanceProtocolError) as exc:
+            except (HostMaintenanceConnectionError, HostMaintenanceProtocolError):
                 return block_operation(db, op, blocking_safety_rules=["SAFE-HOSTCONN-001"], actor="system")
 
             if _packages_materially_differ(approved_packages, fresh_plan.get("packages", [])):

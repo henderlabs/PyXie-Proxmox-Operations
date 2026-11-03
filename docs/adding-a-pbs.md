@@ -63,3 +63,7 @@ The Protection scorecard uses the schedule of the job that feeds an offsite data
 ## Restoring from a datastore Proxmox does not have
 
 Proxmox can only restore from storages it has. A backup that exists only on another datastore of the backup server (typically the offsite one) is listed on Protection as a restore point with **Make restorable…**. This adds that datastore to Proxmox as a read-only backup storage, using the optional `restore` token (`DatastoreReader`, never the admin token). The preview shows what is added; Proxmox keeps the restore token's secret in its cluster storage configuration; remove the storage later in Storage setup, nothing on the backup server changes. Then restore from it like any other restore point.
+
+## Backup servers on Hosts & Clusters
+
+A connected backup server also shows on **Hosts & Clusters**: a **Backup servers** tile on the cluster page (how many are reachable and how full their datastores are) and a **Backup servers** table under the nodes (status, version, datastores, last backup, last verify and garbage collection, host wrapper). A row opens the same server page you reach from Protection, with its datastores, jobs, access and patching. Nothing is shown on a cluster with no backup server.

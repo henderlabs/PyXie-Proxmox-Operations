@@ -7,6 +7,7 @@ existing active finding is auto-resolved (active=False, resolved_at=now).
 Nothing is ever hard-deleted, so history survives.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func
@@ -364,9 +365,16 @@ def evaluate_findings(db: Session) -> dict:
     current.extend(_liveness_findings(db))
     current.extend(_snapshot_findings(db))
     current.extend(_wrapper_findings(db))
+    current.extend(_stale_lock_findings(db))
     current.extend(_pbs_server_findings(db))
     current.extend(_stale_inventory_findings(db))
     current.extend(_edge_findings(db))
+    for extra in (_certificate_findings, _missed_backup_findings, _long_wait_findings):
+        try:  # newer checks: one failing must never stop the rest of the findings
+            current.extend(extra(db))
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logging.getLogger(__name__).exception("finding check %s failed", extra.__name__)
     current.extend(_node_metric_findings(db))
 
     return _reconcile(db, current)
@@ -456,6 +464,218 @@ def _stale_inventory_findings(db: Session) -> list[dict]:
     ]
 
 
+def _org_policy(db: Session, key: str, field: str, default):
+    """An organization policy's field, or `default` when unset or not the right type."""
+    policy = db.query(Policy).filter(Policy.key == key, Policy.scope_type == "organization").one_or_none()
+    if policy and isinstance(policy.value, dict) and field in policy.value:
+        try:
+            return type(default)(policy.value[field])
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
+def missed_backup_state(last, first_seen, now, warn_hours: int, crit_hours: int):
+    """(severity, age in hours, never_backed_up) when a planned guest has gone too long without a successful backup, else None. Pure.
+    A guest PyXie has never seen a backup of is measured from when PyXie first saw it, and not before 24 hours old."""
+    if warn_hours <= 0:
+        return None
+    ref = last or first_seen
+    if ref is None:
+        return None
+    age = (now - ref).total_seconds() / 3600
+    if age < (warn_hours if last else max(warn_hours, 24)):
+        return None
+    return ("critical" if crit_hours > 0 and age >= crit_hours else "warning", age, last is None)
+
+
+def _age_words(hours: float) -> str:
+    return f"{int(hours // 24)} days" if hours >= 72 else f"{int(hours)} hours"
+
+
+def _missed_backup_findings(db: Session) -> list[dict]:
+    """A guest that a backup plan covers, with no successful backup newer than the threshold (30 h warning, 72 h critical by default).
+    A backup that fails already raises a task finding; this catches the one that never ran (job disabled, node down, locked).
+    Skips guests whose plan is paused or that are not covered, templates, and anything whose backup server is not currently connected
+    (a stale read must not look like a missed backup). Closes itself on the next successful backup."""
+    import uuid as _uuid
+    from .backup_policy import resolve_assignments
+    from .backup_policy_workflow import guests, load_state
+    from .models import ProtectionResult
+
+    warn = _org_policy(db, "backup.missed_warn_hours", "hours", 30)
+    crit = _org_policy(db, "backup.missed_crit_hours", "hours", 72)
+    if warn <= 0:
+        return []
+    now = datetime.now(timezone.utc)
+    healthy = {p.id for p in db.query(Provider).filter(Provider.connection_health == "connected").all()}
+    last_by_wl: dict = {}
+    for r in db.query(ProtectionResult).all():
+        if r.provider_id not in healthy:
+            continue
+        cur = last_by_wl.get(r.workload_id)
+        if cur is None or (r.last_successful_job_at and (cur is False or r.last_successful_job_at > cur)):
+            last_by_wl[r.workload_id] = r.last_successful_job_at or cur or False
+    out: list[dict] = []
+    nodes = {n.id: n.name for n in db.query(Node).all()}
+    for cluster in db.query(Cluster).filter(Cluster.is_missing.is_(False)).all():
+        pols, asg = load_state(db, cluster)
+        if not pols:
+            continue
+        gs = guests(db, cluster)
+        resolved = resolve_assignments([{"id": g["id"], "tags": g["tags"]} for g in gs], asg)
+        on = {p["id"]: p["name"] for p in pols if p.get("enabled", True)}
+        for g in gs:
+            res = resolved.get(g["id"])
+            if not res or res["policy_id"] not in on:
+                continue
+            wid = _uuid.UUID(g["id"])
+            if wid not in last_by_wl:
+                continue  # no read of the backup server for this guest yet: unknown, not missed
+            wl = db.query(Workload).filter(Workload.id == wid).one_or_none()
+            if wl is None:
+                continue
+            last = last_by_wl[wid] or None
+            st = missed_backup_state(last, wl.first_seen, now, warn, crit)
+            if st is None:
+                continue
+            severity, age, never = st
+            label = wl.name or wl.vmid
+            out.append(
+                {
+                    "dedupe_key": f"backup.missed:{wl.id}",
+                    "object_type": "workload",
+                    "object_id": wl.id,
+                    "category": "protection",
+                    "severity": severity,
+                    "title": (f"'{label}' ({wl.vmid}) has never had a successful backup (seen for {_age_words(age)})" if never
+                              else f"'{label}' ({wl.vmid}) has no backup in the last {_age_words(age)}"),
+                    "evidence": {"vmid": wl.vmid, "name": wl.name, "node": nodes.get(wl.node_id), "plan": on[res["policy_id"]],
+                                 "last_backup": last.isoformat() if last else None, "hours_since": round(age, 1), "workload_ids": [str(wl.id)],
+                                 "fix": f"The plan '{on[res['policy_id']]}' covers this guest but no backup finished in time. Check the plan's job (Backup policies) "
+                                        "and the guest for a lock; this closes itself on the next successful backup."},
+                }
+            )
+    return out
+
+
+def _long_wait_findings(db: Session) -> list[dict]:
+    """An approved task that has not started after the wait limit (30 minutes by default; policy workers.wait_warning_minutes, 0 = off).
+    It is waiting for a worker, usually behind a long disk move or evacuation. Closes when it starts (or is cancelled)."""
+    from .notifications import OPERATION_LABELS
+    from .queue_stats import long_waits
+
+    minutes = _org_policy(db, "workers.wait_warning_minutes", "minutes", 30)
+    if minutes <= 0:
+        return []
+    now = datetime.now(timezone.utc)
+    out: list[dict] = []
+    for op in long_waits(db, minutes, now):
+        label = OPERATION_LABELS.get(op.operation_type_id, op.operation_type_id)
+        waited = int((now - op.approved_at).total_seconds() // 60)
+        out.append(
+            {
+                "dedupe_key": f"operation.waiting:{op.id}",
+                "object_type": "operation",
+                "object_id": op.id,
+                "category": "operation",
+                "severity": "warning",
+                "title": f"'{label}' was approved {waited} minutes ago and has not started",
+                "evidence": {"operation_id": str(op.id), "operation_type": op.operation_type_id, "waited_minutes": waited,
+                             "fix": "It is waiting for an operations worker, usually behind a long disk move or evacuation (see the Tasks panel). "
+                                    "Quick actions get their own lane under Platform > Settings > Workers. This closes when the task starts or is cancelled."},
+            }
+        )
+    return out
+
+
+def _certificate_findings(db: Session) -> list[dict]:
+    """The web edge's own certificate. Only for the Docker install's internal CA (Caddy's own): critical when the leaf is close to
+    expiring without having renewed (Caddy stopped or cannot renew), and an information note that browsers and nodes need the root
+    installed once. Both close themselves when a public or supplied certificate is used."""
+    from . import edge_probe
+
+    if edge_probe.tls_mode() != "internal":
+        return []
+    target = db.query(PveTarget).first()
+    if target is None:
+        return []
+    out = [
+        {
+            "dedupe_key": "edge.internal_ca",
+            "object_type": "pve_target",
+            "object_id": target.id,
+            "category": "connectivity",
+            "severity": "info",
+            "title": "PyXie uses its own certificate authority: browsers and nodes need the root certificate installed once",
+            "evidence": {"fix": "Download the root certificate from Platform > Setup guide (Trust this PyXie's certificate) and add it to each computer or node "
+                                "that opens PyXie. After that the short-lived certificates renew without a warning."},
+        }
+    ]
+    state = edge_probe.expiry_state()
+    left = state[0] if state else None
+    if state is not None and edge_probe.renewal_overdue(*state):
+        out.append(
+            {
+                "dedupe_key": "edge.certificate_expiring",
+                "object_type": "pve_target",
+                "object_id": target.id,
+                "category": "connectivity",
+                "severity": "critical",
+                "title": f"PyXie's HTTPS certificate expires in {max(0, int(left))} hours and has not renewed",
+                "evidence": {"hours_left": round(left, 1),
+                             "fix": "Caddy renews its certificate on its own well before this. If it has not, Caddy is stopped or cannot renew. "
+                                    "On the PyXie server run: docker compose up -d --force-recreate pyxie-manager-caddy (certificates are kept)."},
+            }
+        )
+    return out
+
+
+def _stale_lock_threshold(db: Session) -> int:
+    from .vm_locks import DEFAULT_STALE_AFTER_MINUTES
+    policy = db.query(Policy).filter(Policy.key == "locks.stale_after_minutes", Policy.scope_type == "organization").one_or_none()
+    if policy and isinstance(policy.value, dict) and "minutes" in policy.value:
+        try:
+            return int(policy.value["minutes"])
+        except (TypeError, ValueError):
+            pass
+    return DEFAULT_STALE_AFTER_MINUTES
+
+
+def _stale_lock_findings(db: Session) -> list[dict]:
+    """A guest locked by Proxmox with no task running for it anywhere, for longer than the stale threshold. It silently fails
+    the nightly backup and blocks migration/evacuation. Closes itself once the lock is gone."""
+    from .vm_locks import locked_guests
+    now = datetime.now(timezone.utc)
+    out: list[dict] = []
+    for g in locked_guests(db, now, _stale_lock_threshold(db)):
+        if g["state"] != "stale":
+            continue
+        wl = g["workload"]
+        label = wl.name or wl.vmid
+        out.append(
+            {
+                "dedupe_key": f"vm.stale_lock:{wl.id}",
+                "object_type": "workload",
+                "object_id": wl.id,
+                "category": "vm_lock",
+                "severity": "warning",
+                "title": f"VM '{label}' ({wl.vmid}) has a stale {g['lock']} lock on {g['node']}",
+                "evidence": {
+                    "vmid": wl.vmid, "name": wl.name, "node": g["node"], "node_id": str(wl.node_id), "lock": g["lock"],
+                    "locked_since": g["since"].isoformat() if g["since"] else None, "locked_for": g["age"],
+                    "workload_ids": [str(wl.id)],
+                    "command": f"qm unlock {wl.vmid}",
+                    "fix": f"PyXie sees no task running for this VM, so the {g['lock']} lock looks left over. It makes the nightly backup fail "
+                           f"(\"VM is locked ({g['lock']})\") and blocks migration and evacuation. Use Preview clearing stale locks: the host is asked what it really sees "
+                           "(a finished task, a dead one, or a hung backup), the preview says which in plain words, and one approval clears it. "
+                           "This finding closes by itself when the lock is gone.",
+                },
+            }
+        )
+    return out
+
+
 def _wrapper_findings(db: Session) -> list[dict]:
     """The host wrapper (what lets PyXie apply updates and reboot a node over SSH) is behind the one this PyXie ships, or
     has not been seen on a node yet. Updates through an old wrapper still work, but newer features (live host output)
@@ -489,8 +709,8 @@ def _wrapper_findings(db: Session) -> list[dict]:
                     "title": f"Host wrapper not seen on {node.name} yet (current {expected})",
                     "evidence": {
                         "node": node.name, "expected": expected,
-                        "fix": "Integrations > Host wrapper: generate the host script, run it as root on this node (you run it; PyXie does not), "
-                               "then pin the node's SSH host key on the Credentials page. Until then PyXie cannot apply updates or reboot this node.",
+                        "fix": f"{node.name} has no maintenance wrapper yet, so PyXie cannot patch or restart it or clear stale locks. Use the Add the wrapper button below: "
+                               "you paste one line in that host's shell (PyXie runs nothing on the host), then confirm its fingerprint.",
                     },
                 }
             )
@@ -507,8 +727,8 @@ def _wrapper_findings(db: Session) -> list[dict]:
                 "title": f"Host wrapper on {node.name} is outdated ({node.wrapper_version}, current {expected})",
                 "evidence": {
                     "node": node.name, "installed": node.wrapper_version, "expected": expected,
-                    "fix": "Integrations > Host wrapper: generate the host script and run it as root on this node. "
-                           "Updates still work meanwhile; live host output needs the new wrapper.",
+                    "fix": f"The maintenance wrapper on {node.name} is out of date. Use the Update the wrapper button below: you paste one line in that host's shell. "
+                           "Patching still works meanwhile; live host output and clearing stale locks need the new version.",
                 },
             }
         )

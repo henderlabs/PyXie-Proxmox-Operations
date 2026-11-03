@@ -55,14 +55,14 @@ export default async function BackupServersPage() {
           {servers.map((t) => (
             <div key={t.id} className="flex items-center justify-between bg-surface2 rounded p-3">
               <div>
-                <Link href={`/operations/protection/servers/${t.id}`} className="text-sm text-text hover:underline">{t.name}</Link>
+                <Link href={`/infrastructure/backup-servers/${t.id}`} className="text-sm text-text hover:underline">{t.name}</Link>
                 <div className="text-xs text-muted">{t.hostname}{t.status?.reachable ? ` · PBS ${t.status.version}` : ""}
                   {t.status?.updates?.count ? <span className="text-warn"> · {t.status.updates.count} update(s) waiting: <Link href="/operations/maintenance" className="underline">patch in Maintenance</Link></span> : null}
                   {!t.credentials.inventory || !t.credentials.administrative || !t.ssh.host_key_pinned ? <span className="text-warn"> · setup incomplete</span> : null}</div>
               </div>
               <div className="flex items-center gap-3">
                 <StatusBadge status={t.status ? (t.status.reachable ? "connected" : "unavailable") : "unknown"} />
-                <Link href={`/operations/protection/servers/${t.id}`} className="text-xs text-accent hover:underline">Manage</Link>
+                <Link href={`/infrastructure/backup-servers/${t.id}`} className="text-xs text-accent hover:underline">Manage</Link>
                 <ActionButton href={`/api/protection/targets/${t.id}/sync`} label="Sync Now" variant="primary" />
               </div>
             </div>

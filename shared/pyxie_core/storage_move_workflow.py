@@ -5,12 +5,16 @@ execute and monitor each Proxmox task -> read the config back from Proxmox -> ve
 Proxmox only after it reports the copy finished, so a failed or cancelled move leaves the VM exactly as it was.
 """
 
+import time
+
 from .credentials import load_pve_credentials
 from .discovery import build_pve_client
 from .labels import vm_label
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .models import Cluster, Node, Operation, PveTarget, Workload, WorkloadDisk
-from .operations_engine import OperationError, approve_operation, block_operation, create_operation, enter_stage, fail_operation
+from .operation_log import log_stage
+from .operations_engine import OperationError, approve_operation, block_operation, cancel_operation, create_operation, enter_stage, fail_operation
+from .task_cancel import storage_move_cancel_state
 from .pve_write_client import (
     MutationsDisabledError, PveMaintenanceClient, SelfProtectionError, TaskTimeoutError, update_migration_progress,
 )
@@ -64,6 +68,18 @@ def check_target(storage_rows: list[dict], name: str, needed_bytes: int) -> list
     return problems
 
 
+def tpm_live_move_problem(disks: list[dict], was_running: bool) -> str | None:
+    """Proxmox refuses to move a TPM state disk while the VM runs ("cannot move TPM state while VM is running"), so the
+    preview says so up front instead of the task failing. None when nothing is in the way. Pure."""
+    if not was_running:
+        return None
+    tpm = sorted(d["slot"] for d in disks if str(d["slot"]).startswith("tpmstate"))
+    if not tpm:
+        return None
+    return (f"{', '.join(tpm)} is the VM's TPM (virtual security chip) disk, and Proxmox cannot move it while the VM is running: "
+            "shut the VM down first, then change its storage")
+
+
 def dry_run_storage_move(db, workload: Workload, *, target_storage: str, actor: str, correlation_id=None, only_slot: str | None = None) -> Operation:
     if workload.type != "vm":
         raise StorageMoveError("only VM (qemu) storage changes are implemented, not containers")
@@ -87,6 +103,10 @@ def dry_run_storage_move(db, workload: Workload, *, target_storage: str, actor: 
     if workload.status not in ("running", "stopped"):
         reasons.append(f"workload status is '{workload.status}': not safe to move its disks right now")
         blocking.append("SAFE-MIGRATE-001")
+    tpm_problem = tpm_live_move_problem(disks, was_running)
+    if tpm_problem:
+        reasons.append(tpm_problem)
+        blocking.append("SAFE-STORAGE-003")
     free = None
     try:
         client, _cred = build_pve_client(db, target)
@@ -120,6 +140,45 @@ def dry_run_storage_move(db, workload: Workload, *, target_storage: str, actor: 
 
 def approve(db, op: Operation, *, approved_by: str) -> Operation:
     return approve_operation(db, op, approved_by=approved_by)
+
+
+def _cancel_running_move(db, op, write_client, workload, node, target, disk, target_storage) -> Operation:
+    """Stop the Proxmox move task the operator cancelled, then prove the disk is still on its original storage and name any partial volume left on
+    the target. Ends the operation as cancelled (not failed); the source disk was never touched."""
+    log_stage(op.id, f"Cancel requested. Stopping the Proxmox disk move task for {disk['slot']} of {vm_label(workload)}.")
+    write_client.stop_task(node.name, op.pve_upid)
+    for _ in range(30):
+        if write_client.task_status(node.name, op.pve_upid).status != "running":
+            break
+        time.sleep(2)
+    notes, problems = [], []
+    try:
+        read_client, _cred = build_pve_client(db, target)
+        with read_client:
+            config = read_client.qemu_config(node.name, workload.vmid) or {}
+            now_on = str(config.get(disk["slot"], "")).split(":")[0]
+            leftover = [str(v.get("volid")) for v in read_client.storage_content(node.name, target_storage, "images", workload.vmid) or []
+                        if str(v.get("volid", "")).split(":")[0] == target_storage]
+        if config.get("lock"):
+            problems.append(f"it still has a '{config['lock']}' lock (clear it from the host's stale-lock tool once the task is gone).")
+        if now_on == target_storage:
+            problems.append(f"{disk['slot']} is already on '{target_storage}': the move had finished. Check it in Proxmox.")
+        else:
+            notes.append(f"{disk['slot']} stayed on '{now_on}'.")
+        if leftover:
+            notes.append("Partial volume(s) on " + target_storage + ": " + ", ".join(leftover) + " (remove them from Storage once you have checked nothing uses them).")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"could not confirm where the disk is ({str(exc)[:100]}); check it in Proxmox.")
+    op.verification_result = {"cancelled": True, "notes": notes, "problems": problems}
+    op.pve_upid = None
+    db.commit()
+    release_locks_for_operation(db, op.id)
+    try:
+        from .discovery import run_discovery
+        run_discovery(db, target, actor="operation")
+    except Exception:  # noqa: BLE001
+        pass
+    return cancel_operation(db, op, note=" ".join(notes + problems))
 
 
 def _timeout_for(size_bytes: int) -> float:
@@ -156,6 +215,11 @@ def execute_storage_move(db, operation_id) -> Operation:
                 return block_operation(db, op, blocking_safety_rules=["SAFE-STORAGE-002"], actor="system")
             try:
                 acquire_lock(db, resource_type="workload", resource_id=workload.id, operation_id=op.id, reason="workload.move_storage")
+                # a disk copy takes one "storage" slot on the storage it writes to and on each storage it reads from (limit default 1: Settings > Workers)
+                from .slots import acquire_slot
+                sources = {str(d.get("storage") or "") for d in disks if d.get("storage")} - {target_storage}
+                for name in sorted({target_storage} | sources):
+                    acquire_slot(db, kind="storage", resource_key=f"{cluster.id}:{name}", operation_id=op.id, ttl_seconds=_timeout_for(sum(d["size_bytes"] for d in disks)) + 1800)
             except LockContention:
                 return block_operation(db, op, blocking_safety_rules=["SAFE-LOCK-001"], actor="system")
             op = enter_stage(db, op, status="executing", stage="executing")
@@ -171,7 +235,6 @@ def execute_storage_move(db, operation_id) -> Operation:
                         db.commit()
                         op = enter_stage(db, op, status="monitoring", stage="monitoring", pve_upid=op.pve_upid)
                     upid = op.pve_upid
-                    import time
                     deadline = time.monotonic() + _timeout_for(d["size_bytes"])
                     last_n = 0
                     while True:
@@ -188,6 +251,9 @@ def execute_storage_move(db, operation_id) -> Operation:
                                 db.commit()
                         if res.status != "running":
                             break
+                        db.refresh(op, attribute_names=["context"])
+                        if (op.context or {}).get("cancel_requested") and storage_move_cancel_state(op.progress)[0]:
+                            return _cancel_running_move(db, op, write_client, workload, node, target, d, target_storage)
                         if time.monotonic() > deadline:
                             raise TaskTimeoutError(f"moving {d['slot']} on {node.name} did not finish within {int(_timeout_for(d['size_bytes']))}s")
                         time.sleep(3)
@@ -214,6 +280,11 @@ def execute_storage_move(db, operation_id) -> Operation:
             release_locks_for_operation(db, op.id)
             if problems:
                 return fail_operation(db, op, error="read-back after the move didn't match: " + "; ".join(problems))
+            try:
+                from .report_collection import refresh_workload_disks
+                refresh_workload_disks(db, workload, config)
+            except Exception:  # noqa: BLE001 -- the move succeeded; the next report collection fixes the inventory anyway
+                db.rollback()
             try:
                 from .discovery import run_discovery
                 run_discovery(db, target, actor="operation")

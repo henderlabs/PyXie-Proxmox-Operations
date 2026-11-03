@@ -54,3 +54,7 @@ Read access to PBS through the "inventory" token on the PBS target (Audit on the
 ## Earlier versions
 
 v0.37.0 had a backup policy builder, v0.37.1 removed its UI, and it returns here as **Retention policies**, rebuilt around copies, namespaces and one default policy. Jobs named `pyxie-...` belong to policies; do not edit them by hand (a policy's preview shows what would be put back).
+
+## Missed backups
+
+Besides a backup that *fails*, PyXie now raises a Health finding for a backup that **never ran** (a job disabled, a host down at 02:00, a lock in the way): **warning** when a guest in a backup plan has no successful backup newer than **30 hours** (a guest that has never been backed up is judged after at least 24 hours), **critical** at **72 hours**. It closes by itself on the next successful backup. The two thresholds are policies `backup.missed_warn_hours` and `backup.missed_crit_hours` (**Platform > Policies**; a warning threshold of 0 turns the finding off). It goes through the normal notification rules, including the hold-down against flapping. A guest recreated with a number PyXie or the backup server has seen before can show a false finding until its first new backup.

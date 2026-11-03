@@ -11,7 +11,7 @@
 // a dedicated settings UI elsewhere, so it can't hardcode every future
 // key).
 
-export type PolicyControl = "percent" | "count-hours" | "count-days" | "boolean" | "tier" | "text" | "storage-ref";
+export type PolicyControl = "percent" | "count-minutes" | "count-hours" | "count-days" | "boolean" | "tier" | "text" | "storage-ref";
 
 export type PolicyMeta = {
   label: string;
@@ -38,6 +38,42 @@ export const POLICY_META: Record<string, PolicyMeta> = {
     description: "When on, a workload with no backup coverage at all counts as non-compliant, not just one with a stale backup.",
     field: "enabled",
     control: "boolean",
+  },
+  "backup.missed_warn_hours": {
+    label: "Missed backup: warning after",
+    description: "A guest that a backup plan covers gets a warning finding when it has had no successful backup for this long. 0 turns the missed-backup alert off.",
+    field: "hours",
+    control: "count-hours",
+  },
+  "backup.missed_crit_hours": {
+    label: "Missed backup: critical after",
+    description: "The same finding becomes critical (and is e-mailed under the backup protection rule) after this long.",
+    field: "hours",
+    control: "count-hours",
+  },
+  "locks.auto_clear_enabled": {
+    label: "Clear stale backup and snapshot locks automatically",
+    description: "Off by default. When on, a backup or snapshot lock that no task is running for is cleared through the normal audited clear-lock operation (host wrapper 1.2.0 needed), at most 5 runs an hour. Migration and other lock types are never cleared automatically.",
+    field: "enabled",
+    control: "boolean",
+  },
+  "locks.auto_clear_minutes": {
+    label: "Automatic lock clearing: wait",
+    description: "How long a backup or snapshot lock must have been stale before it is cleared automatically (10 minutes or more).",
+    field: "minutes",
+    control: "count-minutes",
+  },
+  "workers.wait_warning_minutes": {
+    label: "Long wait warning",
+    description: "An approved task that has not started after this many minutes raises a finding (usually it is queued behind a long disk move or evacuation). 0 turns it off.",
+    field: "minutes",
+    control: "count-minutes",
+  },
+  "locks.stale_after_minutes": {
+    label: "Stale lock threshold",
+    description: "A guest lock with no task behind it becomes a finding once it has been there this long (10 minutes or more).",
+    field: "minutes",
+    control: "count-minutes",
   },
   "metrics.retention_days": {
     label: "Metrics retention",

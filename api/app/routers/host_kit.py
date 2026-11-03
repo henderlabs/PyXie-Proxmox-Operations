@@ -70,6 +70,19 @@ def create_link(target_id: uuid.UUID, user=Depends(get_current_user), db: Sessio
     }
 
 
+@admin_router.get("/api/pve-targets/{target_id}/wrapper-hosts")
+def wrapper_hosts(target_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Every host of this target's cluster with its recorded wrapper version, for the in-place update panel."""
+    from pyxie_core.models import Cluster, Node
+    cluster = db.query(Cluster).filter(Cluster.pve_target_id == target_id).first()
+    expected = hk.wrapper_version(KIT_DIR)
+    hosts = []
+    for n in (db.query(Node).filter(Node.cluster_id == cluster.id, Node.is_missing.is_(False)).order_by(Node.name).all() if cluster else []):
+        state = "not_set_up" if not n.wrapper_version else ("outdated" if hk.is_outdated(n.wrapper_version, expected) else "ready")
+        hosts.append({"id": str(n.id), "name": n.name, "wrapper_version": n.wrapper_version, "state": state})
+    return {"expected": expected, "hosts": hosts}
+
+
 @admin_router.get("/api/pve-targets/{target_id}/host-kit.sh", dependencies=[Depends(require_admin)])
 def download_installer(target_id: uuid.UUID, db: Session = Depends(get_db)):
     data, _ = _build(db, target_id)

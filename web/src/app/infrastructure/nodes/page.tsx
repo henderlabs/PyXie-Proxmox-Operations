@@ -1,6 +1,7 @@
 import { apiFetch } from "@/lib/api";
 import type { Cluster, Node, PolicyRow, Site, StorageItem, Workload } from "@/lib/api";
 import { Card, CardTitle, EmptyState, NoInfrastructureHint, PageHeader, StatTile } from "@/components/Card";
+import { BackupKpiTile, BackupServersTable } from "@/components/BackupServers";
 import NodesTable, { type TierSuggestion } from "@/components/tables/NodesTable";
 import ClusterStoragePreference from "@/components/ClusterStoragePreference";
 import StatusBadge from "@/components/StatusBadge";
@@ -30,7 +31,8 @@ async function SiteOverview({ siteId }: { siteId: string }) {
 
   const siteClusters = clusters.filter((c) => c.site_id === site.id);
   const clusterIds = new Set(siteClusters.map((c) => c.id));
-  const siteNodes = nodes.filter((n) => clusterIds.has(n.cluster_id));
+  // Nodes PVE no longer lists (is_missing, e.g. after pvecm delnode) are not part of the site totals.
+  const siteNodes = nodes.filter((n) => clusterIds.has(n.cluster_id) && !n.is_missing);
   const siteWorkloads = workloads.filter((w) => clusterIds.has(w.cluster_id));
   const onlineCount = siteNodes.filter((n) => n.status === "online").length;
   const totalUpdates = siteNodes.reduce((sum, n) => sum + (n.pending_updates ?? 0), 0);
@@ -58,6 +60,7 @@ async function SiteOverview({ siteId }: { siteId: string }) {
         <StatTile label="Containers" value={ctCount} />
         <StatTile label="Allocated vCPU" value={allocatedVcpu} />
         <StatTile label="Allocated RAM" value={formatBytes(allocatedMemBytes)} />
+        <BackupKpiTile />
       </div>
       </div>
       <p className="col-span-2 text-xs text-muted">Click a cluster in the tree for its own detail and node table.</p>
@@ -79,7 +82,9 @@ async function ClusterOverview({ clusterId }: { clusterId?: string }) {
   const cluster = clusters.find((c) => c.id === (clusterId ?? clusters[0]?.id));
   if (!cluster) return <EmptyState message={<NoInfrastructureHint subject="clusters" />} />;
 
-  const clusterNodes = nodes.filter((n) => n.cluster_id === cluster.id);
+  const allClusterNodes = nodes.filter((n) => n.cluster_id === cluster.id);
+  // Removed nodes stay in the table behind "Show removed" but never count toward the totals.
+  const clusterNodes = allClusterNodes.filter((n) => !n.is_missing);
   const clusterWorkloads = workloads.filter((w) => w.cluster_id === cluster.id);
   const onlineCount = clusterNodes.filter((n) => n.status === "online").length;
   const withStats = clusterNodes.filter((n) => n.cpu_usage_pct != null);
@@ -128,6 +133,7 @@ async function ClusterOverview({ clusterId }: { clusterId?: string }) {
         <StatTile label="Containers" value={ctCount} />
         <StatTile label="Allocated vCPU" value={allocatedVcpu} />
         <StatTile label="Allocated RAM" value={formatBytes(allocatedMemBytes)} />
+        <BackupKpiTile />
       </div>
 
       <Card className="mb-5">
@@ -143,12 +149,32 @@ async function ClusterOverview({ clusterId }: { clusterId?: string }) {
       <div className="col-span-2 min-w-0">
       <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-2">Nodes in this cluster</div>
       <NodesTable
-        nodes={clusterNodes}
+        nodes={allClusterNodes}
         clusterId={cluster.id}
         tierSuggestions={tierSuggestions}
         storage={storage}
         defaultStorageByNode={defaultStorageByNode}
       />
+      {allClusterNodes.some((n) => n.is_missing) && (
+        <div className="mt-4">
+          <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-2">Left the cluster</div>
+          <table className="w-full text-sm">
+            <thead><tr className="text-left text-xs text-muted"><th className="py-1 pr-3">Host</th><th className="py-1 pr-3">Status</th><th className="py-1 pr-3">Last seen</th><th /></tr></thead>
+            <tbody>
+              {allClusterNodes.filter((n) => n.is_missing).map((n) => (
+                <tr key={n.id} className="border-t border-border">
+                  <td className="py-1.5 pr-3">{n.name}</td>
+                  <td className="py-1.5 pr-3"><span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted/20 text-muted uppercase tracking-wide">Left the cluster</span></td>
+                  <td className="py-1.5 pr-3 text-muted">{n.last_seen ? new Date(n.last_seen).toLocaleString() : "-"}</td>
+                  <td className="py-1.5"><a href={`/infrastructure/nodes/${n.id}`} className="text-accent hover:underline">Open decommission steps →</a></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="text-[11px] text-muted mt-1">Not counted in the totals above. It disappears from here once you remove it from PyXie.</div>
+        </div>
+      )}
+      <BackupServersTable />
       </div>
     </div>
   );

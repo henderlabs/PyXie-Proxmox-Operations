@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiFetch, ApiError } from "@/lib/api";
 
-export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const result = await apiFetch(`/api/operations/${params.id}/approve`, { method: "POST" });
+    const text = await req.text();
+    const result = await apiFetch(`/api/operations/${params.id}/approve`, { method: "POST", ...(text ? { body: text } : {}) });
     return NextResponse.json(result);
   } catch (e) {
     const status = e instanceof ApiError ? e.status : 500;

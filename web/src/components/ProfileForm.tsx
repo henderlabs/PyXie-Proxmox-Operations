@@ -8,6 +8,7 @@ export default function ProfileForm({ me }: { me: Me }) {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [banner, setBanner] = useState(me.activity_banner !== false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -36,8 +37,9 @@ export default function ProfileForm({ me }: { me: Me }) {
 
     setPending(true);
     try {
-      const body: Record<string, string> = {};
+      const body: Record<string, string | boolean> = {};
       if (displayName.trim() !== (me.display_name || "")) body.display_name = displayName.trim();
+      if (banner !== (me.activity_banner !== false)) body.activity_banner = banner;
       if (wantsPasswordChange) {
         body.current_password = currentPassword;
         body.new_password = newPassword;
@@ -57,6 +59,7 @@ export default function ProfileForm({ me }: { me: Me }) {
         return;
       }
       setSuccess("Saved");
+      if ("activity_banner" in body) window.location.reload(); // the banner reads this once per page load
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
@@ -82,6 +85,14 @@ export default function ProfileForm({ me }: { me: Me }) {
           onChange={(e) => setDisplayName(e.target.value)}
           className="input"
         />
+      </div>
+
+      <div className="border-t border-border pt-4">
+        <div className="text-xs font-semibold uppercase tracking-wider text-muted mb-3">Display</div>
+        <label className="flex items-start gap-2 text-sm text-text">
+          <input type="checkbox" checked={banner} onChange={(e) => setBanner(e.target.checked)} className="mt-0.5" />
+          <span>Show the activity banner<span className="block text-[11px] text-muted">The bar under the header that shows what is running, waiting or just finished. The Tasks panel is not affected.</span></span>
+        </label>
       </div>
 
       <div className="border-t border-border pt-4">

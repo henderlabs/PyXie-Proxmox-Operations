@@ -55,16 +55,23 @@ def _load_context(db: Session, node: Node):
     return cluster, target
 
 
-def dry_run_reboot(db: Session, node: Node, *, actor: str, parent_operation_id=None, correlation_id=None) -> Operation:
+def dry_run_reboot(db: Session, node: Node, *, actor: str, parent_operation_id=None, correlation_id=None, require_maintenance: bool = False) -> Operation:
+    """require_maintenance: the host page's Restart button. Same checks as Reboot Node, plus the host must already be in maintenance mode and the host name is typed to confirm."""
     cluster, target = _load_context(db, node)
+    context = {"node": node.name}
+    if require_maintenance:
+        context["confirm_name"] = node.name
     op = create_operation(
         db, "host.reboot", cluster_id=cluster.id, node_id=node.id,
         parent_operation_id=parent_operation_id, correlation_id=correlation_id,
-        context={"node": node.name}, created_by=actor,
+        context=context, created_by=actor,
     )
 
     reasons: list[str] = []
     blocking_rules: list[str] = []
+    if require_maintenance and not node.maintenance_mode:
+        reasons.append("Restart is only available while the host is in maintenance mode: use Evacuate / Maint Mode first")
+        blocking_rules.append("SAFE-MAINT-002")
 
     quorum = _quorum_after_removal(db, cluster, target, node.name, avoid_node_id=node.id)
     if quorum.get("evaluated") and not quorum["quorum_holds"]:

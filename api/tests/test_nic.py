@@ -13,7 +13,7 @@ def test_parse_and_fields():
     n = parse_net("virtio=BC:24:11:4A:20:1C,bridge=vmbr0,tag=20,firewall=1,rate=50")
     assert n["model"] == "virtio" and n["mac"] == "BC:24:11:4A:20:1C" and list(n["params"]) == ["bridge", "tag", "firewall", "rate"]
     f = net_fields("e1000=AA:BB:CC:DD:EE:FF,bridge=vmbr1,link_down=1")
-    assert f == {"model": "e1000", "mac": "AA:BB:CC:DD:EE:FF", "bridge": "vmbr1", "tag": None, "firewall": False, "link_down": True}
+    assert f == {"model": "e1000", "mac": "AA:BB:CC:DD:EE:FF", "bridge": "vmbr1", "tag": None, "firewall": False, "link_down": True, "rate": None, "mtu": None}
     assert net_fields("virtio,bridge=vmbr0")["mac"] is None
 
 

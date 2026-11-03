@@ -181,7 +181,9 @@ export default function NodeOverview({
         </span>
       </div>
 
-      {live?.error && <div className="mb-3 px-3 py-2 rounded border border-warn/40 bg-warn/10 text-warn text-xs">Live PVE read incomplete: {live.error}</div>}
+      {live?.error && (node.is_missing
+        ? <div className="mb-3 px-3 py-2 rounded border border-border bg-surface2/50 text-muted text-xs">This host is off or no longer in the cluster, so PyXie is not reading it live. Last seen <LocalTime iso={node.last_seen} />.</div>
+        : <div className="mb-3 px-3 py-2 rounded border border-warn/40 bg-warn/10 text-warn text-xs">Live PVE read incomplete: {live.error}</div>)}
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
         <Tile label="CPU" value={s?.cpu_pct != null ? `${s.cpu_pct.toFixed(0)}%` : node.cpu_usage_pct != null ? `${node.cpu_usage_pct.toFixed(0)}%` : "—"} pct={s?.cpu_pct ?? node.cpu_usage_pct}
@@ -206,7 +208,7 @@ export default function NodeOverview({
         </label>
       </div>
       {rrd.error ? (
-        <div className="text-sm text-warn mb-4">Could not load PVE graphs: {rrd.error}</div>
+        <div className="text-sm text-muted mb-4">{node.is_missing ? "No graphs: this host is not answering." : <span className="text-warn">Could not load PVE graphs: {rrd.error}</span>}</div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
           <Card>

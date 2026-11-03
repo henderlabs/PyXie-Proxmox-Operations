@@ -32,3 +32,9 @@ export function onBadgesChanged(callback: () => void): () => void {
   window.addEventListener(BADGES_EVENT, callback);
   return () => window.removeEventListener(BADGES_EVENT, callback);
 }
+
+/** Walking away from a preview (cancel, back, close) rejects its plan, so nothing is left waiting for approval and the locks it holds are freed.
+ * Only a plan still awaiting approval is touched; anything already started is left alone. */
+export function abandonPlan(id: string) {
+  return fetch(`/api/operations/${id}/cancel`, { method: "POST" }).catch(() => {}).finally(() => notifyOperationsChanged());
+}

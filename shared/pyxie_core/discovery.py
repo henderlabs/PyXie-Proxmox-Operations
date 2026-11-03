@@ -47,6 +47,20 @@ class DiscoveryError(Exception):
         self.message = message
 
 
+def clear_maintenance_for_missing(node) -> str | None:
+    """A host PVE no longer lists cannot be in maintenance mode. Clears the flag and returns the audit summary, or None if it was not set."""
+    if not node.maintenance_mode:
+        return None
+    since = node.maintenance_mode_since
+    by = node.maintenance_mode_by
+    node.maintenance_mode = False
+    node.maintenance_mode_since = None
+    node.maintenance_reason = None
+    node.maintenance_mode_by = None
+    was = f" (was set {since:%Y-%m-%d}{' by ' + by if by else ''})" if since else ""
+    return f"{node.name} left the cluster; maintenance flag cleared automatically{was}"
+
+
 def build_pve_client(db: Session, target: PveTarget, *, avoid_node_id=None) -> PveClient:
     cred = (
         db.query(PveCredential)
@@ -297,6 +311,7 @@ def _run_discovery_inner(db: Session, target: PveTarget, actor: str = "system") 
                     node.pending_updates = client.node_apt_update_count(node_name)
                 node.last_seen = now()
                 node.is_missing = False
+                node.forgotten_at = None  # PVE lists it again: a forgotten host that rejoined comes back by itself
                 seen_node_ids.add(node.id)
                 node_name_by_id[node.id] = node_name
                 summary["nodes"] += 1
@@ -438,6 +453,26 @@ def _run_discovery_inner(db: Session, target: PveTarget, actor: str = "system") 
                     metadata={"summary": f"{n.name} no longer visible to PVE", "name": n.name},
                     commit=False,
                 )
+            # A host that left the cluster cannot be in maintenance: clear the flag (PyXie-only, audited once) so it stops showing as "in maintenance".
+            for n in db.query(Node).filter(Node.cluster_id == cluster.id, Node.is_missing.is_(True), Node.maintenance_mode.is_(True)).all():
+                if n.id in seen_node_ids:
+                    continue
+                note = clear_maintenance_for_missing(n)
+                if note:
+                    write_audit_event(
+                        db,
+                        event_category="inventory",
+                        event_type="inventory.node.maintenance_cleared",
+                        actor_type="system",
+                        cluster_id=cluster.id,
+                        node_id=n.id,
+                        operation="discover",
+                        correlation_id=correlation_id,
+                        result="success",
+                        severity="info",
+                        metadata={"summary": note, "name": n.name},
+                        commit=False,
+                    )
             for s in db.query(Storage).filter(Storage.cluster_id == cluster.id).all():
                 if s.id in seen_storage_ids or s.is_missing:
                     continue
@@ -644,6 +679,10 @@ def _upsert_workload(db: Session, cluster: Cluster, node: Node, data: dict, wtyp
         wl.pool = data.get("pool") or None
     wl.is_template = bool(data.get("template")) and str(data.get("template")) not in ("0", "False")
     wl.ha_state = (data.get("hastate") or None)
+    lock = (data.get("lock") or None)
+    if lock != wl.pve_lock:  # a new or different lock restarts its clock; an unlocked guest clears both
+        wl.pve_lock = lock
+        wl.pve_lock_since = now() if lock else None
     wl.last_seen = now()
     wl.is_missing = False
     return wl

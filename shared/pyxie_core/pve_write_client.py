@@ -675,6 +675,67 @@ class PveMaintenanceClient:
         data = {"tags": ";".join(tags)} if tags else {"delete": "tags"}
         self._request("PUT", f"/nodes/{node}/{kind}/{vmid}/config", data=data)
 
+    def set_guest_config(self, node: str, vmid: int, *, kind: str, set_keys: dict, delete: list, revert: list, digest: str | None = None) -> None:
+        """PUT /nodes/{node}/qemu|lxc/{vmid}/config: set options, delete options, revert pending ones, in one call. `digest` makes Proxmox
+        refuse the write if the config changed since it was read. Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change the guest configuration"))
+        data = dict(set_keys)
+        if delete:
+            data["delete"] = ",".join(delete)
+        if revert:
+            data["revert"] = ",".join(revert)
+        if digest:
+            data["digest"] = digest
+        if data:
+            self._request("PUT", f"/nodes/{node}/{'qemu' if kind == 'vm' else 'lxc'}/{vmid}/config", data=data)
+
+    def set_node_config(self, node: str, section: str, values: dict, delete: list, *, digest: str | None = None) -> None:
+        """Write one section of a host's settings. section: config (PUT /nodes/{n}/config, with `delete` and `digest`), dns (PUT /dns, the
+        complete server list plus search), time (PUT /time, timezone), hosts (POST /hosts, the whole file with `digest`). Synchronous."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("change host settings"))
+        if section == "config":
+            data = dict(values)
+            if delete:
+                data["delete"] = ",".join(delete)
+            if digest:
+                data["digest"] = digest
+            if data:
+                self._request("PUT", f"/nodes/{node}/config", data=data)
+        elif section == "dns":
+            self._request("PUT", f"/nodes/{node}/dns", data=values)
+        elif section == "time":
+            self._request("PUT", f"/nodes/{node}/time", data={"timezone": values["timezone"]})
+        elif section == "hosts":
+            data = {"data": values["hosts"]}
+            if digest:
+                data["digest"] = digest
+            self._request("POST", f"/nodes/{node}/hosts", data=data)
+        else:
+            raise ValueError(f"unknown host settings section {section!r}")
+
+    def stage_node_network(self, node: str, iface: str, iface_type: str, values: dict, delete: list) -> None:
+        """PUT /nodes/{node}/network/{iface}: writes /etc/network/interfaces.new only. The running network is untouched until apply_node_network."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("stage a network change"))
+        data = {"type": iface_type, **values}
+        if delete:
+            data["delete"] = ",".join(delete)
+        self._request("PUT", f"/nodes/{node}/network/{iface}", data=data)
+
+    def apply_node_network(self, node: str) -> str | None:
+        """PUT /nodes/{node}/network: reloads the network from the staged file (ifupdown2). Returns the task id."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("reload the network"))
+        return self._request("PUT", f"/nodes/{node}/network", data={})
+
+    def discard_node_network(self, node: str) -> None:
+        """DELETE /nodes/{node}/network: removes the staged file; the running network is not touched."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("discard staged network changes"))
+        self._request("DELETE", f"/nodes/{node}/network")
+
     def start_vm(self, node: str, vmid: int) -> str:
         """POST /nodes/{node}/qemu/{vmid}/status/start."""
         if not _mutations_enabled():
@@ -827,6 +888,19 @@ class PveMaintenanceClient:
         if not _mutations_enabled():
             raise MutationsDisabledError(_disabled_message("reboot"))
         return self._request("POST", f"/nodes/{node}/status", data={"command": "reboot"})
+
+    def stop_task(self, node: str, upid: str) -> None:
+        """DELETE /nodes/{node}/tasks/{upid}: stops a running Proxmox task. Used for a migration or disk move the operator cancelled, and (only on an approved
+        preview that names it) a backup that has been hung for hours on a locked guest."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("stop a task"))
+        self._request("DELETE", f"/nodes/{node}/tasks/{upid}")
+
+    def shutdown_node(self, node: str) -> str:
+        """POST /nodes/{node}/status with command=shutdown. Same pre-checks as reboot_node, and the host stays off until someone powers it on."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("shut down"))
+        return self._request("POST", f"/nodes/{node}/status", data={"command": "shutdown"})
 
 
 class PveConsoleClient:

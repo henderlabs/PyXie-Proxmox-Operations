@@ -11,6 +11,7 @@ module. This is the ONLY job function in this file that can result in a PVE
 write -- everything above it stays read-only, same as before.
 """
 
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -20,6 +21,8 @@ from rq import Queue
 from pyxie_core.db import SessionLocal
 from pyxie_core.findings import evaluate_findings
 from pyxie_core.metrics import prune_old_metrics
+from pyxie_core import op_claims
+from pyxie_core.op_lanes import RESUMABLE_TYPES, enqueue_operation, lane_for
 from pyxie_core.models import (
     InternalJobRun,
     PveTarget,
@@ -29,6 +32,7 @@ from pyxie_core.models import (
 from pyxie_core.protection import sync_pbs_protection
 from pyxie_core.recommendations import generate_recommendations
 
+log = logging.getLogger(__name__)
 _conn = redis.from_url(os.environ["REDIS_URL"])
 operations_queue = Queue("operations", connection=_conn)
 
@@ -123,9 +127,62 @@ def auto_balance_job():
     from pyxie_core.auto_balance import evaluate_all
 
     def enqueue(op):
-        operations_queue.enqueue("worker.jobs.execute_operation_job", str(op.id), job_timeout=10800)
+        enqueue_operation(_conn, op.id, op.operation_type_id, timeout=10800)
 
     return _run_logged("auto_balance", lambda db: {"clusters": evaluate_all(db, enqueue=enqueue)})
+
+
+def auto_clear_locks_job():
+    """Clears stale backup/snapshot guest locks when that policy is turned on (off by default); see pyxie_core.auto_clear_locks."""
+    from pyxie_core.auto_clear_locks import evaluate
+
+    def enqueue(op):
+        enqueue_operation(_conn, op.id, op.operation_type_id, timeout=900)
+
+    return _run_logged("auto_clear_locks", lambda db: evaluate(db, enqueue=enqueue))
+
+
+def requeue_deferred_job():
+    """Operations waiting on a busy guest or host (op_claims.defer_operation) whose retry time has come go back on their lane's queue."""
+    def _job(db):
+        out = []
+        for op in op_claims.deferred_due(db):
+            ctx = dict(op.context or {})
+            ctx["retry_at"] = None  # enqueued: not again until it defers again
+            op.context = ctx
+            db.commit()
+            enqueue_operation(_conn, op.id, op.operation_type_id)
+            out.append(str(op.id))
+        return {"requeued": out}
+
+    return _run_logged("requeue_deferred", _job)
+
+
+def reclaim_stale_operations_job():
+    """A running operation whose worker stopped heartbeating (2 minutes) is taken over: its claim is cleared and it goes back on its lane's queue,
+    where the workflow resumes from its saved state. Only the types that resume after a restart; at most 3 times, then it fails."""
+    from pyxie_core.operations_engine import fail_operation
+
+    def _job(db):
+        out = []
+        for op in op_claims.stale_claims(db):
+            if op.operation_type_id not in RESUMABLE_TYPES:
+                continue
+            ctx = dict(op.context or {})
+            n = int(ctx.get("reclaims") or 0)
+            if n >= op_claims.MAX_RECLAIMS:
+                op_claims.release_claim(db, op.id)
+                fail_operation(db, op, error="its worker stopped three times while running it; check it in Proxmox before running it again")
+                continue
+            ctx["reclaims"] = n + 1
+            op.context = ctx
+            db.commit()
+            op_claims.release_claim(db, op.id)
+            enqueue_operation(_conn, op.id, op.operation_type_id)
+            out.append(str(op.id))
+        return {"reclaimed": out}
+
+    return _run_logged("reclaim_stale_operations", _job)
 
 
 def collect_reporting_job(actor: str = "schedule"):
@@ -155,6 +212,20 @@ def execute_operation_job(operation_id: str):
         op = db.query(Operation).filter(Operation.id == operation_id).one_or_none()
         if op is None:
             return {"error": f"operation {operation_id} not found"}
+        if not op_claims.try_claim(db, operation_id):
+            return {"skipped": "another live worker already runs this operation"}
+        stop_heartbeat = op_claims.start_heartbeat(operation_id)
+        try:
+            return _dispatch(db, op, operation_id)
+        finally:
+            stop_heartbeat()
+            try:
+                db.rollback()
+                op_claims.release_claim(db, operation_id)
+            except Exception:  # noqa: BLE001
+                log.exception("could not release the claim on %s", operation_id)
+
+    def _dispatch(db, op, operation_id):
         if op.status == "revalidating":
             # the worker stopped while re-checking: re-checking changes nothing, so start that stage over instead of failing the operation
             op.status = "approved"
@@ -228,6 +299,27 @@ def execute_operation_job(operation_id: str):
         elif op.operation_type_id == "host.reboot":
             from pyxie_core.reboot_workflow import execute_reboot
             result = execute_reboot(db, operation_id)
+        elif op.operation_type_id == "host.config_change":
+            from pyxie_core.node_config_workflow import execute_node_config
+            result = execute_node_config(db, operation_id)
+        elif op.operation_type_id == "host.shutdown":
+            from pyxie_core.host_power_workflow import execute_shutdown
+            result = execute_shutdown(db, operation_id)
+        elif op.operation_type_id == "host.network_stage":
+            from pyxie_core.host_network_workflow import execute_network_stage
+            result = execute_network_stage(db, operation_id)
+        elif op.operation_type_id == "host.network_apply":
+            from pyxie_core.host_network_workflow import execute_network_apply
+            result = execute_network_apply(db, operation_id)
+        elif op.operation_type_id == "host.network_discard":
+            from pyxie_core.host_network_workflow import execute_network_discard
+            result = execute_network_discard(db, operation_id)
+        elif op.operation_type_id == "workload.config_change":
+            from pyxie_core.config_change_workflow import execute_config_change
+            result = execute_config_change(db, operation_id)
+        elif op.operation_type_id == "host.clear_locks":
+            from pyxie_core.clear_lock_workflow import execute_clear_locks
+            result = execute_clear_locks(db, operation_id)
         elif op.operation_type_id == "pbs.storage_add":
             from pyxie_core.pbs_storage_workflow import execute_pbs_storage_add
             result = execute_pbs_storage_add(db, operation_id)
@@ -280,82 +372,30 @@ def execute_operation_job(operation_id: str):
     return _run_logged(f"execute_operation:{operation_id}", _job)
 
 
-def resume_inflight_operations():
+def resume_inflight_operations(lanes=("quick", "bulk")):
     """Called once at worker startup: find every operation that was
     mid-flight (not waiting on human approval, not terminal) when the
     process last stopped -- crash, restart, redeploy, docker compose down --
     and re-enqueue it. This is what makes 'operations persist state in
     PostgreSQL and survive worker/API/container restarts' actually true
     rather than just a design intention.
+
+    Each lane's worker resumes only its own lane's operations (one worker per lane, so nothing is picked up twice);
+    with the quick lane switched off the one operations worker resumes both. Which types resume, and their job timeouts,
+    come from pyxie_core.op_lanes.
     """
     from pyxie_core.operations_engine import get_resumable_operations
 
-    # Long-running types (evacuation runs many sequential migrations;
-    # maintenance runs evacuation + a reboot wait on top of that; reboot
-    # alone can wait up to NODE_RETURN_TIMEOUT_SECONDS) get generous
-    # job_timeouts so RQ doesn't kill them mid-operation.
-    RESUMABLE_TYPES = {
-        # kept in sync with api/app/routers/operations.py's _JOB_TIMEOUT_BY_TYPE
-        "vm.live_migrate": 16200,
-        "node.evacuate": 10800,
-        "workload.shutdown": 600,
-        "workload.start": 300,
-        "workload.force_stop": 300,
-        "workload.reboot": 600,
-        "workload.move_storage": 21600,
-        "workload.snapshot_create": 2400,
-        "workload.snapshot_delete": 2400,
-        "workload.snapshot_rollback": 2400,
-        "workload.tags_change": 120,
-        "cluster.tag_colors": 120,
-        "workload.resize": 600,
-        "workload.disk_grow": 1200,
-        "workload.nic_change": 300,
-        "workload.disk_change": 1200,
-        "backup.policy_change": 300,
-        "workload.create": 1800,
-        "storage.iso_download": 7800,
-        "storage.iso_delete": 900,
-        "storage.iso_enable": 120,
-        "workload.delete": 2400,
-        "workload.clone": 8400,
-        "workload.cdrom_change": 300,
-        "workload.ct_create": 1800,
-        "workload.ct_resize": 300,
-        "pool.create": 600,
-        "pool.delete": 600,
-        "pool.members": 600,
-        "storage.create": 600,
-        "storage.remove": 600,
-        "workload.ct_nic_change": 300,
-        "storage.ct_template_download": 3900,
-        "storage.ct_template_delete": 900,
-        "workload.hw_change": 3600,
-        "host.reboot": 1800,
-        "pbs.update": 3900,
-        "pbs.reboot": 1800,
-        "pbs.datastore_change": 300,
-        "pbs.storage_add": 300,
-        "workload.restore": 41000,
-        "pbs.maintenance": 7200,
-        "pbs.job_change": 300,
-        "host.update": 3900,
-        "maintenance.run": 21600,
-        "node.enter_maintenance": 10800,
-        "node.exit_maintenance": 1800,
-        "cluster.rebalance": 10800,  # same evacuation shape as node.evacuate
-        "protection.backup_membership": 120,  # synchronous PVE config write, no task to wait on
-        "protection.backup_retention": 120,
-        "workload.network_vlan_change": 120,  # synchronous PVE config write, no task to wait on -- same shape
-    }
-
     def _job(db):
-        resumable = get_resumable_operations(db)
+        now = datetime.now(timezone.utc)
+        me = op_claims.worker_id()
+        resumable = [o for o in get_resumable_operations(db) if lane_for(o.operation_type_id) in lanes
+                     and not op_claims.claim_is_live(o.claimed_by, o.heartbeat_at, now, me=me)]  # one another live worker is running is left alone
         for op in resumable:
-            timeout = RESUMABLE_TYPES.get(op.operation_type_id)
-            if timeout:
-                operations_queue.enqueue("worker.jobs.execute_operation_job", str(op.id), job_timeout=timeout)
-        return {"resumed": [str(op.id) for op in resumable]}
+            if op.operation_type_id in RESUMABLE_TYPES:
+                op_claims.release_claim(db, op.id)  # a dead predecessor's claim: cleared so the stale-claim sweep does not enqueue it a second time
+                enqueue_operation(_conn, op.id, op.operation_type_id)
+        return {"resumed": [str(op.id) for op in resumable], "lanes": list(lanes)}
 
     return _run_logged("resume_inflight_operations", _job)
 
@@ -372,3 +412,6 @@ def run_all():
     evaluate_findings_job()
     generate_recommendations_job()
     auto_balance_job()
+    auto_clear_locks_job()
+    requeue_deferred_job()
+    reclaim_stale_operations_job()

@@ -94,6 +94,7 @@ export type Node = {
   maintenance_mode_by: string | null;
   last_seen: string;
   is_missing: boolean;
+  avoid_as_destination?: boolean;
   allocated_memory_bytes: number | null;
 };
 
@@ -595,6 +596,12 @@ export type Operation = {
   initiated_by_email?: string | null;
   approver?: string | null;
   approver_email?: string | null;
+  // Set while an approved operation waits for the single operations worker: what it is queued behind (label only).
+  // "quick" | "bulk" while the quick lane is running; null with a single worker.
+  lane?: "quick" | "bulk" | null;
+  claimed_by?: string | null;
+  waiting_for_resource?: boolean;
+  queued_behind?: { id: string; operation_type_id: string; label: string; running_minutes: number | null; progress_pct: number | null } | null;
   created_by: string | null;
   approved_by: string | null;
   dismissed: boolean;
@@ -615,7 +622,7 @@ export type InternalJobRunRow = {
   error: string | null;
 };
 
-export type Me = { email: string; display_name: string | null; is_admin: boolean };
+export type Me = { email: string; display_name: string | null; is_admin: boolean; activity_banner?: boolean };
 
 export type UserAccount = {
   id: string;

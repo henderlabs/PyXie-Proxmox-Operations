@@ -26,6 +26,7 @@ import DiskPanel, { type DiskRequest } from "@/components/DiskPanel";
 import BackupTab from "@/components/BackupTab";
 import NicEditPanel, { type NicEditRequest } from "@/components/NicEdit";
 import { useMe } from "@/lib/useMe";
+import WorkloadConfig from "@/components/WorkloadConfig";
 import TagsEditor from "@/components/TagsEditor";
 import { DoNotMoveToggle, PreferredHostSelect, ProfileSelect, StoragePreferenceSelect } from "@/components/ProfileSelect";
 import { formatBytes, formatUptime, formatRelativeTime, formatMemoryGb } from "@/lib/format";
@@ -40,11 +41,12 @@ import {
   type WorkloadTask,
 } from "@/lib/workloadDetail";
 
-export type TabId = "summary" | "statistics" | "hardware" | "snapshots" | "backup" | "tasks" | "console";
+export type TabId = "summary" | "statistics" | "hardware" | "config" | "snapshots" | "backup" | "tasks" | "console";
 const TABS: { id: TabId; label: string }[] = [
   { id: "summary", label: "Summary" },
   { id: "statistics", label: "Statistics" },
   { id: "hardware", label: "Hardware" },
+  { id: "config", label: "Config" },
   { id: "snapshots", label: "Snapshots" },
   { id: "backup", label: "Backup" },
   { id: "tasks", label: "Tasks" },
@@ -389,6 +391,7 @@ export function WorkloadDetailPanel({
         </div>
       )}
 
+      {tab === "config" && <WorkloadConfig workloadId={w.id} canEdit={!w.is_missing} nets={cfg?.nets ?? []} lxc={lxc} workloadName={w.name || `VMID ${w.vmid}`} clusterId={w.cluster_id} />}
       {tab === "hardware" && <Hardware nodeId={w.node_id} nodes={clusterNodes} storage={storage} cfg={cfg} lxc={lxc} loading={live === null} workloadId={w.id} workloadName={w.name || `VMID ${w.vmid}`} running={status === "running"} canEdit={!w.is_missing} clusterId={w.cluster_id} nodeName={nodeNameOf(w, clusterNodes)} />}
 
       {tab === "tasks" && (

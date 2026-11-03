@@ -72,6 +72,7 @@ def _migration_timeout_seconds(ctx: dict) -> float:
 
 from .credentials import load_pve_credentials
 from .discovery import build_pve_client
+from .labels import vm_label
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, probe_vm
 from .maintenance import (
@@ -83,10 +84,12 @@ from .maintenance import (
     workload_node_local_disk_storages,
 )
 from .models import Cluster, Node, Operation, PveTarget, Storage, Workload
+from .operation_log import log_stage
 from .operations_engine import (
     OperationError,
     approve_operation,
     block_operation,
+    cancel_operation,
     create_operation,
     enter_stage,
     fail_operation,
@@ -101,6 +104,7 @@ from .pve_write_client import (
     parse_migration_progress,
     update_migration_progress,
 )
+from .task_cancel import migration_cancel_state
 from . import rollback
 
 
@@ -411,6 +415,52 @@ def approve(db: Session, op: Operation, *, approved_by: str) -> Operation:
     return approve_operation(db, op, approved_by=approved_by)
 
 
+def _cancel_running_migration(db, op, write_client, workload, source_node, destination_node, ctx, target) -> Operation:
+    """Stop the Proxmox migrate task the operator cancelled, then prove where the guest is: still on its source host, no lock left, and any partial
+    volume on the destination named so it can be cleaned up. Ends the operation as cancelled (not failed)."""
+    upid = op.pve_upid
+    log_stage(op.id, f"Cancel requested. Stopping the Proxmox migration task for {vm_label(workload)}.")
+    write_client.stop_task(source_node.name, upid)
+    for _ in range(30):
+        if write_client.task_status(source_node.name, upid).status != "running":
+            break
+        time.sleep(2)
+    notes, problems = [], []
+    try:
+        read_client, _cred = build_pve_client(db, target)
+        with read_client:
+            on_source = any(int(v.get("vmid", -1)) == workload.vmid for v in read_client.qemu_list(source_node.name))
+            on_dest = any(int(v.get("vmid", -1)) == workload.vmid for v in read_client.qemu_list(destination_node.name))
+            lock = (read_client.qemu_config(source_node.name, workload.vmid) or {}).get("lock") if on_source else None
+            leftover = []
+            storage = ctx.get("target_storage_name")
+            if storage:
+                try:
+                    leftover = [str(v.get("volid")) for v in read_client.storage_content(destination_node.name, storage, "images", workload.vmid) or []]
+                except Exception:  # noqa: BLE001
+                    leftover = []
+        if on_source and not on_dest:
+            notes.append(f"{vm_label(workload)} stayed on {source_node.name}.")
+        else:
+            problems.append(f"{vm_label(workload)} is on {'both hosts' if on_source else destination_node.name}: check it in Proxmox before doing anything else.")
+        if lock:
+            problems.append(f"it still has a '{lock}' lock (clear it from the host's stale-lock tool once the task is gone).")
+        if leftover:
+            notes.append("Partial volume(s) left on " + destination_node.name + ": " + ", ".join(leftover) + ".")
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"could not confirm where the guest is ({str(exc)[:100]}); check it in Proxmox.")
+    op.verification_result = {"cancelled": True, "notes": notes, "problems": problems}
+    op.pve_upid = None
+    db.commit()
+    release_locks_for_operation(db, op.id)
+    try:
+        from .discovery import run_discovery
+        run_discovery(db, target, actor="operation")
+    except Exception:  # noqa: BLE001
+        pass
+    return cancel_operation(db, op, note=" ".join(notes + problems))
+
+
 def execute_migration(db: Session, operation_id) -> Operation:
     """Resumable. Safe to call again after a crash -- picks up from
     op.pve_upid / op.status rather than re-issuing the migration.
@@ -516,10 +566,13 @@ def execute_migration(db: Session, operation_id) -> Operation:
                 # the same node/workload lock while the first was still
                 # genuinely in flight.
                 migration_lock_ttl = 16200
-                acquire_lock(db, resource_type="node", resource_id=source_node.id, operation_id=op.id, reason="vm.live_migrate", ttl_seconds=migration_lock_ttl)
-                acquire_lock(db, resource_type="node", resource_id=destination_node.id, operation_id=op.id, reason="vm.live_migrate", ttl_seconds=migration_lock_ttl)
+                # a move takes one "out" slot on its source host and one "in" slot on its destination (limits default to 1 each: Settings > Workers),
+                # instead of locking both hosts outright, so moves between other pairs of hosts can run at the same time
+                from .slots import acquire_slot
+                acquire_slot(db, kind="node_out", resource_key=str(source_node.id), operation_id=op.id, ttl_seconds=migration_lock_ttl, node=True)
+                acquire_slot(db, kind="node_in", resource_key=str(destination_node.id), operation_id=op.id, ttl_seconds=migration_lock_ttl, node=True)
                 acquire_lock(db, resource_type="workload", resource_id=workload.id, operation_id=op.id, reason="vm.live_migrate", ttl_seconds=migration_lock_ttl)
-            except LockContention as exc:
+            except LockContention:
                 return block_operation(db, op, blocking_safety_rules=["SAFE-LOCK-001"], actor="system")
 
             next_status = "shutting_down" if power_cycles else "executing"
@@ -575,6 +628,9 @@ def execute_migration(db: Session, operation_id) -> Operation:
                             db.commit()
                     if task_result.status != "running":
                         break
+                    db.refresh(op, attribute_names=["context"])
+                    if (op.context or {}).get("cancel_requested") and migration_cancel_state(op.progress)[0]:
+                        return _cancel_running_migration(db, op, write_client, workload, source_node, destination_node, ctx, target)
                     if time.monotonic() > deadline:
                         raise TaskTimeoutError(f"task {op.pve_upid} on {source_node.name} did not finish within {timeout_seconds:.0f}s")
                     time.sleep(2)

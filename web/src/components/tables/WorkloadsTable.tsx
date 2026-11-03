@@ -2,6 +2,7 @@
 
 import TagChips from "@/components/TagChip";
 import BulkTagsAction from "@/components/BulkTagsAction";
+import BulkConfigAction from "@/components/BulkConfigAction";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -120,6 +121,7 @@ export default function WorkloadsTable({
   const admin = me === undefined || me?.is_admin === true;
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkTags, setBulkTags] = useState(false);
+  const [bulkConfig, setBulkConfig] = useState(false);
   const toggleSelected = (id: string) => setSelected((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const searchQuery = search.trim().toLowerCase();
   const searchedWorkloads = searchQuery
@@ -677,10 +679,12 @@ export default function WorkloadsTable({
         <div className="flex items-center gap-3 mb-2 text-xs">
           <span className="text-text">{selected.size} selected</span>
           <button type="button" onClick={() => setBulkTags(true)} className="text-accent hover:underline">Tags…</button>
+          <button type="button" onClick={() => setBulkConfig(true)} className="text-accent hover:underline">Change a setting…</button>
           <button type="button" onClick={() => setSelected(new Set())} className="text-muted hover:text-text">Clear</button>
         </div>
       )}
       {bulkTags && selectedWorkloads.length > 0 && <BulkTagsAction workloads={selectedWorkloads} onClose={() => setBulkTags(false)} />}
+      {bulkConfig && selectedWorkloads.length > 0 && <BulkConfigAction workloads={selectedWorkloads} onClose={() => setBulkConfig(false)} />}
       <Table
         rows={pagedWorkloads}
         scrollHeight="max(320px, calc(100vh - 380px))"

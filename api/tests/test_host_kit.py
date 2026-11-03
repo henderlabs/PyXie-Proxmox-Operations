@@ -32,7 +32,7 @@ class FakeRedis:
 
 
 def test_wrapper_version_comes_from_the_wrapper_script():
-    assert hk.wrapper_version(KIT) == "1.1.0"
+    assert hk.wrapper_version(KIT) == "1.2.1"
 
 
 def test_version_comparison():
@@ -70,7 +70,7 @@ def test_installer_script_runs_its_info_modes_and_rejects_bad_args():
     with tempfile.NamedTemporaryFile("wb", suffix=".sh", delete=False) as f:
         f.write(script)
     out = subprocess.run(["bash", f.name, "--version"], capture_output=True, text=True)
-    assert out.returncode == 0 and "0.27.1" in out.stdout and "1.1.0" in out.stdout
+    assert out.returncode == 0 and "0.27.1" in out.stdout and "1.2.1" in out.stdout
     bad = subprocess.run(["bash", f.name, "--nope"], capture_output=True, text=True)
     assert bad.returncode == 2
     assert subprocess.run(["bash", "-n", f.name]).returncode == 0

@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session
 
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
+from .vm_locks import lock_context
+from .stopped_guests import stopped_shared_item
 from .maintenance import _qemu_config, _quorum_after_removal, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -35,6 +37,7 @@ from .operations_engine import (
     TERMINAL_STATUSES,
     OperationError,
     block_operation,
+    cancel_operation,
     check_cancel_requested,
     create_operation,
     enter_stage,
@@ -106,7 +109,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
             liveness = scan_vm_liveness(client, [(node.name, w.vmid) for w in running_vms])
             for wl in running_vms:
                 block_reasons = [
-                    r for r in (vm_lock_reason(wl.vmid, _qemu_config(client, node.name, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r
+                    r for r in (vm_lock_reason(wl.vmid, _qemu_config(client, node.name, wl), **lock_context(db, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r
                 ]
                 if block_reasons:
                     unmigratable.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name, "reasons": block_reasons})
@@ -139,7 +142,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                     "candidates": [
                         {
                             "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                            "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                            "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                         }
                         for c in ranked
                     ],
@@ -163,10 +166,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                     })
                     continue
                 if on_shared:
-                    stopped_no_action.append({
-                        "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
-                        "reasons": ["stopped, and its disk is on shared storage -- no action needed to evacuate this node"],
-                    })
+                    stopped_relocation_required.append(stopped_shared_item(db, client, node, wl, candidates_all, nodes_by_id, simulated_added_bytes, "stopped, and its disk is on shared storage -- no action needed to evacuate this node -- optional: move it too (offline, config only, nothing is copied)"))
                 else:
                     # Never required for a temporary evacuation (the whole
                     # point of "stopped" is it isn't costing this node
@@ -209,7 +209,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -328,25 +328,18 @@ def execute_evacuation(db: Session, operation_id) -> Operation:
             op = enter_stage(db, op, status="evacuating", stage="evacuating")
 
         if op.status == "evacuating":
-            for item in plan:
-                if item["workload_id"] in completed:
-                    continue
+            from .parallel_children import parallel_k, run_parallel
 
-                cancelled = check_cancel_requested(db, op)
-                if cancelled:
-                    return cancelled
-
+            def prepare(item):
+                """Quick part of one move, on the parent's session: ("done", None) already finished or nothing to do, ("exec", child) ready to run,
+                ("stop", op) the whole evacuation ends here."""
                 workload = db.query(Workload).filter(Workload.id == item["workload_id"]).one_or_none()
                 if workload is None or workload.is_missing:
-                    completed.append(item["workload_id"])  # gone from inventory -- nothing to evacuate
-                    op.context = {**ctx, "plan": plan, "completed_workload_ids": completed}
-                    db.commit()
-                    continue
-
+                    return "done", None  # gone from inventory -- nothing to evacuate
                 destination_node = db.query(Node).filter(Node.id == item["destination_node_id"]).one_or_none()
                 if destination_node is None:
                     release_locks_for_operation(db, op.id)
-                    return fail_operation(
+                    return "stop", fail_operation(
                         db, op,
                         error=f"destination node for {vm_label(item)} disappeared from inventory mid-evacuation "
                               f"({len(completed)}/{len(plan)} completed before this)",
@@ -355,105 +348,82 @@ def execute_evacuation(db: Session, operation_id) -> Operation:
                 if item.get("destination_storage_id"):
                     destination_storage = db.query(Storage).filter(Storage.id == item["destination_storage_id"]).one_or_none()
 
-                # Reconcile against an EXISTING child for this workload before
-                # ever spawning a new one -- if a worker crashed mid-evacuation
-                # after this child was created (whether it went on to complete,
-                # is still genuinely in flight, or already failed/blocked),
-                # blindly calling dry_run_migration again here would create a
-                # second, duplicate child operation for the same workload.
-                # That new attempt can't cause an actual double PVE mutation
-                # (the workload-level resource lock a still-running original
-                # child holds prevents that), but it produces exactly the
-                # confusing, needs-manual-untangling state this reconciliation
-                # is meant to avoid -- so look for prior work first, always.
+                # Reconcile against an EXISTING child for this workload before ever spawning a new one (a crash mid-evacuation can leave one that
+                # completed, is still in flight, or already failed): never create a duplicate.
                 existing_child = (
                     db.query(Operation)
-                    .filter(
-                        Operation.parent_operation_id == op.id,
-                        Operation.operation_type_id == "vm.live_migrate",
-                        Operation.workload_id == workload.id,
-                    )
+                    .filter(Operation.parent_operation_id == op.id, Operation.operation_type_id == "vm.live_migrate", Operation.workload_id == workload.id)
                     .order_by(Operation.created_at.desc())
                     .first()
                 )
-
                 if existing_child is not None and existing_child.status == "completed":
-                    # Succeeded before a crash interrupted this loop's own
-                    # bookkeeping (the completed_workload_ids commit below
-                    # never ran) -- consume it, don't redo the migration.
-                    child = existing_child
-                elif existing_child is not None and existing_child.status in ("failed", "blocked"):
-                    # A prior attempt for this exact workload already
-                    # concluded unsuccessfully -- surface that outcome rather
-                    # than silently retrying with a fresh child, which would
-                    # bury the original failure in an unrelated duplicate.
-                    # A human should decide whether conditions changed enough
-                    # to warrant a genuine retry.
+                    return "done", existing_child  # succeeded before a crash interrupted the bookkeeping -- consume it, don't redo it
+                if existing_child is not None and existing_child.status in ("failed", "blocked"):
+                    # a prior attempt for this exact workload already concluded unsuccessfully: surface that, a human decides on a retry
                     release_locks_for_operation(db, op.id)
                     if existing_child.status == "blocked":
-                        return block_operation(
-                            db, op,
-                            blocking_safety_rules=(existing_child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"],
-                            actor="system",
-                        )
-                    return fail_operation(
+                        return "stop", block_operation(db, op, blocking_safety_rules=(existing_child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"], actor="system")
+                    return "stop", fail_operation(
                         db, op,
                         error=f"migration for {vm_label(item)} (operation {existing_child.id}) previously "
                               f"failed: {existing_child.error} -- {len(completed)}/{len(plan)} completed before "
                               f"this, not retried automatically",
                     )
-                elif existing_child is not None:
-                    # Still genuinely in flight from before the crash (any
-                    # non-terminal status) -- resume THAT operation instead
-                    # of creating a duplicate.
+                if existing_child is not None:
+                    # still genuinely in flight from before the crash: resume THAT operation
                     child = existing_child
                     if child.status == "awaiting_approval":
                         child = approve_migration(db, child, approved_by=f"node.evacuate:{op.id}")
-                    if child.status not in TERMINAL_STATUSES:
-                        child = execute_migration(db, child.id)
-                else:
-                    # No prior child for this workload -- fresh dry-run,
-                    # right now, reassessing cluster state between every
-                    # move rather than trusting the plan computed before any
-                    # of the earlier moves happened.
-                    try:
-                        child = dry_run_migration(
-                            db, workload, destination_node, actor=f"node.evacuate:{op.id}",
-                            destination_storage=destination_storage, transport=item.get("transport", "live"),
-                            confirm_override_headroom=bool(item.get("manually_set")),
-                            parent_operation_id=op.id, correlation_id=op.correlation_id,
-                        )
-                    except MigrationWorkflowError as exc:
-                        release_locks_for_operation(db, op.id)
-                        return fail_operation(
-                            db, op,
-                            error=f"could not plan migration for {vm_label(item)}: {exc} "
-                                  f"({len(completed)}/{len(plan)} completed before this)",
-                        )
-
-                    if child.status == "blocked":
-                        release_locks_for_operation(db, op.id)
-                        return block_operation(
-                            db, op,
-                            blocking_safety_rules=(child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"],
-                            actor="system",
-                        )
-
-                    child = approve_migration(db, child, approved_by=f"node.evacuate:{op.id}")
-                    child = execute_migration(db, child.id)
-
-                if child.status != "completed":
-                    release_locks_for_operation(db, op.id)
-                    return fail_operation(
-                        db, op,
-                        error=f"migration for {vm_label(item)} did not complete (status={child.status}, "
-                              f"error={child_reason(child)}) -- {len(completed)}/{len(plan)} completed before this, "
-                              f"evacuation stopped rather than continuing past a failure",
+                    if child.status in TERMINAL_STATUSES:
+                        return ("done", child) if child.status == "completed" else ("stop", _child_failed(item, child))
+                    return "exec", child
+                # no prior child: a fresh dry-run, right now, reassessing cluster state between moves
+                try:
+                    child = dry_run_migration(
+                        db, workload, destination_node, actor=f"node.evacuate:{op.id}",
+                        destination_storage=destination_storage, transport=item.get("transport", "live"),
+                        confirm_override_headroom=bool(item.get("manually_set")),
+                        parent_operation_id=op.id, correlation_id=op.correlation_id,
                     )
+                except MigrationWorkflowError as exc:
+                    release_locks_for_operation(db, op.id)
+                    return "stop", fail_operation(
+                        db, op,
+                        error=f"could not plan migration for {vm_label(item)}: {exc} "
+                              f"({len(completed)}/{len(plan)} completed before this)",
+                    )
+                if child.status == "blocked":
+                    release_locks_for_operation(db, op.id)
+                    return "stop", block_operation(db, op, blocking_safety_rules=(child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"], actor="system")
+                return "exec", approve_migration(db, child, approved_by=f"node.evacuate:{op.id}")
 
+            def _child_failed(item, child):
+                release_locks_for_operation(db, op.id)
+                if child.status == "cancelled":
+                    return cancel_operation(db, op, note="Guests already moved stay where they are.")
+                return fail_operation(
+                    db, op,
+                    error=f"migration for {vm_label(item)} did not complete (status={child.status}, "
+                          f"error={child_reason(child)}) -- {len(completed)}/{len(plan)} completed before this, "
+                          f"evacuation stopped rather than continuing past a failure",
+                )
+
+            def on_done(item):
                 completed.append(item["workload_id"])
                 op.context = {**ctx, "plan": plan, "completed_workload_ids": completed}
                 db.commit()
+
+            def check_cancel():
+                return check_cancel_requested(db, op)
+
+            outcome = run_parallel(
+                db, op, [i for i in plan if i["workload_id"] not in completed], k=parallel_k(db),
+                prepare=prepare, execute=lambda session, child_id: execute_migration(session, child_id), on_done=on_done,
+                on_failure=_child_failed, check_cancel=check_cancel, dest_of=lambda item: str(item.get("destination_node_id")),
+            )
+            if outcome is not None:
+                release_locks_for_operation(db, op.id)
+                return outcome
 
             # Opt-in stopped-VM relocations, same reconcile-before-create
             # pattern as the plan loop above but kept as its own loop
@@ -548,6 +518,8 @@ def execute_evacuation(db: Session, operation_id) -> Operation:
 
                 if child.status != "completed":
                     release_locks_for_operation(db, op.id)
+                    if child.status == "cancelled":
+                        return cancel_operation(db, op, note="Guests already moved stay where they are.")
                     return fail_operation(
                         db, op,
                         error=f"relocation for stopped {vm_label(item)} did not complete (status={child.status}, "
@@ -561,10 +533,6 @@ def execute_evacuation(db: Session, operation_id) -> Operation:
             op = enter_stage(db, op, status="verifying", stage="verifying")
 
         if op.status == "verifying":
-            remaining = [
-                item for item in plan
-                if item["workload_id"] not in completed
-            ]
             still_present = []
             for item in plan:
                 wl = db.query(Workload).filter(Workload.id == item["workload_id"]).one_or_none()

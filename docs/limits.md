@@ -23,3 +23,10 @@ There are two roles, Admin and Viewer. The server enforces them, not just the bu
 ## Reports
 
 The Reporting page exports reports as Excel or CSV on demand. There are no scheduled or emailed reports and no compliance report. Times in exports are UTC.
+
+## Stale locks, host changes and tasks
+
+- **Stale locks.** PyXie clears stale locks on **VMs only**; container (LXC) locks are not covered. The host tool clears every lock on that host that passes its checks, not only the ones previewed ([stale-locks.md](stale-locks.md)). Automatic clearing handles backup and snapshot locks only and is off by default.
+- **Host network.** PyXie stages, reloads and discards interface changes, but it refuses any change that would move the address it uses to reach the host, and it cannot roll a reload back ([host-config.md](host-config.md)).
+- **Cancel.** Only live migrations, disk moves, evacuations, maintenance runs and Balance Load plans can be cancelled ([tasks-panel.md](tasks-panel.md)).
+- **Maintenance mode does not move guests back.** Exiting it only takes the flag off ([host-lifecycle.md](host-lifecycle.md)).

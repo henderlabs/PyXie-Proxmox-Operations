@@ -55,12 +55,13 @@ def net_fields(value) -> dict:
     n = parse_net(value)
     p = n["params"]
     return {"model": n["model"], "mac": n["mac"], "bridge": p.get("bridge"), "tag": int(p["tag"]) if str(p.get("tag", "")).isdigit() else None,
-            "firewall": _truthy(p.get("firewall")), "link_down": _truthy(p.get("link_down"))}
+            "firewall": _truthy(p.get("firewall")), "link_down": _truthy(p.get("link_down")), "rate": p.get("rate") or None, "mtu": p.get("mtu") or None}
 
 
-def build_net(old: dict | None, *, model: str, bridge: str, tag: int | None, firewall: bool, mac: str | None, link_down: bool) -> str:
+def build_net(old: dict | None, *, model: str, bridge: str, tag: int | None, firewall: bool, mac: str | None, link_down: bool,
+              manage_extras: bool = False, rate: str | None = None, mtu: str | None = None) -> str:
     """The NIC line for these values: the managed keys rewritten, any other setting of the old line (rate, mtu, queues, trunks) kept. Pure."""
-    keep = {k: v for k, v in ((old or {}).get("params") or {}).items() if k not in MANAGED}
+    keep = {k: v for k, v in ((old or {}).get("params") or {}).items() if k not in MANAGED and not (manage_extras and k in ("rate", "mtu"))}
     out = [f"{model}={mac}" if mac else model, f"bridge={bridge}"]
     if tag is not None:
         out.append(f"tag={tag}")
@@ -68,6 +69,11 @@ def build_net(old: dict | None, *, model: str, bridge: str, tag: int | None, fir
         out.append("firewall=1")
     if link_down:
         out.append("link_down=1")
+    if manage_extras:  # the form manages the bandwidth limit and MTU too: a blank value removes the option
+        if rate:
+            out.append(f"rate={rate}")
+        if mtu:
+            out.append(f"mtu={mtu}")
     out += [f"{k}={v}" for k, v in keep.items()]
     return ",".join(out)
 
@@ -157,7 +163,8 @@ def check_bridge(bridge: str, tag: int | None, current_node: str, topo: dict[str
 
 
 def dry_run_nic_change(db, workload: Workload, *, action: str, net_id: str | None, model: str | None, bridge: str | None, tag: int | None,
-                       firewall: bool, mac: str | None, link_down: bool, actor: str, correlation_id=None) -> Operation:
+                       firewall: bool, mac: str | None, link_down: bool, actor: str, correlation_id=None,
+                       manage_extras: bool = False, rate: float | None = None, mtu: int | None = None) -> Operation:
     if workload.type != "vm":
         raise NicError("network device edits are only implemented for VMs (qemu), not containers")
     if action not in ("add", "edit", "remove"):
@@ -221,6 +228,23 @@ def dry_run_nic_change(db, workload: Workload, *, action: str, net_id: str | Non
         if tag is not None and not (1 <= int(tag) <= 4094):
             reasons.append("a VLAN tag is a number from 1 to 4094 (leave it empty for untagged)")
             blocking.append("SAFE-NIC-001")
+        rate_s = mtu_s = None
+        if manage_extras:
+            if rate is not None:
+                if rate < 0 or rate > 10_000_000:
+                    reasons.append("the bandwidth limit is a number of MB/s from 0 (no limit) up; leave it empty for none")
+                    blocking.append("SAFE-NIC-001")
+                elif rate > 0:
+                    rate_s = str(int(rate)) if rate == int(rate) else str(rate)
+            if mtu is not None:
+                if model != "virtio":
+                    reasons.append("a custom MTU is only supported on virtio network devices")
+                    blocking.append("SAFE-NIC-001")
+                elif not (1 <= int(mtu) <= 65520):
+                    reasons.append("an MTU is a number from 1 to 65520 (1 means: use the bridge's MTU)")
+                    blocking.append("SAFE-NIC-001")
+                else:
+                    mtu_s = str(int(mtu))
         if action == "edit" and mac is None:
             mac = old_fields.get("mac")
         if mac:
@@ -244,12 +268,14 @@ def dry_run_nic_change(db, workload: Workload, *, action: str, net_id: str | Non
                 blocking.append("SAFE-NIC-001")
             reasons.extend(warns)
             new_fields = {"model": model, "bridge": bridge, "tag": int(tag) if tag is not None else None, "firewall": bool(firewall), "link_down": bool(link_down), "mac": mac}
-            new_line = build_net(parse_net(old_line) if old_line else None, model=model, bridge=bridge, tag=new_fields["tag"], firewall=new_fields["firewall"], mac=mac, link_down=new_fields["link_down"])
+            if manage_extras:
+                new_fields["rate"], new_fields["mtu"] = rate_s, mtu_s
+            new_line = build_net(parse_net(old_line) if old_line else None, model=model, bridge=bridge, tag=new_fields["tag"], firewall=new_fields["firewall"], mac=mac, link_down=new_fields["link_down"], manage_extras=manage_extras, rate=rate_s, mtu=mtu_s)
             ctx["expected"] = new_fields
             if action == "add":
                 reasons.append(f"a new {model} network device {net_id} on {bridge}" + (f", VLAN {tag}" if tag is not None else ", untagged") + (f", MAC {mac.upper()}" if mac else ", MAC chosen by Proxmox") + (": hot-plugged into the running VM" if was_running else ""))
             else:
-                changes = [f"{k}: {old_fields.get(k) if old_fields.get(k) not in (None, False) else '-'} -> {new_fields[k] if new_fields[k] not in (None, False) else '-'}" for k in ("model", "bridge", "tag", "firewall", "link_down", "mac") if (old_fields.get(k) or None) != (new_fields[k] or None) and not (k in ("firewall", "link_down") and bool(old_fields.get(k)) == bool(new_fields[k]))]
+                changes = [f"{k}: {old_fields.get(k) if old_fields.get(k) not in (None, False) else '-'} -> {new_fields[k] if new_fields[k] not in (None, False) else '-'}" for k in ("model", "bridge", "tag", "firewall", "link_down", "mac") + (("rate", "mtu") if manage_extras else ()) if (old_fields.get(k) or None) != (new_fields[k] or None) and not (k in ("firewall", "link_down") and bool(old_fields.get(k)) == bool(new_fields[k]))]
                 if not changes:
                     reasons.append("nothing to change: this device already has exactly these settings")
                     blocking.append("SAFE-NIC-001")
@@ -338,7 +364,7 @@ def execute_nic_change(db, operation_id) -> Operation:
                 if not got:
                     problems.append(f"{net_id} is not present after the change")
                 else:
-                    for k in ("model", "bridge", "tag", "firewall", "link_down"):
+                    for k in ("model", "bridge", "tag", "firewall", "link_down") + tuple(k for k in ("rate", "mtu") if k in want):
                         if f.get(k) != want.get(k) and (f.get(k) or None) != (want.get(k) or None):
                             problems.append(f"{k} is {f.get(k)}, expected {want.get(k)}")
                     if want.get("mac") and (f.get("mac") or "").lower() != want["mac"].lower():

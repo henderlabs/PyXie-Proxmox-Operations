@@ -1,3 +1,21 @@
 # Caddy's own local CA signs the cert (self-signed from a browser's view).
-# Export the root to trust it: see docs/docker-caddy.md.
-tls internal
+#
+# The leaf certificate's lifetime is PYXIE_INTERNAL_CERT_LIFETIME (default 72h). Caddy's own default is 12h, which renews about every 8 hours and
+# makes browsers re-warn all day; 72h keeps renewals to every couple of days. Keep it at 168h (7 days) or less: the local intermediate CA
+# itself lives 7 days.
+#
+# Trust the root once and the warning goes away for good: the public root certificate (never the key) is served at /pyxie-ca/root.crt on this
+# host. Per-OS steps are in docs/docker-caddy.md.
+tls {
+	issuer internal {
+		lifetime {$PYXIE_INTERNAL_CERT_LIFETIME:72h}
+	}
+}
+
+handle /pyxie-ca/root.crt {
+	rewrite * /root.crt
+	root * /data/caddy/pki/authorities/local
+	header Content-Type application/x-x509-ca-cert
+	header Content-Disposition `attachment; filename="pyxie-caddy-root.crt"`
+	file_server
+}

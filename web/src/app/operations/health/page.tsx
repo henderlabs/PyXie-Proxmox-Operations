@@ -3,6 +3,7 @@ import type { Finding } from "@/lib/api";
 import { Card, EmptyState, PageHeader } from "@/components/Card";
 import FindingList from "@/components/FindingList";
 import { HealthIcon } from "@/components/Icons";
+import QueueTiles from "@/components/QueueTiles";
 
 type View = "active" | "acknowledged" | "dismissed" | "resolved";
 
@@ -39,6 +40,7 @@ export default async function HealthPage({ searchParams }: { searchParams: { vie
   return (
     <div>
       <PageHeader title="Health" subtitle="Read-only findings, not recommendations" icon={<HealthIcon className="w-5 h-5" />} />
+      <QueueTiles />
       <div className="flex gap-2 mb-4 text-sm flex-wrap">
         {chips.map((c) => (
           <a key={c.key} href={c.key === "active" ? "/operations/health" : `/operations/health?view=${c.key}`}

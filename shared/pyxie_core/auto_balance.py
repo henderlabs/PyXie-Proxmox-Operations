@@ -190,12 +190,13 @@ def _stop_if_last_failed(db: Session, cluster: Cluster, cfg: dict, state: dict, 
 def _nodes_busy(db: Session, node_ids: set, now) -> bool:
     if not node_ids:
         return False
+    from .slots import active_slots_on_node
     return (
         db.query(ResourceLock)
         .filter(ResourceLock.resource_type == "node", ResourceLock.resource_id.in_(list(node_ids)),
                 ResourceLock.released_at.is_(None), ResourceLock.expires_at > now)
         .count() > 0
-    )
+    ) or any(active_slots_on_node(db, n) for n in node_ids)  # moves in flight (capacity slots) count as busy too
 
 
 def evaluate_cluster(db: Session, cluster: Cluster, *, now=None, enqueue=None) -> dict:

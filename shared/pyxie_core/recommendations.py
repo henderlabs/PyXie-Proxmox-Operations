@@ -544,7 +544,7 @@ def _placement_recommendations(
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],

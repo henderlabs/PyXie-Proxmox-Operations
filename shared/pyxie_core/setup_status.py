@@ -100,10 +100,12 @@ def build_steps(inp: dict) -> list[dict]:
          "state": "done" if key_done else ("waiting" if not cluster_ok else "todo"),
          "detail": "Done." if key_done else "PyXie creates an SSH key pair; the host script carries only its public half.",
          "action": None if key_done or not cluster_ok else {"kind": "generate_keypair", "target_id": missing_key[0]["id"] if missing_key else None, "label": "Generate the key pair"}},
-        {"key": "script", "label": "Run the host script on every node",
+        {"key": "script", "label": "Install or update the maintenance wrapper on every host",
          "state": "done" if wrap_done else ("waiting" if not key_done else "todo"),
-         "detail": f"{wrapper_ok} of {n_nodes} nodes have the current wrapper." if key_done else "Needs the key pair first.",
-         "action": None if wrap_done or not key_done else {"kind": "href", "href": "/platform/credentials#builder-host", "label": "Open the host wrapper builder (Credentials)"}},
+         "detail": (f"{wrapper_ok} of {n_nodes} hosts have the current version. You paste one line in each host's shell." if any(n.get("wrapper_version") for n in nodes)
+                    else f"{wrapper_ok} of {n_nodes} hosts have it. You paste one line in each host's shell.") if key_done else "Needs the key pair first.",
+         "action": None if wrap_done or not key_done else {"kind": "wrapper_update", "target_id": next((n.get("target_id") for n in nodes if not n.get("wrapper_version") or host_kit.is_outdated(n.get("wrapper_version"), expected)), None),
+                                                          "label": "Update the hosts…" if any(n.get("wrapper_version") for n in nodes) else "Install on the hosts…"}},
         {"key": "pin", "label": "Pin each node's SSH host key (compare the fingerprint)",
          "state": "done" if pin_done else ("waiting" if not key_done else "todo"),
          "detail": f"{pinned} of {n_nodes} nodes pinned." if key_done else "Needs the key pair first.",
@@ -126,12 +128,15 @@ def build_steps(inp: dict) -> list[dict]:
     if pbs:
         got = [x for x in pbs if x.get("has_inventory")]
         full = [x for x in pbs if x.get("has_inventory") and x.get("has_admin") and x.get("ssh_ready")]
-        add("pbs", "Connect a backup server (optional)", "done" if got else "optional",
-            f"{len(got)} of {len(pbs)} backup server(s) readable; {len(full)} fully connected (read token, admin token for job edits, SSH for patching)."
+        old = [x for x in pbs if x.get("wrapper_outdated")]
+        add("pbs", "Connect a backup server (optional)", "todo" if old else ("done" if got else "optional"),
+            (f"{len(old)} backup server(s) have an older maintenance wrapper ({', '.join(x['name'] for x in old)}). Update it so PyXie can patch and restart it with the current helper." if old else
+             f"{len(got)} of {len(pbs)} backup server(s) readable; {len(full)} fully connected (read token, admin token for job edits, SSH for patching).")
             if got else "Added, but its read token is not saved yet.",
             items=[{"name": x["name"], "ok": bool(x.get("has_inventory")), "detail": ("read ok" if x.get("has_inventory") else "no read token")
                     + (", admin token" if x.get("has_admin") else ", no admin token") + (", patching ready" if x.get("ssh_ready") else ", patching not set up")} for x in pbs],
-            action={"label": "Open the backup server setup (Credentials)", "href": "/platform/credentials#pbs"})
+            action=({"kind": "pbs_wrapper_update", "target_id": old[0].get("id"), "name": old[0]["name"], "label": "Update the backup server…"} if old
+                    else {"label": "Open the backup server setup (Credentials)", "href": "/platform/credentials#pbs"}))
     else:
         add("pbs", "Connect a backup server (optional)", "optional",
             "Only if you use Proxmox Backup Server: adds the 3-2-1 scorecard, backup job editing and patching. Skip it otherwise.",

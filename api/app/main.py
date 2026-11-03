@@ -36,6 +36,7 @@ from .routers import (
     reports,
     system_updates,
     workload_detail,
+    workers,
     defaults,
     vm_create,
     iso_library,
@@ -99,6 +100,7 @@ app.include_router(inventory.router)
 app.include_router(providers.router)
 app.include_router(audit.router)
 app.include_router(findings.router)
+app.include_router(workers.router)
 app.include_router(recommendations.router)
 app.include_router(reports.router)
 app.include_router(metrics.router)
