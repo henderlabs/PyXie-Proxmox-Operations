@@ -8,14 +8,39 @@ import { formatBytes } from "@/lib/format";
 import NodeWorkloadsTable from "@/components/tables/NodeWorkloadsTable";
 import StatusBadge from "@/components/StatusBadge";
 import { ServerIcon, WrenchIcon } from "@/components/Icons";
+import RemoveHostButton from "@/components/RemoveHostButton";
+import NodeConfig from "@/components/NodeConfig";
+import HostPower from "@/components/HostPower";
+import WrapperPanel from "@/components/WrapperPanel";
+import type { PolicyRow, StorageItem } from "@/lib/api";
 
-export default async function NodeDetailPage({ params }: { params: { id: string } }) {
+export default async function NodeDetailPage({ params, searchParams }: { params: { id: string }; searchParams?: { tab?: string; wrapper?: string } }) {
+  const tab = searchParams?.tab === "config" ? "config" : "overview";
   const [node, workloads, tasks, hostMaintenance] = await Promise.all([
     apiFetch<Node>(`/api/nodes/${params.id}`),
     apiFetch<Workload[]>(`/api/nodes/${params.id}/workloads`),
     apiFetch<PveTask[]>(`/api/nodes/${params.id}/tasks`),
     apiFetch<HostMaintenanceStatus>(`/api/nodes/${params.id}/host-maintenance-status`).catch(() => null),
   ]);
+
+  let pyxie: React.ComponentProps<typeof NodeConfig>["pyxie"] | null = null;
+  if (tab === "config") {
+    const [suggestions, policies, storage] = await Promise.all([
+      apiFetch<Record<string, { current_performance_tier: string; current_trust_tier: string; current_notes: string }>>("/api/placement/node-tier-suggestions").catch(() => ({})),
+      apiFetch<PolicyRow[]>("/api/policies?scope_type=node").catch(() => [] as PolicyRow[]),
+      apiFetch<StorageItem[]>("/api/storage").catch(() => [] as StorageItem[]),
+    ]);
+    const sug = (suggestions as Record<string, { current_performance_tier: string; current_trust_tier: string; current_notes: string }>)[params.id];
+    const locals = storage.filter((x) => x.scope === "node-local" && x.node_id === params.id);
+    const shared = storage.filter((x) => x.scope === "cluster-shared" && x.cluster_id === node.cluster_id);
+    pyxie = {
+      nodeId: params.id, avoid: !!node.avoid_as_destination,
+      tiers: { performance: sug?.current_performance_tier || "standard", trust: sug?.current_trust_tier || "standard" }, notes: sug?.current_notes || "",
+      storageOptions: [...locals, ...shared].map((x) => ({ id: x.id, name: x.name, scope: x.scope })),
+      defaultStorage: (policies.find((p) => p.key === "placement.default_storage_id" && p.scope_id === params.id)?.value as string | null) || null,
+      autoResolvesTo: locals[0]?.name,
+    };
+  }
 
   return (
     <div className="contents">
@@ -41,6 +66,49 @@ export default async function NodeDetailPage({ params }: { params: { id: string 
       />
 
       <div className="col-span-2 min-w-0">
+      <div className="flex gap-4 border-b border-border mb-3 text-sm">
+        <Link href={`/infrastructure/nodes/${params.id}`} className={`pb-1.5 ${tab === "overview" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Overview</Link>
+        <Link href={`/infrastructure/nodes/${params.id}?tab=config`} className={`pb-1.5 ${tab === "config" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Config</Link>
+      </div>
+      {tab === "config" && pyxie ? (
+        <NodeConfig nodeId={params.id} nodeName={node.name} pyxie={pyxie} />
+      ) : (
+      <>
+      {!node.is_missing && <div className="mb-3"><WrapperPanel nodeId={node.id} nodeName={node.name} initiallyOpen={searchParams?.wrapper === "1"} /></div>}
+      {!node.is_missing && <div className="mb-3"><HostPower nodeId={node.id} nodeName={node.name} inMaintenance={!!node.maintenance_mode} /></div>}
+      {(node.maintenance_mode || node.is_missing) && (
+        <Card className="mb-4">
+          <CardTitle>Decommission {node.name}</CardTitle>
+          {(() => {
+            const left = workloads.filter((w) => !w.is_missing).length;
+            const steps: { done: boolean; label: React.ReactNode }[] = [
+              { done: left === 0, label: left === 0 ? "Evacuate: no workloads are left on this host." : `Evacuate: ${left} workload${left === 1 ? " is" : "s are"} still on this host (use Evacuate / Maint Mode).` },
+              {
+                done: node.is_missing,
+                label: node.is_missing
+                  ? "Leave the cluster: PVE no longer lists this host."
+                  : <>Leave the cluster: PVE still lists it. Power it off, then run <code>pvecm delnode {node.name}</code> on a remaining node (PyXie does not run this for you; it needs quorum).</>,
+              },
+            ];
+            return (
+              <ol className="text-sm space-y-1.5 list-decimal ml-5">
+                {steps.map((st, i) => (
+                  <li key={i}>
+                    <span className={`text-[10px] font-semibold uppercase tracking-wide mr-2 ${st.done ? "text-good" : "text-warn"}`}>{st.done ? "Done" : "Next"}</span>
+                    {st.label}
+                  </li>
+                ))}
+                <li>
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide mr-2 ${node.is_missing ? "text-warn" : "text-muted"}`}>{node.is_missing ? "Next" : "Waiting"}</span>
+                  Remove it from PyXie.{" "}
+                  <RemoveHostButton nodeId={node.id} nodeName={node.name} stillMember={!node.is_missing} redirectTo="/infrastructure/nodes" />
+                </li>
+              </ol>
+            );
+          })()}
+        </Card>
+      )}
+
       <Card className="mb-4">
         <CardTitle>Recent Tasks</CardTitle>
         <div className="space-y-1 text-sm">
@@ -65,6 +133,8 @@ export default async function NodeDetailPage({ params }: { params: { id: string 
         <CardTitle>Workloads</CardTitle>
         <NodeWorkloadsTable workloads={workloads} />
       </Card>
+      </>
+      )}
       </div>
     </div>
   );

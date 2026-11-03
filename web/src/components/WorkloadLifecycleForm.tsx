@@ -14,6 +14,19 @@ import { useMe } from "@/lib/useMe";
 type WorkloadMetric = { cpu_pct?: number; mem_pct?: number; mem_source?: "guest" | "host" };
 type WorkloadStorage = { name: string; scope: string | null };
 
+type BulkReviewItem = {
+  workload_id: string; vmid: number; name: string | null; power?: string;
+  destination_node_id: string; destination_node: string; destination_storage_id: string | null;
+  current_storage: string | null; currently_on_shared: boolean; transport: string;
+  candidates: { node_id: string; node_name: string; blocked: boolean; blocking_reasons: string[] }[];
+  storage_options: { id: string; name: string; scope: string; free_bytes: number | null }[];
+  has_tpm?: boolean; tpm_storage?: string;
+};
+type BulkReviewSkipped = { workload_id: string; vmid: number | null; name: string | null; locked?: string; reasons: string[] };
+type BulkBlocker = { id: string; status: string; kind: string; created_by: string | null; created_at: string | null; workloads: number };
+type BulkReview = { blocker: BulkBlocker | null; migrate_plan: BulkReviewItem[]; skipped_workloads: BulkReviewSkipped[]; error?: string };
+type BulkChoice = { destination_node_id?: string; destination_storage_id?: string };
+
 type RecommendCandidate = {
   node_id: string;
   node_name: string;
@@ -125,6 +138,64 @@ export default function WorkloadLifecycleForm({
   const [bulkOp, setBulkOp] = useOperationPolling(null);
   const [bulkPending, setBulkPending] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
+  // Review step: what the plan WOULD be, fetched read-only (no operation exists yet), plus the operator's per-VM picks.
+  const [bulkReview, setBulkReview] = useState<BulkReview | null>(null);
+  const [bulkReviewLoading, setBulkReviewLoading] = useState(false);
+  const [bulkChoices, setBulkChoices] = useState<Record<string, BulkChoice>>({});
+  const [bulkReviewTick, setBulkReviewTick] = useState(0);
+
+  useEffect(() => {
+    if (bulkIds.size === 0) {
+      setBulkReview(null);
+      setBulkChoices({});
+      return;
+    }
+    let cancelled = false;
+    setBulkReviewLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/operations/cluster-rebalance/bulk-review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workload_ids: Array.from(bulkIds), destination_node_id: bulkDestId || null }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setBulkReview({ blocker: null, migrate_plan: [], skipped_workloads: [], error: data.error || "Could not review the selection" });
+        } else {
+          setBulkReview(data as BulkReview);
+        }
+        setBulkChoices({});
+      } catch (e) {
+        if (!cancelled) setBulkReview({ blocker: null, migrate_plan: [], skipped_workloads: [], error: (e as Error).message });
+      } finally {
+        if (!cancelled) setBulkReviewLoading(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [bulkIds, bulkDestId, bulkReviewTick]);
+
+  function setBulkChoice(id: string, patch: BulkChoice) {
+    setBulkChoices((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }
+
+  async function dismissBlocker(opId: string) {
+    setBulkError(null);
+    const res = await fetch(`/api/operations/${opId}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setBulkError(data.error || "Could not dismiss it");
+      return;
+    }
+    notifyOperationsChanged();
+    setBulkReviewTick((n) => n + 1);
+  }
+
+  const gbFree = (b: number | null) => (b == null ? "" : `, ${Math.round(b / 1024 ** 3)} GB free`);
 
   function toggleBulk(id: string) {
     setBulkIds((prev) => {
@@ -143,7 +214,7 @@ export default function WorkloadLifecycleForm({
       const res = await fetch("/api/operations/cluster-rebalance/dry-run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workload_ids: Array.from(bulkIds), destination_node_id: bulkDestId || null }),
+        body: JSON.stringify({ workload_ids: Array.from(bulkIds), destination_node_id: bulkDestId || null, choices: bulkChoices }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -242,7 +313,9 @@ export default function WorkloadLifecycleForm({
         setRecommendation(data.candidates || []);
         if (data.top_pick) {
           setDestNodeId(data.top_pick.node_id);
-          setDestStorageId(data.top_pick.recommended_storage?.id || "");
+          // Disks already on shared storage stay there by default (no copy); only local-disk guests get a recommended pool.
+          const onShared = currentStorageByWorkload[workloadId]?.scope === "cluster-shared";
+          setDestStorageId(onShared ? "" : data.top_pick.recommended_storage?.id || "");
         }
       })
       .finally(() => {
@@ -469,13 +542,111 @@ export default function WorkloadLifecycleForm({
               ))}
             </select>
           </div>
+          <div className="w-full space-y-2">
+            {bulkReviewLoading && !bulkReview && <div className="text-xs text-muted">Checking the selection…</div>}
+            {bulkReview?.blocker && (
+              <div className="border border-warn bg-warn/10 rounded p-2 text-sm">
+                <span className="font-medium">
+                  {bulkReview.blocker.kind} is already {bulkReview.blocker.status.replace(/_/g, " ")}
+                </span>
+                <span className="text-xs text-muted">
+                  {" "}· {bulkReview.blocker.workloads} workload{bulkReview.blocker.workloads === 1 ? "" : "s"}
+                  {bulkReview.blocker.created_by ? ` · created by ${bulkReview.blocker.created_by}` : ""}
+                </span>
+                <div className="text-xs mt-1">
+                  Only one Balance Load or Bulk Migrate can be open at a time. Open it in the Tasks panel
+                  {bulkReview.blocker.status === "awaiting_approval" && (
+                    <>
+                      {" "}or{" "}
+                      <button type="button" className="underline text-accent" onClick={() => dismissBlocker(bulkReview.blocker!.id)}>
+                        dismiss it
+                      </button>{" "}
+                      (dismissing only removes the plan; nothing has moved)
+                    </>
+                  )}
+                  .
+                </div>
+              </div>
+            )}
+            {bulkReview?.error && <div className="text-sm text-bad">{bulkReview.error}</div>}
+            {bulkReview && bulkReview.migrate_plan.length + bulkReview.skipped_workloads.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-muted">
+                      <th className="pr-3 py-1">VM</th><th className="pr-3">From → To</th><th className="pr-3">Storage</th><th>Check</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bulkReview.migrate_plan.map((it) => {
+                      const ch = bulkChoices[it.workload_id] || {};
+                      const destId = ch.destination_node_id || it.destination_node_id;
+                      const stor = ch.destination_storage_id || it.destination_storage_id || "";
+                      const chosenName = it.storage_options.find((o) => o.id === stor)?.name;
+                      const tpmWarn = it.has_tpm && it.power === "running" && !!chosenName && chosenName !== it.tpm_storage;
+                      return (
+                        <tr key={it.workload_id} className="border-t border-border align-top">
+                          <td className="pr-3 py-1">{it.name || `vmid ${it.vmid}`} <span className="text-xs text-muted">{it.power}</span></td>
+                          <td className="pr-3">
+                            <span className="text-xs text-muted">{nodeNameById[workloads.find((w) => w.id === it.workload_id)?.node_id || ""] || "?"} → </span>
+                            <select
+                              className="bg-surface2 border border-border rounded px-1 py-0.5 text-xs"
+                              value={destId}
+                              onChange={(e) => setBulkChoice(it.workload_id, { destination_node_id: e.target.value, destination_storage_id: undefined })}
+                            >
+                              {it.candidates.map((c) => (
+                                <option key={c.node_id} value={c.node_id}>{c.node_name}{c.blocked ? " (blocked)" : ""}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="pr-3">
+                            <select
+                              className="bg-surface2 border border-border rounded px-1 py-0.5 text-xs"
+                              value={stor}
+                              disabled={!!ch.destination_node_id && ch.destination_node_id !== it.destination_node_id}
+                              title={ch.destination_node_id && ch.destination_node_id !== it.destination_node_id ? "Storage options refresh after the plan is created; the recommended one is used." : undefined}
+                              onChange={(e) => setBulkChoice(it.workload_id, { destination_storage_id: e.target.value })}
+                            >
+                              {it.storage_options.map((o) => (
+                                <option key={o.id} value={o.id}>
+                                  {o.name} ({o.scope === "cluster-shared" ? "shared" : "local"}{gbFree(o.free_bytes)})
+                                </option>
+                              ))}
+                            </select>
+                            {it.current_storage && <div className="text-[10px] text-muted">now on {it.current_storage}{it.currently_on_shared ? " (shared)" : " (local)"}</div>}
+                          </td>
+                          <td className="text-xs">
+                            {tpmWarn ? (
+                              <span className="text-warn" title="Proxmox cannot move a TPM disk while the VM is running">TPM disk stays on {it.tpm_storage}: Proxmox cannot move it while running</span>
+                            ) : (
+                              <span className="text-good">{it.transport === "live" ? "live move" : "offline move"}</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {bulkReview.skipped_workloads.map((sk) => (
+                      <tr key={sk.workload_id} className="border-t border-border opacity-70">
+                        <td className="pr-3 py-1">{sk.name || sk.workload_id}</td>
+                        <td colSpan={2} className="text-xs text-muted">not in the plan</td>
+                        <td className="text-xs text-bad">
+                          {sk.locked ? `Locked: ${sk.locked}` : sk.reasons[0]}
+                          {sk.locked && <div className="text-muted">Clear the lock in Proxmox, then re-select it.</div>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
           <button
             onClick={runBulkPreview}
-            disabled={bulkPending}
-            title="Builds one reviewable line per selected VM -- nothing moves until you review and approve it."
+            disabled={bulkPending || bulkReviewLoading || !!bulkReview?.blocker || !bulkReview || bulkReview.migrate_plan.length === 0}
+            title="Builds the editable plan from the choices above -- nothing moves until you review and approve it."
             className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50"
           >
-            {bulkPending ? "Planning…" : "Preview Bulk Migrate"}
+            {bulkPending ? "Planning…" : `Create plan for ${bulkReview?.migrate_plan.length ?? 0} VM${bulkReview?.migrate_plan.length === 1 ? "" : "s"}`}
           </button>
           {bulkError && <div className="w-full text-sm text-bad">{bulkError}</div>}
         </div>
@@ -565,6 +736,12 @@ export default function WorkloadLifecycleForm({
                 ))}
               </select>
             </div>
+            {workload?.status === "stopped" && (
+              <p className="text-xs text-muted w-full">
+                <span className="text-text font-medium">Offline migration</span>: this VM is stopped, so Proxmox simply re-registers it on the destination
+                (nothing runs). Disks on shared storage are not copied; a local disk is copied to the storage you pick.
+              </p>
+            )}
           </>
         )}
         <button

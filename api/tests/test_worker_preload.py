@@ -45,3 +45,9 @@ def test_the_modules_the_threads_and_jobs_import_are_in_the_list():
     wanted = (thread_imports | job_imports) - top_level
     assert wanted <= listed, sorted(wanted - listed)
     assert "worker.jobs" in listed
+
+
+def test_preload_builds_http_clients_so_httpcore_is_not_imported_lazily_in_a_job():
+    # httpx.Client(...) does  inside HTTPTransport.__init__; a thread doing that while RQ forks left the lock held (py-spy, 2026-11-02)
+    body = MAIN.read_text()[MAIN.read_text().index("def _preload():"):]
+    assert "httpx.Client(" in body

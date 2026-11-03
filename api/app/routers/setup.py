@@ -50,7 +50,8 @@ def _inputs(db: Session) -> dict:
     for pt in db.query(ProtectionTarget).order_by(ProtectionTarget.name).all():
         slots = {c.slot_name for c in db.query(ProtectionCredential).filter(ProtectionCredential.protection_target_id == pt.id).all()}
         pbs.append({"name": pt.name, "has_inventory": "inventory" in slots, "has_admin": "administrative" in slots,
-                    "ssh_ready": bool(pt.ssh_host_key_base64) and bool(pt.wrapper_version)})
+                    "ssh_ready": bool(pt.ssh_host_key_base64) and bool(pt.wrapper_version), "id": str(pt.id),
+                    "wrapper_outdated": bool(pt.wrapper_version) and host_kit.is_outdated(pt.wrapper_version, _expected_wrapper())})
     return {
         "pbs": pbs,
         "sites": db.query(Site).count(),
@@ -170,11 +171,11 @@ def run_check(db: Session = Depends(get_db)):
         g = f"Host {n.name}"
         if not st.get("provisioned"):
             why = st.get("error") or ("SSH host key not pinned" if not st.get("host_key_pinned") else "wrapper not installed or not reachable")
-            out.append(_chk(g, "Host wrapper", "warn", f"Not connected: {why}.", "Run the host script from the builder on this node, then pin its SSH host key."))
+            out.append(_chk(g, "Host wrapper", "warn", f"Not connected: {why}.", "Install the maintenance wrapper on that host (Setup guide, Connect each host: paste the one line), then trust its SSH fingerprint."))
         elif not st.get("reachable"):
             out.append(_chk(g, "Host wrapper", "fail", f"Not reachable: {st.get('error') or 'no answer'}.", "Check SSH to the node and that the wrapper is installed."))
         elif host_kit.is_outdated(st.get("wrapper_version"), expected):
-            out.append(_chk(g, "Host wrapper", "warn", f"Version {st.get('wrapper_version')}; {expected} is available. Updates work; live host output needs the new one.", "Run the host script from the builder on this node."))
+            out.append(_chk(g, "Host wrapper", "warn", f"Version {st.get('wrapper_version')}; {expected} is available. Updates work; live host output needs the new one.", "Update the maintenance wrapper on that host (Setup guide, Connect each host: paste the one line)."))
         else:
             out.append(_chk(g, "Host wrapper", "ok", f"Version {st.get('wrapper_version')}, reachable, host key pinned."))
 

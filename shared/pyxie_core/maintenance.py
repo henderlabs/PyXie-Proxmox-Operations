@@ -115,7 +115,7 @@ def flag_onboot(item: dict, config: dict | None) -> dict:
     return {**item, "starts_on_boot": True, "reasons": [reason, *(item.get("reasons") or [])]}
 
 
-def vm_lock_reason(vmid, config: dict | None) -> str | None:
+def vm_lock_reason(vmid, config: dict | None, state: str | None = None, age: str | None = None) -> str | None:
     """Why a VM that PVE has LOCKED cannot be migrated, or None if it is not locked.
 
     PVE refuses to migrate a locked VM, so a plan that includes one fails partway
@@ -126,6 +126,13 @@ def vm_lock_reason(vmid, config: dict | None) -> str | None:
     if not lock:
         return None
     base = f"VM is locked ({lock}) -- PVE refuses to migrate a locked VM"
+    if state == "stale":
+        return (
+            f"STALE LOCK: this VM has had a {lock} lock for {age or 'a while'} and no task is running for it on any node, so the lock is "
+            f"left over. Run `qm unlock {vmid}` on its node (or use Clear stale lock on the Health page), then preview again."
+        )
+    if state == "active":
+        return f"{base}. A task for this VM is running right now: wait for it to finish, then preview again. (Never clear a lock while its task is running.)"
     if lock == "backup":
         return f"{base}. A backup is running: wait for it to finish, then preview again."
     if lock in ("snapshot", "snapshot-delete", "rollback"):
@@ -287,7 +294,7 @@ def check_cpu_compatibility(client, source_node: str, target_node: str, wl: Work
         source_info = (client.node_status(source_node) or {}).get("cpuinfo", {})
         target_info = (client.node_status(target_node) or {}).get("cpuinfo", {})
     except Exception:
-        return [f"VM is configured with cpu=host and node CPU info could not be read to compare -- treat as unverified"]
+        return ["VM is configured with cpu=host and node CPU info could not be read to compare -- treat as unverified"]
 
     source_model = source_info.get("model")
     target_model = target_info.get("model")
@@ -411,7 +418,7 @@ def generate_plan(db: Session, node: Node, actor: str = "user") -> MaintenancePl
                 blocking_rules.append("SAFE-DOWNTIME-001")
                 reasons.append(
                     "workload is tagged downtime_tolerance='low' (cannot tolerate downtime) but this maintenance "
-                    f"action would require it -- flagged for explicit review, not a routine warning"
+                    "action would require it -- flagged for explicit review, not a routine warning"
                 )
 
             classification_counts[classification] += 1

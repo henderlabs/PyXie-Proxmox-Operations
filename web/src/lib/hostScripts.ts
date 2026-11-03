@@ -155,3 +155,9 @@ export function hostScript(o: { origin: string; link: Link; mode: "install" | "u
     "",
   ].join("\n");
 }
+
+
+/** The same install/upgrade as hostScript(), as ONE line to paste in a root shell: download from this PyXie, refuse to run unless the file matches the fingerprint printed in the line, run it, clean up. */
+export function hostOneLiner(o: { origin: string; link: Link; insecure: boolean }): string {
+  return `F=$(mktemp) && curl -fsS${o.insecure ? "k" : ""} -o "$F" '${o.origin}${o.link.path}' && echo "${o.link.sha256}  $F" | sha256sum -c - && bash "$F"; rm -f "$F"`;
+}

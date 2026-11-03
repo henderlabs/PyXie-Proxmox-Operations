@@ -21,13 +21,36 @@
   "path": "/operations/affinity-rules"
  },
  {
+  "name": "workloads",
+  "path": "/infrastructure/workloads"
+ },
+ {
+  "name": "cluster-left",
+  "path": "/infrastructure/nodes",
+  "run": "(()=>{const a=[...document.querySelectorAll('a')].find(x=>x.textContent.trim()==='example-cluster');a&&a.click();return new Promise(r=>setTimeout(r,2500)).then(()=>{const h=[...document.querySelectorAll('div,h2,h3')].find(x=>x.children.length===0&&/^left the cluster$/i.test(x.textContent.trim()));h&&h.scrollIntoView({block:'center'});});})()",
+  "runWait": 6000
+ },
+ {
+  "name": "host-left-the-cluster",
+  "path": "/infrastructure/nodes/{node:node-e}",
+  "wait": 7000
+ },
+ {
+  "name": "host-config",
+  "path": "/infrastructure/nodes/{node:node-a}?tab=config",
+  "run": "(()=>{const h=[...document.querySelectorAll('*')].find(x=>x.children.length===0&&/^Node options$/i.test(x.textContent.trim()));h&&h.scrollIntoView({block:'start'});window.scrollBy(0,-90);return new Promise(r=>setTimeout(r,1500));})()",
+  "runWait": 2500,
+  "wait": 7000
+ },
+ {
   "name": "balance-load",
   "path": "/operations/balance",
   "run": "[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='Select heavy nodes').click();new Promise(r=>setTimeout(r,1500)).then(()=>[...document.querySelectorAll('button')].find(b=>b.textContent.includes('Preview Balance Load')).click())",
   "runWait": 9000
  },
  {
-  "name": "workloads",
-  "path": "/infrastructure/workloads"
+  "name": "tasks-panel",
+  "path": "/infrastructure/workloads",
+  "clip": "(()=>{const w=window.innerWidth;return {x:w-320,y:0,width:320,height:Math.min(window.innerHeight,900)};})()"
  }
 ]

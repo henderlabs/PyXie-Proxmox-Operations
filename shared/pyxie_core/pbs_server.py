@@ -67,6 +67,31 @@ def _safe(fn, default):
         return default
 
 
+_RUN_KINDS = {
+    "backup": ("backup",),
+    "verify": ("verify", "verificationjob", "verify_group", "verify_snapshot"),
+    "gc": ("garbage_collection", "gc"),
+}
+
+
+def last_runs(tasks: list[dict] | None) -> dict | None:
+    """The newest finished backup, verify and garbage collection from a PBS task list: {kind: {end, ok}} (kinds never seen are left out). Pure.
+    A task that ended with warnings counts as ok; None when the task list could not be read."""
+    if tasks is None:
+        return None
+    out: dict = {}
+    for t in tasks:
+        end = t.get("endtime")
+        if not end:
+            continue
+        kind = next((k for k, types in _RUN_KINDS.items() if t.get("worker_type") in types), None)
+        if kind is None or (kind in out and out[kind]["end"] >= end):
+            continue
+        status = str(t.get("status") or "")
+        out[kind] = {"end": end, "ok": status == "OK" or status.startswith("WARNINGS")}
+    return out
+
+
 def collect_status(client: PbsClient, at: float | None = None) -> dict:
     """One read-only pass over a PBS server. Anything the token cannot read comes back as None, not an error."""
     ver = _safe(client.version, {}) or {}
@@ -77,6 +102,7 @@ def collect_status(client: PbsClient, at: float | None = None) -> dict:
     since = int((at or now().timestamp()) - 86400)
     failed = _safe(lambda: client.tasks(errors=True, limit=50, since=since), None)
     usage = _safe(client.datastore_usage, None)
+    recent = _safe(lambda: client.tasks(limit=300), None)
     versions = _safe(lambda: client.apt_versions(), None)
     mem, root = st.get("memory") or {}, st.get("root") or {}
     return {
@@ -92,6 +118,7 @@ def collect_status(client: PbsClient, at: float | None = None) -> dict:
             "packages": [{"package": u.get("Package"), "current_version": u.get("OldVersion"), "new_version": u.get("Version")} for u in updates[:200]],
         },
         "subscription": sub.get("status"),
+        "last_runs": last_runs(recent),
         "tasks_running": None if running is None else [{"type": t.get("worker_type"), "id": t.get("worker_id"), "start": t.get("starttime")} for t in running],
         "tasks_failed_24h": None if failed is None else [
             {"type": t.get("worker_type"), "id": t.get("worker_id"), "end": t.get("endtime"), "status": t.get("status")}

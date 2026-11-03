@@ -22,9 +22,9 @@
 
 set -euo pipefail
 
-WRAPPER_VERSION="1.1.0"
+WRAPPER_VERSION="1.2.1"
 CONTRACT_VERSION=1
-CAPABILITIES='["version","status","refresh","plan","apply","verify","log"]'
+CAPABILITIES='["version","status","refresh","plan","apply","verify","log","locks","unlock-stale"]'
 
 # Fail closed on a held dpkg/apt lock (e.g. unattended-upgrades or a
 # concurrent PVE web UI session) rather than hanging indefinitely -- wait a
@@ -183,6 +183,104 @@ except FileNotFoundError:
 '
 }
 
+# --- stale VM locks (wrapper 1.2.0, task check fixed in 1.2.1) --------------
+# Proxmox sets `lock:` in a guest's config while a backup/migration/snapshot task runs and removes it when the task ends.
+# If the task dies, the lock stays. Neither subcommand takes an argument: `locks` only reads, `unlock-stale` clears ONLY
+# locks that pass every check below, on THIS node's own VMs. The VMID comes from the config file name, validated as digits,
+# and `qm unlock` is run as a fixed argv (no shell). A lock held by a running task is never touched.
+# 1.2.1: a line in /var/log/pve/tasks/active is only a RUNNING task when it has no end time and its process still exists with
+# the start time written in its UPID (the check Proxmox itself uses). A finished task that is still listed, or one whose
+# process died, no longer blocks clearing its lock (1.2.0 treated every listed line as running).
+LOCK_SCAN_PY='
+import glob, json, os, re, sys, time
+MIN_AGE = 1800
+CLEARABLE = {"backup", "migrate", "snapshot", "snapshot-delete", "rollback"}
+def alive(pid, pstart):
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            data = f.read()
+        rest = data.rsplit(")", 1)[1].split()
+        return int(rest[19]) == pstart       # field 22 of /proc/PID/stat: the process start time in clock ticks
+    except (OSError, ValueError, IndexError):
+        return False
+def active_tasks():
+    out = {}
+    try:
+        with open("/var/log/pve/tasks/active") as f:
+            for line in f:
+                tok = line.split()
+                if not tok or not tok[0].startswith("UPID:"):
+                    continue
+                p = tok[0].split(":")
+                # UPID:node:pid:pstart:starttime:type:id:user:   then, once it has ended:  ENDTIME-HEX STATUS
+                if len(p) < 8 or not p[6].isdigit():
+                    continue
+                try:
+                    pid, pstart, start = int(p[2], 16), int(p[3], 16), int(p[4], 16)
+                except ValueError:
+                    continue
+                finished = len(tok) > 1
+                state = "finished" if finished else ("running" if alive(pid, pstart) else "dead")
+                out.setdefault(int(p[6]), []).append({"upid": tok[0], "type": p[5], "state": state, "age_seconds": int(time.time() - start),
+                                                      "status": " ".join(tok[2:])[:120] if finished else None})
+    except FileNotFoundError:
+        pass
+    return out
+def scan():
+    act = active_tasks()
+    rows = []
+    for path in sorted(glob.glob("/etc/pve/qemu-server/[0-9]*.conf")):
+        m = re.fullmatch(r"(\d+)\.conf", os.path.basename(path))
+        if not m:
+            continue
+        vmid = int(m.group(1))
+        lock = None
+        try:
+            with open(path) as f:
+                for line in f:
+                    if line.startswith("["):   # snapshot sections follow the live config: stop
+                        break
+                    mm = re.match(r"lock:\s*([A-Za-z-]+)\s*$", line)
+                    if mm:
+                        lock = mm.group(1)
+                        break
+            age = int(time.time() - os.stat(path).st_mtime)
+        except OSError:
+            continue
+        if not lock:
+            continue
+        tasks = act.get(vmid, [])
+        running = [t for t in tasks if t["state"] == "running"]
+        shown = (running or sorted(tasks, key=lambda t: t["age_seconds"]) or [None])[0]
+        rows.append({"vmid": vmid, "lock": lock, "config_age_seconds": age, "task_running": bool(running),
+                     "task_state": shown["state"] if shown else "none", "task": shown,
+                     "stale": (not running) and lock in CLEARABLE and age >= MIN_AGE})
+    return rows
+'
+
+cmd_locks() {
+  python3 -c "$LOCK_SCAN_PY
+print(json.dumps({'locks': scan()}))"
+}
+
+cmd_unlock_stale() {
+  python3 -c "$LOCK_SCAN_PY
+import subprocess
+cleared, skipped = [], []
+for r in scan():
+    if not r['stale']:
+        skipped.append({**r, 'why': 'a task is running for it' if r['task_running'] else 'not stale yet or not a lock type this wrapper clears'})
+        continue
+    # re-read immediately before acting: still locked, still no task
+    again = [x for x in scan() if x['vmid'] == r['vmid']]
+    if not again or not again[0]['stale']:
+        skipped.append({**r, 'why': 'changed while checking'})
+        continue
+    p = subprocess.run(['/usr/sbin/qm', 'unlock', str(r['vmid'])], capture_output=True, text=True, timeout=30)
+    (cleared if p.returncode == 0 else skipped).append({**r, 'why': (p.stderr or '').strip()[:200]} if p.returncode else r)
+print(json.dumps({'cleared': cleared, 'skipped': skipped}))"
+}
+
 cmd_verify() {
   # Deliberately identical to `status` -- post-apply verification is just
   # re-reading the same live state, never trusting apply's own self-report.
@@ -202,6 +300,8 @@ case "$1" in
   apply)   cmd_apply ;;
   verify)  cmd_verify ;;
   log)     cmd_log ;;
+  locks)   cmd_locks ;;
+  unlock-stale) cmd_unlock_stale ;;
   *)
     echo '{"error":"unknown subcommand"}' >&2
     exit 2

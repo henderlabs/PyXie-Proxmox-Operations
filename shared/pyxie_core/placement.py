@@ -240,7 +240,7 @@ def evaluate_affinity(
             reasons.append(f"note: {msg}")
         elif rule.rule_type == "keep_together" and partner_here:
             score_delta += 10
-            reasons.append(f"linked workload already here (keep_together satisfied)")
+            reasons.append("linked workload already here (keep_together satisfied)")
     return blocked, reasons, score_delta
 
 
@@ -252,6 +252,7 @@ class DestinationCandidate:
     blocking_reasons: list[str]
     score: float
     reasons: list[str]
+    projected_pct: float | None = None  # % of the node's RAM allocated to running guests AFTER this guest lands on it
 
 
 def recommend_destinations(
@@ -296,6 +297,11 @@ def recommend_destinations(
             ).all()
         )
         allocated += (simulated_added_bytes or {}).get(node.id, 0)
+        projected_pct = round(100.0 * (allocated + (workload.memory_bytes or 0)) / node.mem_total_bytes, 0) if node.mem_total_bytes else None
+        if getattr(node, "avoid_as_destination", False):
+            # Shown but never auto-picked; a human can still choose it in the plan editor.
+            blocked = True
+            blocking_reasons.append(f"{node.name} is marked 'Avoid as an automatic destination' (about to be upgraded or drained)")
         headroom = (node.mem_total_bytes - allocated) if node.mem_total_bytes else None
         if headroom is not None and workload.memory_bytes and headroom < workload.memory_bytes:
             blocked = True
@@ -390,6 +396,7 @@ def recommend_destinations(
             DestinationCandidate(
                 node_id=node.id, node_name=node.name, blocked=blocked,
                 blocking_reasons=sorted(set(blocking_reasons)), score=round(score, 1), reasons=reasons,
+                projected_pct=projected_pct,
             )
         )
 
@@ -515,7 +522,7 @@ def rescore_migrate_plan(db: Session, migrate_plan: list[dict]) -> list[dict]:
             serialized_candidates = [
                 {
                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                 }
                 for c in ranked
             ]

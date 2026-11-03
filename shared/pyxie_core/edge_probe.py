@@ -69,3 +69,44 @@ def tls_mode() -> str:
     except OSError:
         return ""
     return os.environ.get("PYXIE_TLS_MODE", "").strip() or "internal"
+
+
+RENEW_ALARM_HOURS = 12.0  # never alarm earlier than this many hours left
+RENEW_ALARM_FRACTION = 0.15  # Caddy renews with a third of the lifetime left; alarm only when well past that: under 15% of the lifetime
+
+
+def leaf_validity(connect_to: str, hostname: str, *, port: int = 443, timeout: float = 5.0):
+    """(not_before, not_after) of the certificate the edge presents (UTC datetimes), or None when it cannot be read. Trust is not checked: this only
+    reads the certificate. Needs the `cryptography` package (the app and worker have it; the host updater does not use this)."""
+    from datetime import timezone
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with socket.create_connection((connect_to, port), timeout=timeout) as raw:
+            with ctx.wrap_socket(raw, server_hostname=hostname) as tls:
+                der = tls.getpeercert(binary_form=True)
+        from cryptography import x509
+        cert = x509.load_der_x509_certificate(der)
+        na = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after.replace(tzinfo=timezone.utc)
+        nb = getattr(cert, "not_valid_before_utc", None) or cert.not_valid_before.replace(tzinfo=timezone.utc)
+        return nb, na
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def expiry_state() -> tuple[float, float] | None:
+    """(hours left, total lifetime in hours) of the edge's certificate, or None when not a Docker install, no hostname is set, or it cannot be read."""
+    hostname = os.environ.get("PYXIE_HOSTNAME", "").strip()
+    if not hostname or not tls_mode():
+        return None
+    from datetime import datetime, timezone
+    v = leaf_validity(CADDY_SERVICE, hostname)
+    if v is None:
+        return None
+    return (v[1] - datetime.now(timezone.utc)).total_seconds() / 3600, (v[1] - v[0]).total_seconds() / 3600
+
+
+def renewal_overdue(hours_left: float, lifetime_hours: float) -> bool:
+    """Pure. Caddy renews a certificate with about a third of its lifetime left; this is true only when it is far past that."""
+    return hours_left < min(RENEW_ALARM_HOURS, RENEW_ALARM_FRACTION * lifetime_hours)

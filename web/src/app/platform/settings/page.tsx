@@ -3,6 +3,7 @@ import type { AppSettings, Organization } from "@/lib/api";
 import { Card, CardTitle, PageHeader } from "@/components/Card";
 import SettingsForm from "@/components/SettingsForm";
 import OrganizationForm from "@/components/OrganizationForm";
+import WorkersSettings from "@/components/WorkersSettings";
 import { GearIcon } from "@/components/Icons";
 
 export default async function SettingsPage() {
@@ -25,6 +26,10 @@ export default async function SettingsPage() {
           <OrganizationForm initial={organization} />
         </Card>
       )}
+      <Card className="mb-4">
+        <CardTitle>Workers</CardTitle>
+        <WorkersSettings />
+      </Card>
       <Card>
         <SettingsForm initial={settings} />
       </Card>

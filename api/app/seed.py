@@ -4,7 +4,7 @@ capability catalog data. Safe to call on every startup.
 
 from sqlalchemy.orm import Session
 
-from pyxie_core.models import AppSettings, Capability, Organization, Policy, Provider, ProviderCategory, SafetyRule, Site
+from pyxie_core.models import AppSettings, Capability, Operation, Organization, Policy, Provider, ProviderCategory, SafetyRule, Site, User
 from pyxie_core.seed_data import CAPABILITIES, PROVIDER_CATEGORIES
 from pyxie_core.safety_rules_seed import SAFETY_RULES
 
@@ -13,6 +13,16 @@ DEFAULT_POLICIES = [
     ("organization", "protection.max_backup_age_hours", {"hours": 48}),
     ("organization", "protection.require_for_all_workloads", {"enabled": False}),
     ("organization", "metrics.retention_days", {"days": 400}),
+    ("organization", "backup.missed_warn_hours", {"hours": 30}),
+    ("organization", "backup.missed_crit_hours", {"hours": 72}),
+    ("organization", "locks.auto_clear_enabled", {"enabled": False}),
+    ("organization", "locks.auto_clear_minutes", {"minutes": 60}),
+    ("organization", "workers.wait_warning_minutes", {"minutes": 30}),
+    ("organization", "limits.evac_parallel", {"count": 1}),
+    ("organization", "limits.node_out", {"count": 1}),
+    ("organization", "limits.node_in", {"count": 1}),
+    ("organization", "limits.storage_moves", {"count": 1}),
+    ("organization", "limits.bulk_workers", {"count": 1}),
 ]
 
 # Providers with no configured target in this lab, seeded so the Providers
@@ -92,6 +102,11 @@ def seed_defaults(db: Session):
         )
         if exists is None:
             db.add(Policy(scope_type=scope_type, scope_id=None, key=key, value=value))
+
+    # Worker profile: a brand-new install starts with the quick + bulk lanes; every existing install keeps its single worker until an admin chooses.
+    if db.query(Policy).filter(Policy.scope_type == "organization", Policy.key == "workers.profile").one_or_none() is None:
+        fresh = db.query(User).count() == 0 and db.query(Operation).count() == 0
+        db.add(Policy(scope_type="organization", scope_id=None, key="workers.profile", value={"profile": "standard" if fresh else "single"}))
 
     db.commit()
     return org, site

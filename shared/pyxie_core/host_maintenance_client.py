@@ -48,10 +48,10 @@ import paramiko
 
 WRAPPER_PATH = "/usr/local/sbin/pyxie-maint"
 SUPPORTED_CONTRACT_VERSION = 1
-_ALLOWED_COMMANDS = ("version", "status", "refresh", "plan", "apply", "verify", "log")
+_ALLOWED_COMMANDS = ("version", "status", "refresh", "plan", "apply", "verify", "log", "locks", "unlock-stale")
 _TIMEOUT_BY_COMMAND = {
     "version": 15, "status": 30, "refresh": 120, "plan": 90,
-    "apply": 3600, "verify": 30, "log": 30,
+    "apply": 3600, "verify": 30, "log": 30, "locks": 30, "unlock-stale": 120,
 }
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -281,3 +281,15 @@ class HostMaintenanceClient:
         """Read-only: the last 32 KB of the host's apply log with absolute byte offsets
         (wrapper 1.1.0+; see operation_log.HostLogFollower). Needs the 'log' capability."""
         return self._run("log")
+
+    def locks(self) -> dict:
+        """Read-only (wrapper 1.2.0+, capability 'locks'): this node's locked VMs, each with whether a task is running for it
+        and whether the wrapper itself would call the lock stale."""
+        return self._run("locks")
+
+    def unlock_stale(self) -> dict:
+        """Wrapper 1.2.0+, capability 'unlock-stale': runs `qm unlock` on this node's locked VMs that pass the wrapper's own
+        checks (no task running, a clearable lock type, config untouched for 30 minutes). Never touches a lock with a live task."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError("PVE writes are disabled -- refusing to clear locks. Enable them in Platform \u2192 Settings.")
+        return self._run("unlock-stale")

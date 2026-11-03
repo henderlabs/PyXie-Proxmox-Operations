@@ -60,6 +60,12 @@ class MeUpdate(BaseModel):
     display_name: str | None = None
     current_password: str | None = None
     new_password: str | None = None
+    activity_banner: bool | None = None
+
+
+def _me_out(user: User) -> dict:
+    return {"email": user.email, "display_name": user.display_name, "is_admin": user.is_admin,
+            "activity_banner": (user.preferences or {}).get("activity_banner", True)}
 
 
 def _user_out(user: User) -> dict:
@@ -163,7 +169,7 @@ def logout(
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
-    return {"email": user.email, "display_name": user.display_name, "is_admin": user.is_admin}
+    return _me_out(user)
 
 
 @router.patch("/me")
@@ -192,6 +198,11 @@ def update_me(payload: MeUpdate, db: Session = Depends(get_db), user: User = Dep
         user.password_hash = hash_password(payload.new_password)
         changed_password = True
 
+    if payload.activity_banner is not None and payload.activity_banner != (user.preferences or {}).get("activity_banner", True):
+        user.preferences = {**(user.preferences or {}), "activity_banner": payload.activity_banner}
+        db.commit()
+        db.refresh(user)
+
     if changed_display_name or changed_password:
         write_audit_event(
             db,
@@ -204,7 +215,7 @@ def update_me(payload: MeUpdate, db: Session = Depends(get_db), user: User = Dep
         db.commit()
         db.refresh(user)
 
-    return {"email": user.email, "display_name": user.display_name, "is_admin": user.is_admin}
+    return _me_out(user)
 
 
 def _send_invite_email(db: Session, user: User, base_url: str | None, *, actor: str) -> tuple[bool, str | None]:

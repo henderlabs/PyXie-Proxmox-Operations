@@ -59,7 +59,14 @@ await send("Emulation.setDeviceMetricsOverride", { width: W, height: H, deviceSc
 await send("Page.enable");
 
 for (const p of PAGES) {
-  await send("Page.navigate", { url: BASE + p.path });
+  // a path may name a host as {node:NAME}: its id differs on every seeded stack, so look it up through the app
+  let path = p.path;
+  const named = path.match(/\{node:([^}]+)\}/);
+  if (named) {
+    const nodes = await (await fetch(`${BASE}/api/nodes`, { headers: { cookie: cookies.map((c) => `${c.name}=${c.value}`).join("; ") } })).json();
+    path = path.replace(named[0], (Array.isArray(nodes) ? nodes : nodes.items).find((n) => n.name === named[1]).id);
+  }
+  await send("Page.navigate", { url: BASE + path });
   await sleep(p.wait ?? 4500);
   if (p.run) { await send("Runtime.evaluate", { expression: p.run, awaitPromise: true }); await sleep(p.runWait ?? 4000); }
   let clip;

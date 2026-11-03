@@ -1,5 +1,6 @@
 "use client";
 
+import HostPower from "@/components/HostPower";
 import { useEffect, useState } from "react";
 import type { HostMaintenanceStatus, Node, StorageItem, Workload } from "@/lib/api";
 import { Card, CardTitle } from "@/components/Card";
@@ -115,6 +116,9 @@ export default function MaintenanceWorkspace({
                   {inMaintenance.map((n) => n.name).join(", ")} {inMaintenance.length === 1 ? "is" : "are"} in maintenance mode
                 </span>
               </div>
+              {inMaintenance.map((n) => (
+                <div key={n.id} className="mt-2 flex flex-wrap items-center gap-3"><span className="text-xs text-text">{n.name}</span><HostPower nodeId={n.id} nodeName={n.name} inMaintenance /></div>
+              ))}
             </Card>
           )}
           {needsReboot.length > 0 && (
@@ -135,6 +139,7 @@ export default function MaintenanceWorkspace({
           <CardTitle>Nodes</CardTitle>
           <NodeActionsForm
             nodes={nodes}
+            workloads={workloads}
             backupServers={pbsServers}
             hostMaintenanceByNode={hostMaintenance}
             storage={storage}

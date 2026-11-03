@@ -17,6 +17,18 @@ from sqlalchemy.orm import Session
 from .models import Operation, ResourceLock
 
 DEFAULT_TTL_SECONDS = 3600
+LEASE_SECONDS = 600
+_lease_active = False  # set in an operation job's process: its heartbeat renews locks, so they are taken for a short lease only
+
+
+def enable_lease() -> None:
+    global _lease_active
+    _lease_active = True
+
+
+def lease_seconds(ttl_seconds: int) -> int:
+    """The lifetime a new lock or slot gets: the short lease inside an operation job (its heartbeat renews it), else what the caller asked for."""
+    return min(ttl_seconds, LEASE_SECONDS) if _lease_active else ttl_seconds
 
 
 class LockContention(Exception):
@@ -112,6 +124,14 @@ def acquire_lock(
     reduces the probability of a race here, it does not make the
     SELECT-then-INSERT pattern correct on its own.
     """
+    if resource_type == "node":
+        # moves in flight on this host (capacity slots) exclude an exclusive host lock, except the asker's own children
+        from . import slots as capacity
+        capacity.advisory(db, capacity.node_gate_key(resource_id))
+        for s in capacity.active_slots_on_node(db, resource_id):
+            if s.operation_id != operation_id and not _is_ancestor_operation(db, operation_id, s.operation_id):
+                db.rollback()
+                raise LockContention(resource_type, resource_id, s.operation_id)
     _release_expired(db, resource_type, resource_id)
 
     existing = _active_lock(db, resource_type, resource_id)
@@ -128,7 +148,7 @@ def acquire_lock(
         operation_id=operation_id,
         reason=reason,
         acquired_at=datetime.now(timezone.utc),
-        expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=lease_seconds(ttl_seconds)),
     )
     db.add(lock)
     try:
@@ -157,8 +177,10 @@ def release_locks_for_operation(db: Session, operation_id: uuid.UUID) -> int:
     )
     for lock in locks:
         lock.released_at = now
+    from . import slots as capacity
+    freed = capacity.release_slots_for_operation(db, operation_id)
     db.commit()
-    return len(locks)
+    return len(locks) + freed
 
 
 def is_locked(db: Session, resource_type: str, resource_id: uuid.UUID) -> bool:

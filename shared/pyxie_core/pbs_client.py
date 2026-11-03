@@ -84,6 +84,10 @@ class PbsClient:
             params["since"] = since
         return self._get("/nodes/localhost/tasks", params=params) or []
 
+    def rrd(self, timeframe: str = "day") -> list[dict]:
+        """GET /nodes/localhost/rrd: the server's own history (cpu, memory, network, load, root disk). Read-only."""
+        return self._get("/nodes/localhost/rrd", params={"timeframe": timeframe, "cf": "AVERAGE"}) or []
+
     def apt_updates(self) -> list[dict]:
         return self._get("/nodes/localhost/apt/update") or []
 

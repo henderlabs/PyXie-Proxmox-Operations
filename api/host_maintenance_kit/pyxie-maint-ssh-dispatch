@@ -22,6 +22,8 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
   "sudo /usr/local/sbin/pyxie-maint apply")   exec sudo /usr/local/sbin/pyxie-maint apply ;;
   "sudo /usr/local/sbin/pyxie-maint verify")  exec sudo /usr/local/sbin/pyxie-maint verify ;;
   "sudo /usr/local/sbin/pyxie-maint log")     exec sudo /usr/local/sbin/pyxie-maint log ;;
+  "sudo /usr/local/sbin/pyxie-maint locks")   exec sudo /usr/local/sbin/pyxie-maint locks ;;
+  "sudo /usr/local/sbin/pyxie-maint unlock-stale") exec sudo /usr/local/sbin/pyxie-maint unlock-stale ;;
   *)
     echo '{"error":"command not permitted for this identity"}' >&2
     exit 3

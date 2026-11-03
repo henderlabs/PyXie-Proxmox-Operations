@@ -75,6 +75,8 @@ export function CtNicPanel({ workloadId, workloadName, clusterId, request, onClo
   const [ip, setIp] = useState(nic?.ip || (action === "add" ? "dhcp" : ""));
   const [gw, setGw] = useState("");
   const [mac, setMac] = useState(nic?.mac || "");
+  const [rate, setRate] = useState(nic?.rate ? String(parseFloat(nic.rate)) : "");
+  const [mtu, setMtu] = useState(nic?.mtu ? String(nic.mtu) : "");
   const [op, setOp] = useState<Operation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -84,7 +86,8 @@ export function CtNicPanel({ workloadId, workloadName, clusterId, request, onClo
 
   async function preview() {
     setPending(true); setError(null);
-    const r = await dryRun("/api/operations/workload-ct-nic/dry-run", { workload_id: workloadId, action, net_id: nic?.key ?? null, bridge, tag: tag.trim() ? parseInt(tag, 10) : null, firewall, ip: ip.trim() || null, gateway: gw.trim() || null, mac: mac.trim() || null });
+    const r = await dryRun("/api/operations/workload-ct-nic/dry-run", { workload_id: workloadId, action, net_id: nic?.key ?? null, bridge, tag: tag.trim() ? parseInt(tag, 10) : null, firewall, ip: ip.trim() || null, gateway: gw.trim() || null, mac: mac.trim() || null,
+      manage_extras: true, rate: rate.trim() ? parseFloat(rate) : null, mtu: mtu.trim() ? parseInt(mtu, 10) : null });
     setPending(false);
     if (r.error) { setError(r.error); return; }
     setOp(r.op!); notifyOperationsChanged();
@@ -109,6 +112,8 @@ export function CtNicPanel({ workloadId, workloadName, clusterId, request, onClo
               <div><label className="block text-muted mb-1">IPv4 address</label><input className={input} value={ip} onChange={(e) => setIp(e.target.value)} placeholder="dhcp or 192.168.1.50/24" /></div>
               <div><label className="block text-muted mb-1">Gateway (fixed address only)</label><input className={input} value={gw} onChange={(e) => setGw(e.target.value)} placeholder={nic?.ip && nic.ip !== "dhcp" ? "keep" : ""} /></div>
               <div><label className="block text-muted mb-1">MAC address</label><input className={input} value={mac} onChange={(e) => setMac(e.target.value)} placeholder={action === "add" ? "chosen by Proxmox" : ""} /></div>
+              <div><label className="block text-muted mb-1">Bandwidth limit (MB/s, empty = none)</label><input type="number" min={0} step="any" className={input} value={rate} onChange={(e) => setRate(e.target.value)} placeholder="no limit" /></div>
+              <div><label className="block text-muted mb-1">MTU (empty = default)</label><input type="number" min={64} max={65535} className={input} value={mtu} onChange={(e) => setMtu(e.target.value)} placeholder="default" /></div>
               <label className="flex items-center gap-2 pt-5"><input type="checkbox" checked={firewall} onChange={(e) => setFirewall(e.target.checked)} /> Firewall</label>
             </div>
             {error && <div className="text-bad">{error}</div>}

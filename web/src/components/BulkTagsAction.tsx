@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { Operation, Workload } from "@/lib/api";
-import { notifyOperationsChanged } from "@/lib/operationsBus";
+import { abandonPlan, notifyOperationsChanged } from "@/lib/operationsBus";
 import { isInFlight, isTerminal } from "@/lib/operationStatus";
 
 type Row = { w: Workload; before: string[]; after: string[]; op: Operation | null; error: string | null };
@@ -108,7 +108,7 @@ export default function BulkTagsAction({ workloads, onClose }: { workloads: Work
           <div className="flex gap-2 items-center">
             {phase === "preview" && <button type="button" disabled={changed.length === 0} onClick={run} className="px-2 py-1 rounded bg-ink text-on-ink border border-warn hover:bg-warn/10 disabled:opacity-50">Confirm &amp; change {changed.length} guest{changed.length === 1 ? "" : "s"}</button>}
             {phase === "running" && <span className="text-muted">Working through them one by one…</span>}
-            <button type="button" onClick={() => { if (phase === "preview" && rows) rows.forEach((r) => { if (r.op && r.op.status === "awaiting_approval") fetch(`/api/operations/${r.op.id}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dismissed: true }) }).catch(() => {}); }); onClose(); }} className="text-muted hover:text-text">{phase === "done" ? "close" : "cancel"}</button>
+            <button type="button" onClick={() => { if (phase === "preview" && rows) rows.forEach((r) => { if (r.op && r.op.status === "awaiting_approval") abandonPlan(r.op.id); }); onClose(); }} className="text-muted hover:text-text">{phase === "done" ? "close" : "cancel"}</button>
           </div>
         </div>
       )}

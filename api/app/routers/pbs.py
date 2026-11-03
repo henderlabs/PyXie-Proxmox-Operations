@@ -68,6 +68,60 @@ def list_servers(db: Session = Depends(get_db)):
     return [_summary(db, t) for t in db.query(ProtectionTarget).order_by(ProtectionTarget.name).all()]
 
 
+@router.get("/overview")
+def overview(db: Session = Depends(get_db)):
+    """For Hosts & Clusters: every connected backup server in one line each (from the status PyXie already keeps fresh; nothing is read from the
+    servers here), plus Proxmox storages of type pbs that no connected server accounts for. Read-only."""
+    from pyxie_core.discovery import build_pve_client
+    from pyxie_core.models import PveTarget
+    servers = []
+    for t in db.query(ProtectionTarget).order_by(ProtectionTarget.name).all():
+        st = t.host_status or {}
+        mem, root = st.get("memory") or {}, st.get("root") or {}
+        ds = st.get("datastores") or []
+        fs = [d for d in ds if d.get("total")]
+        servers.append({
+            "id": str(t.id), "name": t.name, "hostname": t.hostname, "reachable": bool(st.get("reachable")) if st else None, "error": st.get("error"),
+            "version": st.get("version"), "uptime": st.get("uptime"), "cpu": st.get("cpu"),
+            "mem_pct": (100 * mem["used"] / mem["total"]) if mem.get("total") else None, "root_pct": (100 * root["used"] / root["total"]) if root.get("total") else None,
+            "datastores": [{"name": d.get("name"), "backend": d.get("backend"), "used": d.get("used"), "total": d.get("total")} for d in ds],
+            "used_bytes": sum(d["used"] or 0 for d in fs), "total_bytes": sum(d["total"] or 0 for d in fs),
+            "last_runs": st.get("last_runs"), "failed_24h": len(st.get("tasks_failed_24h") or []) if st.get("tasks_failed_24h") is not None else None,
+            "updates": (st.get("updates") or {}).get("count") if st.get("updates") is not None else None, "reboot_required": st.get("reboot_required"),
+            "wrapper_version": t.wrapper_version, "wrapper_outdated": _ssh(db, t)["wrapper_outdated"], "ssh_ready": _ssh(db, t)["host_key_pinned"] and t.wrapper_version is not None,
+            "status_at": t.host_status_at.isoformat() if t.host_status_at else None,
+        })
+    known = {(t.hostname or "").strip().lower() for t in db.query(ProtectionTarget).all()}
+    unconnected = []
+    for target in db.query(PveTarget).all():
+        try:
+            client, _cred = build_pve_client(db, target)
+            with client:
+                for s in client._get("/storage") or []:
+                    if s.get("type") == "pbs" and str(s.get("server") or "").strip().lower() not in known:
+                        unconnected.append({"storage": s.get("storage"), "server": s.get("server"), "datastore": s.get("datastore"), "port": s.get("port") or 8007})
+        except Exception:  # noqa: BLE001 -- a cluster that cannot be read just adds nothing here
+            continue
+    seen = set()
+    unconnected = [u for u in unconnected if not ((u["server"], u["datastore"]) in seen or seen.add((u["server"], u["datastore"])))]
+    return {"servers": servers, "unconnected": unconnected}
+
+
+@router.get("/servers/{target_id}/rrd")
+def server_rrd(target_id: uuid.UUID, timeframe: str = "hour", db: Session = Depends(get_db)):
+    """The backup server's own history series for the graphs. Read-only."""
+    if timeframe not in ("hour", "day", "week", "month", "year"):
+        raise HTTPException(400, "timeframe must be hour, day, week, month or year")
+    t = _target(db, target_id)
+    try:
+        with PbsClient(load_pbs_credentials(db, t, "inventory")) as c:
+            rows = c.rrd(timeframe)
+    except Exception as exc:  # noqa: BLE001
+        return {"rows": [], "error": f"could not read the history: {str(exc)[:160]}"}
+    keep = ("time", "cpu", "iowait", "memused", "memtotal", "netin", "netout", "loadavg", "roottotal", "rootused")
+    return {"rows": [{k: r.get(k) for k in keep} for r in rows], "error": None}
+
+
 @router.get("/datastore-usage")
 def datastore_usage_overview(db: Session = Depends(get_db)):
     """The space the backups take on every datastore of every backup server, with counts, the last garbage collection and a 30 day history. Read-only."""

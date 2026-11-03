@@ -8,6 +8,7 @@ import { POLICY_META } from "@/lib/policyMeta";
 
 const UNIT_LABEL: Record<string, string> = {
   percent: "%",
+  "count-minutes": "minutes",
   "count-hours": "hours",
   "count-days": "days",
 };

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from pyxie_core.db import SessionLocal
 from pyxie_core.models import (
-    AppSettings, Cluster, MetricPoint, Node, Organization, PlacementAffinityRule,
+    AppSettings, Cluster, MetricPoint, Node, Operation, Organization, PlacementAffinityRule,
     Provider, ProviderCategory, PveCredential, PveTarget, Site, Storage, Workload,
 )
 
@@ -70,6 +70,11 @@ for name, cpu, mem, upd in NODE_SPECS:
              pending_updates=upd, maintenance_mode=False, first_seen=now - timedelta(days=90), last_seen=now)
     db.add(n)
     nodes[name] = n
+# A host that left the cluster (decommissioned): PyXie keeps it, greyed, until it is removed.
+gone = Node(cluster_id=cluster.id, site_id=site.id, name="node-e", status="offline", management_ip=None, mem_total_bytes=128 * GIB,
+            pve_version="8.4.1", kernel_version="6.8.12-4-pve", maintenance_mode=False, is_missing=True,
+            first_seen=now - timedelta(days=90), last_seen=now - timedelta(days=6, hours=3))
+db.add(gone)
 db.flush()
 
 # --- workloads: name, node, type, vcpu, ram GiB, cpu mean%, mem mean%, os, tags, status
@@ -103,6 +108,27 @@ for name, node, typ, vcpu, ram, cpu, mem, os_type, tags, status in WL:
                  tags=tags or None, first_seen=now - timedelta(days=90), last_seen=now)
     db.add(w)
     wls[name] = (w, cpu, mem, status)
+db.flush()
+
+# --- tasks for the Tasks panel (rows only; the demo stack has no worker, nothing runs) ---------------------------
+def task(op_type, wl_name, status, started_ago_min, **kw):
+    w = wls[wl_name][0]
+    ago = timedelta(minutes=started_ago_min)
+    op = Operation(operation_type_id=op_type, status=status, stage=status, workload_id=w.id, node_id=w.node_id, cluster_id=cluster.id,
+                   created_by="admin@example.com", created_at=now - ago, updated_at=now - ago,
+                   dry_run_result={"workload_name": wl_name, "vmid": w.vmid, "node": [k for k, v in nodes.items() if v.id == w.node_id][0]},
+                   stages_completed=["dry_run"], stages_pending=[], **kw)
+    db.add(op)
+    return op
+
+task("vm.live_migrate", "db-01", "monitoring", 3, approved_by="admin@example.com", approved_at=now - timedelta(minutes=3), started_at=now - timedelta(minutes=3),
+     progress={"pct": 46, "phase": "memory"})
+task("vm.live_migrate", "web-01", "completed", 14, approved_by="admin@example.com", approved_at=now - timedelta(minutes=14), started_at=now - timedelta(minutes=14),
+     completed_at=now - timedelta(minutes=12))
+task("workload.start", "monitor-01", "completed", 40, approved_by="admin@example.com", approved_at=now - timedelta(minutes=40), started_at=now - timedelta(minutes=40),
+     completed_at=now - timedelta(minutes=39))
+task("workload.shutdown", "file-01", "failed", 95, approved_by="admin@example.com", approved_at=now - timedelta(minutes=95), started_at=now - timedelta(minutes=95),
+     completed_at=now - timedelta(minutes=93), error="VM quit/powerdown failed - got timeout")
 db.flush()
 
 # --- storage: ~48% used overall ---------------------------------------------------
@@ -170,4 +196,4 @@ from pyxie_core.rightsizing import refresh_rightsizing_cache
 refresh_rightsizing_cache(db)
 generate_recommendations(db)
 evaluate_findings(db)
-print("seeded: %d nodes, %d workloads, %d storage, 3 rules, %d metric points" % (len(nodes), len(wls), len(STORAGE), len(rows)))
+print("seeded: %d nodes (+1 left the cluster), %d workloads, %d storage, 3 rules, %d metric points" % (len(nodes), len(wls), len(STORAGE), len(rows)))

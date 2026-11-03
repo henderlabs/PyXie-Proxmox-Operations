@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Node, Operation, StorageItem } from "@/lib/api";
 import MigrationBars from "@/components/MigrationBars";
-import { notifyOperationsChanged } from "@/lib/operationsBus";
+import { abandonPlan, notifyOperationsChanged } from "@/lib/operationsBus";
 import { isInFlight } from "@/lib/operationStatus";
 import { useOperationWatch } from "@/lib/useOperationWatch";
 import { useMe } from "@/lib/useMe";
@@ -86,7 +86,7 @@ export default function ChangeStorageAction({
   }
 
   async function cancelPreview() {
-    if (op && op.status === "awaiting_approval") fetch(`/api/operations/${op.id}/dismiss`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dismissed: true }) }).catch(() => {});
+    if (op && op.status === "awaiting_approval") abandonPlan(op.id);
     notifyOperationsChanged();
     reset();
     router.refresh();

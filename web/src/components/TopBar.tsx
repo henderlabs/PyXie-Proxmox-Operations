@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useMe } from "@/lib/useMe";
@@ -76,6 +76,17 @@ export default function TopBar({ instance }: { instance: string }) {
   const router = useRouter();
   const me = useMe();
   const info = useUpdateInfo(me?.is_admin === true, pathname);
+  // The bar under the header must stop short of this box whatever its width (a long display name, the update chip): publish the width as a CSS variable.
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const publish = () => document.documentElement.style.setProperty("--topbar-w", `${Math.ceil(el.getBoundingClientRect().width) + 32}px`);
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pathname, me, info?.available, info?.running]);
   if (pathname === "/login" || pathname.startsWith("/accept-invite")) return null;
 
   async function logout() {
@@ -86,7 +97,7 @@ export default function TopBar({ instance }: { instance: string }) {
 
   const name = me ? me.display_name || me.email : "";
   return (
-    <div className="absolute top-[22px] right-6 z-20 flex items-center gap-2 text-xs">
+    <div ref={boxRef} className="absolute top-[22px] right-6 z-20 flex items-center gap-2 text-xs">
       {info?.running ? (
         <Link href="/platform/settings/updates" className="inline-flex items-center gap-1.5 h-8 rounded-lg border border-warn/40 bg-warn/10 text-warn px-2.5 font-medium hover:bg-warn/20" title="An update is in progress. Click to watch it.">
           <span className="w-1.5 h-1.5 rounded-full bg-warn animate-pulse" />

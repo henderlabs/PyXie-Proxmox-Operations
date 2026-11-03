@@ -142,6 +142,7 @@ services:
       PYXIE_HOSTNAME: ${PYXIE_HOSTNAME:?set PYXIE_HOSTNAME in .env}
       PYXIE_TLS_MODE: ${PYXIE_TLS_MODE:-internal}
       ACME_CA: ${ACME_CA:-}
+      PYXIE_INTERNAL_CERT_LIFETIME: ${PYXIE_INTERNAL_CERT_LIFETIME:-72h}
     volumes:
       # Directory mounts, not single files: single-file bind mounts go stale
       # when the file is replaced (new inode), and reloads silently keep

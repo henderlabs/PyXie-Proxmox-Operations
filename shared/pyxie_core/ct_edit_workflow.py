@@ -45,12 +45,14 @@ def parse_ct_net(value) -> dict:
 def ct_net_fields(value) -> dict:
     n = parse_ct_net(value)
     return {"name": n.get("name"), "bridge": n.get("bridge"), "tag": int(n["tag"]) if str(n.get("tag", "")).isdigit() else None, "firewall": str(n.get("firewall", "0")) in ("1", "true"),
-            "ip": n.get("ip"), "gw": n.get("gw"), "mac": n.get("hwaddr")}
+            "ip": n.get("ip"), "gw": n.get("gw"), "mac": n.get("hwaddr"), "rate": n.get("rate") or None, "mtu": n.get("mtu") or None}
 
 
-def build_ct_net(old: dict | None, *, name: str, bridge: str, tag: int | None, firewall: bool, ip: str | None, gw: str | None, mac: str | None) -> str:
-    """The container NIC line for these values, keeping any setting the old line has that is not managed here. Pure."""
-    keep = {k: v for k, v in (old or {}).items() if k not in MANAGED}
+def build_ct_net(old: dict | None, *, name: str, bridge: str, tag: int | None, firewall: bool, ip: str | None, gw: str | None, mac: str | None,
+                 manage_extras: bool = False, rate: str | None = None, mtu: str | None = None) -> str:
+    """The container NIC line for these values, keeping any setting the old line has that is not managed here. With manage_extras the form's bandwidth
+    limit and MTU replace the old ones (empty removes them); without it they are kept exactly as they were. Pure."""
+    keep = {k: v for k, v in (old or {}).items() if k not in MANAGED and not (manage_extras and k in ("rate", "mtu"))}
     out = [f"name={name}", f"bridge={bridge}"]
     if mac:
         out.append(f"hwaddr={mac}")
@@ -62,6 +64,11 @@ def build_ct_net(old: dict | None, *, name: str, bridge: str, tag: int | None, f
         out.append(f"tag={tag}")
     if firewall:
         out.append("firewall=1")
+    if manage_extras:
+        if rate:
+            out.append(f"rate={rate}")
+        if mtu:
+            out.append(f"mtu={mtu}")
     out += [f"{k}={v}" for k, v in keep.items()]
     return ",".join(out)
 
@@ -155,7 +162,7 @@ def dry_run_ct_resize(db, workload: Workload, *, cores: int | None, memory_mb: i
 
 
 def dry_run_ct_nic(db, workload: Workload, *, action: str, net_id: str | None, bridge: str | None, tag: int | None, firewall: bool, ip: str | None, gateway: str | None, mac: str | None,
-                   actor: str, correlation_id=None) -> Operation:
+                   actor: str, correlation_id=None, manage_extras: bool = False, rate: float | None = None, mtu: int | None = None) -> Operation:
     if workload.type != "lxc":
         raise CtEditError("this is for containers; VMs use the network device editor")
     if action not in ("add", "edit", "remove"):
@@ -245,14 +252,31 @@ def dry_run_ct_nic(db, workload: Workload, *, action: str, net_id: str | None, b
                 reasons += warns
                 new_ip = ip if ip is not None else old.get("ip")
                 new_gw = gateway if gateway is not None else old.get("gw")
-                new_line = build_ct_net(old if old_line else None, name=name, bridge=bridge, tag=tag if tag is not None else None, firewall=bool(firewall), ip=new_ip, gw=new_gw, mac=mac)
+                rate_s = mtu_s = None
+                if manage_extras:
+                    if rate is not None:
+                        if rate < 0 or rate > 10_000_000:
+                            reasons.append("the bandwidth limit is a number of MB/s from 0 (no limit) up; leave it empty for none")
+                            blocking.append("SAFE-NIC-001")
+                        elif rate > 0:
+                            rate_s = str(int(rate)) if rate == int(rate) else str(rate)
+                    if mtu is not None:
+                        if not (64 <= int(mtu) <= 65535):
+                            reasons.append("a container MTU is a number from 64 to 65535")
+                            blocking.append("SAFE-NIC-001")
+                        else:
+                            mtu_s = str(int(mtu))
+                new_line = build_ct_net(old if old_line else None, name=name, bridge=bridge, tag=tag if tag is not None else None, firewall=bool(firewall), ip=new_ip, gw=new_gw, mac=mac,
+                                        manage_extras=manage_extras, rate=rate_s, mtu=mtu_s)
                 ctx["expected"] = {"bridge": bridge, "tag": tag, "firewall": bool(firewall), "ip": new_ip, "gw": new_gw, "mac": mac}
+                if manage_extras:
+                    ctx["expected"].update({"rate": rate_s, "mtu": mtu_s, "extras": True})
                 if action == "add":
                     reasons.append(f"a new network device {net_id} ({name}) on {bridge}" + (f", VLAN {tag}" if tag is not None else ", untagged") + f", address {new_ip or 'not set'}" + (": hot-plugged into the running container" if workload.status == "running" else ""))
                 else:
                     f_old = ct_net_fields(old_line)
                     diffs = [f"{k}: {f_old[k] if f_old[k] not in (None, False) else '-'} -> {v if v not in (None, False) else '-'}" for k, v in
-                             (("bridge", bridge), ("tag", tag), ("firewall", bool(firewall)), ("ip", new_ip), ("gw", new_gw), ("mac", mac)) if (f_old[k] or None) != (v or None) and not (k == "firewall" and f_old[k] == v)]
+                             (("bridge", bridge), ("tag", tag), ("firewall", bool(firewall)), ("ip", new_ip), ("gw", new_gw), ("mac", mac), *((("rate", rate_s), ("mtu", mtu_s)) if manage_extras else ())) if (f_old[k] or None) != (v or None) and not (k == "firewall" and f_old[k] == v)]
                     if not diffs:
                         reasons.append("nothing to change: this device already has exactly these settings")
                         blocking.append("SAFE-NIC-001")
@@ -339,6 +363,10 @@ def execute_ct_edit(db, operation_id) -> Operation:
                     for k in ("bridge", "tag", "firewall"):
                         if (f.get(k) or None) != (want.get(k) or None) and not (k == "firewall" and f.get(k) == want.get(k)):
                             problems.append(f"{k} is {f.get(k)}, expected {want.get(k)}")
+                    if want.get("extras"):
+                        for k in ("rate", "mtu"):
+                            if (f.get(k) or None) != (want.get(k) or None):
+                                problems.append(f"{k} is {f.get(k)}, expected {want.get(k)}")
                     if want.get("ip") and f.get("ip") != want["ip"]:
                         problems.append(f"ip is {f.get('ip')}, expected {want['ip']}")
                 op.verification_result = {"net_id": ctx["net_id"], "line": got}

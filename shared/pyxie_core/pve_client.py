@@ -383,6 +383,16 @@ class PveClient:
         network config rather than accepting any tag 1-4094."""
         return self._get(f"/nodes/{node}/network")
 
+    def node_network_state(self, node: str) -> tuple[list[dict], str | None]:
+        """GET /nodes/{node}/network with the staged-changes diff Proxmox reports beside the data: (interfaces as they would be after a reload, diff text
+        or None). Read-only."""
+        resp = self._pool.request("GET", f"/nodes/{node}/network")
+        if resp.status_code in (401, 403):
+            raise PveAuthError(f"{resp.status_code}: {resp.text[:300]}")
+        resp.raise_for_status()
+        body = resp.json()
+        return body.get("data") or [], body.get("changes") or None
+
     def sdn_zones(self) -> list[dict]:
         """GET /cluster/sdn/zones -- SDN zones. Proxmox only lists the zones the token has SDN.Audit (or SDN.Allocate) on, so a token without it sees an
         empty list, not an error."""

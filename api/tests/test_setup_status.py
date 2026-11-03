@@ -98,14 +98,14 @@ def test_hosts_substeps_in_order_without_a_keypair():
     assert "generate the host key pair" in s["hosts"]["summary"].lower()
 
 
-def test_hosts_substeps_after_keypair_point_at_builder_then_pinning():
+def test_hosts_substeps_after_keypair_point_at_the_update_panel_then_pinning():
     t = {"id": "t", "name": "Lab", "inventory_status": "valid", "nodes": 2}
     nodes = [{"name": "n1", "pinned": True, "wrapper_version": "1.1.0"}, {"name": "n2", "pinned": False, "wrapper_version": None}]
     s = by_key(build_steps({"sites": 1, "targets": [t], "nodes": nodes, "hostmaint": [{"target_id": "t", "has_cred": True}],
                             "expected_wrapper": "1.1.0", "settings": {}}))
     sub = {x["key"]: x for x in s["hosts"]["substeps"]}
     assert sub["keypair"]["state"] == "done"
-    assert sub["script"]["state"] == "todo" and sub["script"]["action"]["href"] == "/platform/credentials#builder-host"
+    assert sub["script"]["state"] == "todo" and sub["script"]["action"]["kind"] == "wrapper_update"
     assert "1 of 2" in sub["script"]["detail"]
     assert sub["pin"]["state"] == "todo" and sub["pin"]["action"]["href"] == "/platform/credentials"
     assert "1 of 2" in sub["pin"]["detail"]

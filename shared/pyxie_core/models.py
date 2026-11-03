@@ -102,6 +102,8 @@ class Node(Base):
     ssh_host_key_pinned_at = Column(DateTime(timezone=True), nullable=True)
     wrapper_version = Column(String, nullable=True)  # host-maintenance wrapper version last seen on this node
     wrapper_checked_at = Column(DateTime(timezone=True), nullable=True)
+    avoid_as_destination = Column(Boolean, nullable=False, default=False, server_default="false")  # never auto-picked as a migration destination (about to be upgraded or drained); still selectable by hand
+    forgotten_at = Column(DateTime(timezone=True), nullable=True)  # an operator removed this (already gone from PVE) host from PyXie; history stays, discovery clears it if PVE lists the host again
     ssh_host_key_pinned_by = Column(String, nullable=True)
     cpu_usage_pct = Column(Float, nullable=True)
     mem_usage_pct = Column(Float, nullable=True)
@@ -159,6 +161,8 @@ class Workload(Base):
     is_template = Column(Boolean, nullable=False, default=False, server_default="false")  # Proxmox template flag (VMs only)
     pool = Column(String, nullable=True)  # Proxmox resource pool the guest is a member of (cluster resources `pool`); null = none
     ha_state = Column(String, nullable=True)
+    pve_lock = Column(String, nullable=True)  # the guest's Proxmox `lock:` (backup, migrate, snapshot, ...) as of the last discovery; null = unlocked
+    pve_lock_since = Column(DateTime(timezone=True), nullable=True)  # when PyXie first saw THIS lock; a lock has no timestamp in Proxmox, so age is "seen locked for"
     sensitivity = Column(String, nullable=False, default="standard")  # standard | restricted -- restricted may not land on a trust_tier=low node
     downtime_tolerance = Column(String, nullable=False, default="standard")  # low | standard | high -- 'low' means CANNOT tolerate downtime (critical); also may not land on trust_tier=low
     placement_notes = Column(Text, nullable=True)  # PyXie-only free text -- why this profile was set, never synced from/to PVE
@@ -559,6 +563,7 @@ class User(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     invite_token = Column(String, nullable=True, unique=True)
     invite_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    preferences = Column(JSONB, nullable=True)  # per-user display choices, e.g. {"activity_banner": false}; null = defaults
 
 
 class Session(Base):
@@ -947,6 +952,10 @@ class Operation(Base):
     updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    # which operations worker runs it (its stable slot id, e.g. bulk-1) and its last heartbeat; see op_claims.py
+    claimed_by = Column(String, nullable=True)
+    claimed_at = Column(DateTime(timezone=True), nullable=True)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class OperationLog(Base):
@@ -986,6 +995,20 @@ class PlacementAffinityRule(Base):
     created_by = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)
+
+
+class CapacitySlot(Base):
+    """One of the limited places for guest moves or disk copies on a host or storage (capacity.py)."""
+
+    __tablename__ = "capacity_slots"
+
+    id = uuid_pk()
+    kind = Column(String, nullable=False)  # node_out | node_in | storage
+    resource_key = Column(String, nullable=False)  # a node id, or cluster-id:storage-name
+    operation_id = Column(UUID(as_uuid=True), ForeignKey("operations.id"), nullable=False)
+    acquired_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    released_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class ResourceLock(Base):

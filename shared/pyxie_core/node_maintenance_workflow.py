@@ -21,10 +21,13 @@ for any reason at all, patching or not.
 from sqlalchemy.orm import Session
 
 from . import lifecycle_workflow
-from .credentials import CredentialNotConfigured, HostNotAddressable, load_host_maintenance_credentials
+from .credentials import CredentialNotConfigured, HostNotAddressable, load_host_maintenance_credentials, load_pve_credentials
+from .pve_write_client import PveMaintenanceClient
 from .host_maintenance_client import HostMaintenanceClient, HostMaintenanceConnectionError, HostMaintenanceProtocolError
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
+from .vm_locks import lock_context
+from .stopped_guests import stopped_shared_item
 from .maintenance import _has_pci_passthrough, _qemu_config, _quorum_after_removal, flag_onboot, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -39,6 +42,7 @@ from .operations_engine import (
     OperationError,
     approve_operation,
     block_operation,
+    cancel_operation,
     check_cancel_requested,
     create_operation,
     enter_stage,
@@ -162,7 +166,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                     blocked_workloads.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
                                                "reasons": ["PCI/device passthrough -- no safe automated path"]})
                     continue
-                block_reasons = [r for r in (vm_lock_reason(wl.vmid, config), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r]
+                block_reasons = [r for r in (vm_lock_reason(wl.vmid, config, **lock_context(db, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r]
                 if block_reasons:
                     blocked_workloads.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name, "reasons": block_reasons})
                     continue
@@ -197,7 +201,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                         "candidates": [
                             {
                                 "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                             }
                             for c in ranked
                         ],
@@ -241,7 +245,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -270,13 +274,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                     })
                     continue
                 if on_shared:
-                    stopped_no_action.append(flag_onboot(
-                        {
-                            "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
-                            "reasons": ["stopped, and its disk is on shared storage -- no action needed for maintenance mode"],
-                        },
-                        _qemu_config(client, node.name, wl),
-                    ))
+                    stopped_relocation_required.append(stopped_shared_item(db, client, node, wl, candidates_all, nodes_by_id, simulated_added_bytes, "stopped, and its disk is on shared storage -- no action needed for maintenance mode -- optional: move it too (offline, config only, nothing is copied)"))
                 else:
                     # Never required -- entering maintenance mode is
                     # temporary (the node stays in the cluster and comes
@@ -304,7 +302,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -395,29 +393,34 @@ def execute_enter_maintenance(db: Session, operation_id) -> Operation:
             op = enter_stage(db, op, status="evacuating", stage="evacuating")
 
         if op.status == "evacuating":
-            for item in migrate_plan:
-                if item["workload_id"] in completed_migrations or item["workload_id"] in completed_shutdowns:
-                    continue
-                cancelled = check_cancel_requested(db, op)
-                if cancelled:
-                    return cancelled
+            # Stopped guests whose Start at boot the operator chose to turn off for this window. Done FIRST, before anything moves, so a
+            # missing PVE privilege fails the operation cleanly. The original value (on) is recorded and put back on Exit Maintenance Mode.
+            boot_disabled = list(ctx.get("boot_disabled", []))
+            boot_todo = [i for i in ctx.get("stopped_relocation_required", [])
+                         if i.get("boot_off") and not i.get("included") and i["workload_id"] not in boot_disabled]
+            if boot_todo:
+                try:
+                    with PveMaintenanceClient(load_pve_credentials(db, target, "maintenance")) as writer:
+                        for item in boot_todo:
+                            writer.set_vm_config_keys(node.name, item["vmid"], {"onboot": 0})
+                            boot_disabled.append(item["workload_id"])
+                            ctx["boot_disabled"] = boot_disabled
+                            save_progress()
+                except Exception as exc:  # noqa: BLE001
+                    release_locks_for_operation(db, op.id)
+                    return fail_operation(db, op, error=f"could not turn Start at boot off for the maintenance window (the PVE account needs VM.Config.Options): {exc}")
+
+            from .parallel_children import parallel_k, run_parallel
+
+            def prepare(item):
+                """Quick part of one item, on this operation's session: ("done", None) nothing left to do, ("exec", child) a move ready to run,
+                ("stop", op) the whole run ends here. A graceful shutdown in place is quick, so it is done right here."""
                 workload = db.query(Workload).filter(Workload.id == item["workload_id"]).one_or_none()
                 if workload is None or workload.is_missing:
-                    completed_migrations.append(item["workload_id"])
-                    save_progress()
-                    continue
-
-                # A workload with a perfectly good auto-found destination
-                # can still be told "just shut it down instead" -- not
-                # every guest needs the migration machinery, and for a lot
-                # of them a brief power-cycle during the maintenance window
-                # is simpler and just as acceptable as a live/offline move:
-                # some workloads can stay in place and just be powered
-                # down during updates, then brought back up once
-                # updates/reboot are complete. Tracked in completed_shutdowns (not
-                # completed_migrations) so node.exit_maintenance's own
-                # restart_plan -- which already reads exactly that list --
-                # brings it back up here with zero new plumbing needed.
+                    return "done", None
+                # A workload with a perfectly good auto-found destination can still be told "just shut it down instead": a brief power-cycle during
+                # the maintenance window is often simpler and just as acceptable. Tracked in completed_shutdowns so node.exit_maintenance's
+                # restart_plan brings it back up with no new plumbing.
                 if item.get("transport") == "shutdown_in_place":
                     child = lifecycle_workflow.dry_run_shutdown(
                         db, workload, actor=f"node.enter_maintenance:{op.id}",
@@ -425,49 +428,57 @@ def execute_enter_maintenance(db: Session, operation_id) -> Operation:
                     )
                     if child.status == "blocked":
                         release_locks_for_operation(db, op.id)
-                        return block_operation(db, op, blocking_safety_rules=(child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"], actor="system")
+                        return "stop", block_operation(db, op, blocking_safety_rules=(child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"], actor="system")
                     child = lifecycle_workflow.approve(db, child, approved_by=f"node.enter_maintenance:{op.id}")
                     child = lifecycle_workflow.execute_lifecycle_action(db, child.id)
                     if child.status != "completed":
                         release_locks_for_operation(db, op.id)
-                        return fail_operation(db, op, error=f"graceful shutdown for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
-                    completed_shutdowns.append(item["workload_id"])
-                    save_progress()
-                    continue
-
+                        if child.status == "cancelled":
+                            return "stop", cancel_operation(db, op, note="Guests already moved stay where they are.")
+                        return "stop", fail_operation(db, op, error=f"graceful shutdown for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
+                    return "done", None
                 destination_node = db.query(Node).filter(Node.id == item["destination_node_id"]).one_or_none()
                 if destination_node is None:
-                    completed_migrations.append(item["workload_id"])
-                    save_progress()
-                    continue
+                    return "done", None
                 destination_storage = db.query(Storage).filter(Storage.id == item["destination_storage_id"]).one_or_none() if item.get("destination_storage_id") else None
                 try:
                     child = dry_run_migration(
                         db, workload, destination_node, actor=f"node.enter_maintenance:{op.id}",
                         destination_storage=destination_storage, transport=item.get("transport", "live"),
-                        # A manually-picked destination has already had its
-                        # blocking reasons (including headroom) shown to a
-                        # human in the plan editor -- an auto-pick never
-                        # needs this since recommend_destinations() only
-                        # auto-selects unblocked candidates in the first
-                        # place, and every workload should be displayed
-                        # for choice of handling regardless of headroom.
+                        # A manually-picked destination has already had its blocking reasons (including headroom) shown to a human in the plan editor.
                         confirm_override_headroom=bool(item.get("manually_set")),
                         parent_operation_id=op.id, correlation_id=op.correlation_id,
                     )
                 except MigrationWorkflowError as exc:
                     release_locks_for_operation(db, op.id)
-                    return fail_operation(db, op, error=f"could not plan migration for {vm_label(item)}: {exc}")
+                    return "stop", fail_operation(db, op, error=f"could not plan migration for {vm_label(item)}: {exc}")
                 if child.status == "blocked":
                     release_locks_for_operation(db, op.id)
-                    return block_operation(db, op, blocking_safety_rules=(child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"], actor="system")
-                child = approve_migration(db, child, approved_by=f"node.enter_maintenance:{op.id}")
-                child = execute_migration(db, child.id)
-                if child.status != "completed":
-                    release_locks_for_operation(db, op.id)
-                    return fail_operation(db, op, error=f"migration for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
-                completed_migrations.append(item["workload_id"])
+                    return "stop", block_operation(db, op, blocking_safety_rules=(child.blocking_safety_rules or []) + ["SAFE-ROLLBACK-001"], actor="system")
+                return "exec", approve_migration(db, child, approved_by=f"node.enter_maintenance:{op.id}")
+
+            def _child_failed(item, child):
+                release_locks_for_operation(db, op.id)
+                if child.status == "cancelled":
+                    return cancel_operation(db, op, note="Guests already moved stay where they are.")
+                return fail_operation(db, op, error=f"migration for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
+
+            def on_done(item):
+                (completed_shutdowns if item.get("transport") == "shutdown_in_place" else completed_migrations).append(item["workload_id"])
                 save_progress()
+
+            def check_cancel():
+                return check_cancel_requested(db, op)
+
+            todo = [i for i in migrate_plan if i["workload_id"] not in completed_migrations and i["workload_id"] not in completed_shutdowns]
+            outcome = run_parallel(
+                db, op, todo, k=parallel_k(db),
+                prepare=prepare, execute=lambda session, child_id: execute_migration(session, child_id), on_done=on_done,
+                on_failure=_child_failed, check_cancel=check_cancel, dest_of=lambda item: str(item.get("destination_node_id")),
+            )
+            if outcome is not None:
+                release_locks_for_operation(db, op.id)
+                return outcome
 
             for item in shutdown_plan:
                 if item["workload_id"] in completed_shutdowns:
@@ -511,6 +522,8 @@ def execute_enter_maintenance(db: Session, operation_id) -> Operation:
                     child = execute_migration(db, child.id)
                     if child.status != "completed":
                         release_locks_for_operation(db, op.id)
+                        if child.status == "cancelled":
+                            return cancel_operation(db, op, note="Guests already moved stay where they are.")
                         return fail_operation(db, op, error=f"migration for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                     completed_shutdowns.append(item["workload_id"])
                     save_progress()
@@ -527,6 +540,8 @@ def execute_enter_maintenance(db: Session, operation_id) -> Operation:
                 child = lifecycle_workflow.execute_lifecycle_action(db, child.id)
                 if child.status != "completed":
                     release_locks_for_operation(db, op.id)
+                    if child.status == "cancelled":
+                        return cancel_operation(db, op, note="Guests already moved stay where they are.")
                     return fail_operation(db, op, error=f"graceful shutdown for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                 completed_shutdowns.append(item["workload_id"])
                 save_progress()
@@ -599,6 +614,8 @@ def execute_enter_maintenance(db: Session, operation_id) -> Operation:
 
                 if child.status != "completed":
                     release_locks_for_operation(db, op.id)
+                    if child.status == "cancelled":
+                        return cancel_operation(db, op, note="Guests already moved stay where they are.")
                     return fail_operation(db, op, error=f"relocation for stopped {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                 completed_stopped.append(item["workload_id"])
                 save_progress()
@@ -640,6 +657,7 @@ def dry_run_exit_maintenance(db: Session, node: Node, *, actor: str) -> Operatio
     reasons: list[str] = []
     blocking_rules: list[str] = []
     restart_plan = []
+    entry = None
 
     if not node.maintenance_mode:
         reasons.append(f"{node.name} is not currently in maintenance mode")
@@ -665,16 +683,26 @@ def dry_run_exit_maintenance(db: Session, node: Node, *, actor: str) -> Operatio
             if workload is not None and not workload.is_missing and workload.status == "stopped":
                 restart_plan.append({"workload_id": str(workload.id), "vmid": workload.vmid, "name": workload.name})
 
+    boot_restore_plan = []
+    if node.maintenance_mode and entry is not None:
+        for wid in (entry.context or {}).get("boot_disabled", []):
+            workload = db.query(Workload).filter(Workload.id == wid).one_or_none()
+            if workload is not None and not workload.is_missing and workload.node_id == node.id:
+                boot_restore_plan.append({"workload_id": str(workload.id), "vmid": workload.vmid, "name": workload.name})
+        if boot_restore_plan:
+            reasons.append("Start at boot will be turned back on for: " + ", ".join(i["name"] or str(i["vmid"]) for i in boot_restore_plan) + " (it was turned off for this maintenance window).")
+
     dry_run_result = {
         "node": node.name,
         "eligible": len(blocking_rules) == 0,
         "reasons": reasons,
         "blocking_safety_rules": blocking_rules,
         "restart_plan": restart_plan,
+        "boot_restore_plan": boot_restore_plan,
         "note": "exiting does not migrate anything back onto this node -- workloads live-migrated off during "
                 "entry stay wherever they were sent; only guests this run itself shut down get restarted.",
     }
-    context = {"node": node.name, "restart_plan": restart_plan}
+    context = {"node": node.name, "restart_plan": restart_plan, "boot_restore_plan": boot_restore_plan}
 
     if blocking_rules:
         return enter_stage(db, op, status="blocked", stage="dry_run", dry_run_result=dry_run_result, blocking_safety_rules=blocking_rules, context=context, actor=actor)
@@ -725,6 +753,22 @@ def execute_exit_maintenance(db: Session, operation_id) -> Operation:
                     # nicety, not a safety requirement -- note it and move on.
                 restarted.append(item["workload_id"])
                 save_progress()
+
+            # Put Start at boot back exactly as it was (it was on) for the guests the entry operation turned it off for.
+            boot_restored = list(ctx.get("boot_restored", []))
+            boot_plan = [i for i in ctx.get("boot_restore_plan", []) if i["workload_id"] not in boot_restored]
+            if boot_plan:
+                cluster_, target_ = _load_context(db, node)
+                try:
+                    with PveMaintenanceClient(load_pve_credentials(db, target_, "maintenance")) as writer:
+                        for item in boot_plan:
+                            writer.set_vm_config_keys(node.name, item["vmid"], {"onboot": 1})
+                            boot_restored.append(item["workload_id"])
+                            ctx["boot_restored"] = boot_restored
+                            save_progress()
+                except Exception as exc:  # noqa: BLE001
+                    release_locks_for_operation(db, op.id)
+                    return fail_operation(db, op, error=f"could not turn Start at boot back on: {exc}. Set it back on by hand for: " + ", ".join(i["name"] or str(i["vmid"]) for i in boot_plan))
 
             op = enter_stage(db, op, status="verifying", stage="verifying")
 

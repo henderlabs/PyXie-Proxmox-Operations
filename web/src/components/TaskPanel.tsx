@@ -7,12 +7,12 @@ import { OPERATION_TYPE_LABELS, operationTypeLabel } from "@/components/Operatio
 import StatusBadge from "@/components/StatusBadge";
 import MigrationBars from "@/components/MigrationBars";
 import { ChecklistIcon, SpinnerIcon, HourglassIcon, HistoryIcon, PinIcon } from "@/components/Icons";
-import { onOperationsChanged } from "@/lib/operationsBus";
+import { notifyOperationsChanged, onOperationsChanged } from "@/lib/operationsBus";
 import { useMe } from "@/lib/useMe";
 
 const SECTION_ICONS: Record<string, React.ReactNode> = {
-  "In Progress": <SpinnerIcon className="w-4 h-4" />,
-  "Awaiting Approval": <HourglassIcon className="w-4 h-4" />,
+  "Running": <SpinnerIcon className="w-4 h-4" />,
+  "Needs You": <HourglassIcon className="w-4 h-4" />,
   "Recent": <HistoryIcon className="w-4 h-4" />,
 };
 
@@ -37,6 +37,18 @@ const IN_FLIGHT_STATUSES = new Set([
   "evacuating",
 ]);
 const TERMINAL_STATUSES = new Set(["completed", "failed", "blocked", "cancelled"]);
+
+// Types a Cancel makes sense for while they run (mirrors OperationCard's CANCEL_WHILE_RUNNING).
+const CANCELLABLE = new Set(["node.enter_maintenance", "maintenance.run", "node.evacuate", "cluster.rebalance", "vm.live_migrate", "workload.move_storage"]);
+
+// Left edge and tint per state, the same colour language as the top bar: blue running, amber needs you, red failed, green done.
+function stateClass(status: string): string {
+  if (status === "awaiting_approval") return "border-l-[3px] border-l-warn bg-warn/5";
+  if (status === "failed") return "border-l-[3px] border-l-bad bg-bad/5";
+  if (status === "completed") return "border-l-[3px] border-l-good bg-good/5";
+  if (IN_FLIGHT_STATUSES.has(status)) return "border-l-[3px] border-l-proxmox bg-proxmox/5";
+  return "border-l-[3px] border-l-border";
+}
 
 // The three operation types that carry a migrate_plan/shutdown_plan and
 // execute it one item at a time (see node_maintenance_workflow.py,
@@ -104,7 +116,7 @@ const RECENT_LIMIT = 100; // the list scrolls: this is history you can read back
 // The standalone Migrations page retired 2026-09-11 -- live migrations
 // (Balance Load, the Workloads "Move" action, or anything else) now show
 // up on Maintenance's own operations log alongside everything else.
-function pageFor(operationTypeId: string, context?: Record<string, unknown> | null, workloadId?: string | null): string {
+export function pageFor(operationTypeId: string, context?: Record<string, unknown> | null, workloadId?: string | null): string {
   // This used to route
   // EVERY operation type to Maintenance, including backup-membership
   // operations that live on the Protection page -- clicking through
@@ -124,7 +136,7 @@ function pageFor(operationTypeId: string, context?: Record<string, unknown> | nu
     return "/infrastructure/workloads/pools";
   }
   if (workloadId && operationTypeId.startsWith("workload.") && operationTypeId !== "workload.network_vlan_change") {
-    return `/infrastructure/workloads/${workloadId}?tab=${["workload.disk_change", "workload.disk_grow", "workload.hw_change", "workload.nic_change", "workload.ct_nic_change", "workload.cdrom_change"].includes(operationTypeId) ? "hardware" : "tasks"}`;
+    return `/infrastructure/workloads/${workloadId}?tab=${["workload.disk_change", "workload.disk_grow", "workload.hw_change", "workload.nic_change", "workload.ct_nic_change", "workload.cdrom_change"].includes(operationTypeId) ? "hardware" : operationTypeId === "workload.config_change" ? "config" : "tasks"}`;
   }
   if (operationTypeId === "protection.backup_retention") {
     return "/operations/protection";
@@ -139,7 +151,7 @@ function pageFor(operationTypeId: string, context?: Record<string, unknown> | nu
   return "/operations/maintenance";
 }
 
-function subjectFor(op: Operation): string {
+export function subjectFor(op: Operation): string {
   const r = op.dry_run_result;
   if (op.operation_type_id === "vm.live_migrate") {
     return r?.workload_name || (r?.vmid ? `vmid ${r.vmid}` : r?.node || "?");
@@ -250,16 +262,35 @@ function TaskRow({ op, onApproved, isAdmin }: { op: Operation; onApproved: () =>
     }
   }
 
+  async function cancelRun(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    const parent = op.operation_type_id !== "vm.live_migrate" && op.operation_type_id !== "workload.move_storage";
+    const text = op.operation_type_id === "workload.move_storage"
+      ? "Cancel this disk move? The original disk was never touched and the VM keeps running; PyXie stops the Proxmox task and checks where the disk is."
+      : parent
+        ? "Cancel this run? The guest move running now is stopped and nothing further starts. Guests already moved stay where they are."
+        : "Cancel this migration? The VM keeps running on its source host; PyXie stops the Proxmox task and checks where the VM is.";
+    if (!window.confirm(text)) return;
+    const r = await fetch(`/api/operations/${op.id}/cancel`, { method: "POST" });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); window.alert(d.error || d.detail || "Could not cancel"); }
+    notifyOperationsChanged();
+    onApproved();
+  }
+
   async function dismiss(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
     setDismissing(true);
     try {
-      const res = await fetch(`/api/operations/${op.id}/dismiss`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dismissed: true }),
-      });
+      // A plan still waiting for approval is rejected (cancelled), not just hidden: a hidden plan would sit approvable and keep its locks.
+      const res = op.status === "awaiting_approval"
+        ? await fetch(`/api/operations/${op.id}/cancel`, { method: "POST" })
+        : await fetch(`/api/operations/${op.id}/dismiss`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dismissed: true }),
+          });
       if (res.ok) onApproved();
     } finally {
       setDismissing(false);
@@ -269,7 +300,7 @@ function TaskRow({ op, onApproved, isAdmin }: { op: Operation; onApproved: () =>
   return (
     <a
       href={pageFor(op.operation_type_id, op.context, op.workload_id)}
-      className="block px-3 py-2 hover:bg-surface2/60 border-b border-border/60"
+      className={`block px-3 py-2 hover:bg-surface2/60 border-b border-border/60 ${stateClass(op.status)}`}
     >
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-text truncate">
@@ -302,7 +333,20 @@ function TaskRow({ op, onApproved, isAdmin }: { op: Operation; onApproved: () =>
       {op.approver && op.approver !== op.initiated_by && (
         <div className="text-[11px] text-muted truncate mt-0.5">approved by {op.approver}</div>
       )}
+      {op.lane && (inFlight || op.status === "approved") && (
+        <span className={`inline-block text-[10px] px-1.5 rounded border mt-0.5 mr-1 ${op.lane === "quick" ? "border-accent text-accent" : "border-border text-muted"}`} title={op.lane === "quick" ? "Quick lane: short actions, never waits behind a disk copy" : "Bulk lane: migrations, storage moves, restores, evacuations, host updates"}>{op.lane === "quick" ? "Quick" : "Bulk"}</span>
+      )}
+      {op.queued_behind && (
+        <div className="text-[11px] text-warn mt-0.5" title={op.waiting_for_resource ? "This guest or host is in use by that task: this one retries by itself (about every minute, up to 6 hours) and starts when it is free." : "This one starts when the task ahead of it in the same lane finishes."}>
+          {op.waiting_for_resource ? "Waiting for" : "Queued behind"}: {op.queued_behind.label}
+          {op.queued_behind.running_minutes != null ? ` (running ${op.queued_behind.running_minutes} min` : " ("}
+          {op.queued_behind.progress_pct != null ? `${op.queued_behind.running_minutes != null ? ", " : ""}${Math.round(op.queued_behind.progress_pct)}% done)` : ")"}
+        </div>
+      )}
       {inFlight && (op.operation_type_id === "vm.live_migrate" || op.operation_type_id === "workload.move_storage") ? <MigrationBars op={op} /> : inFlight && <ProgressBar pct={op.progress?.pct ?? null} />}
+      {inFlight && isAdmin && CANCELLABLE.has(op.operation_type_id) && (
+        <button onClick={cancelRun} className="mt-1 text-[11px] text-bad hover:underline">Cancel…</button>
+      )}
       {op.status === "failed" && op.error && <div className="text-[11px] text-bad mt-1">{op.error}</div>}
       {op.status === "awaiting_approval" && isAdmin && (
         <div className="mt-1.5 flex items-center gap-2">
@@ -467,7 +511,10 @@ function CheckTaskRow({ c }: { c: CheckItem }) {
 }
 
 /** Recent: finished tasks and Balance Load checks, newest first, in a scrolling list (tasks started by another task are nested under it). */
+const RECENT_DEFAULT = 3; // a glance at what just happened; "Show all" opens the scrolling history
+
 function RecentSection({ ops, checks, onApproved, isAdmin }: { ops: Operation[]; checks: CheckItem[]; onApproved: () => void; isAdmin: boolean }) {
+  const [showAll, setShowAll] = useState(false);
   const ids = new Set(ops.map((o) => o.id));
   const roots = ops.filter((o) => !o.parent_operation_id || !ids.has(o.parent_operation_id));
   const childrenOf = new Map<string, Operation[]>();
@@ -478,6 +525,7 @@ function RecentSection({ ops, checks, onApproved, isAdmin }: { ops: Operation[];
     ...roots.map((op) => ({ at: new Date(op.completed_at || op.updated_at).getTime(), op, check: null as CheckItem | null })),
     ...checks.map((c) => ({ at: new Date(c.at).getTime(), op: null as Operation | null, check: c })),
   ].sort((a, b) => b.at - a.at).slice(0, RECENT_LIMIT);
+  const shown = showAll ? feed : feed.slice(0, RECENT_DEFAULT);
   return (
     <div className="mb-3 mt-5 pt-4 border-t border-border">
       <div className="px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-proxmox flex items-center justify-between">
@@ -488,7 +536,7 @@ function RecentSection({ ops, checks, onApproved, isAdmin }: { ops: Operation[];
         <div className="px-3 py-2 text-xs text-muted italic">No recent activity.</div>
       ) : (
         <div className="max-h-[48vh] overflow-y-auto overscroll-contain">
-          {feed.map((f) =>
+          {shown.map((f) =>
             f.check ? (
               <CheckTaskRow key={`c-${f.check.id}`} c={f.check} />
             ) : (
@@ -501,6 +549,11 @@ function RecentSection({ ops, checks, onApproved, isAdmin }: { ops: Operation[];
                 )}
               </div>
             )
+          )}
+          {feed.length > RECENT_DEFAULT && (
+            <button onClick={() => setShowAll((v) => !v)} className="w-full px-3 py-2 text-[11px] text-accent hover:underline text-left">
+              {showAll ? "Show fewer" : `Show all ${feed.length}`}
+            </button>
           )}
         </div>
       )}
@@ -639,24 +692,24 @@ export default function TaskPanel({
         <div className="flex-1 flex flex-col overflow-y-auto py-2">
           <div>
             <Section
-              title="In Progress"
+              title="Needs You"
+              ops={awaitingApproval}
+              emptyText="Nothing waiting on you."
+              onApproved={refresh}
+              isAdmin={isAdmin}
+            />
+            <Section
+              title="Running"
               ops={inFlight}
               emptyText="Nothing running right now."
               onApproved={refresh}
+              divider
               extraCount={queuedCount}
               renderExtra={(op) =>
                 queuedByParentId[op.id]?.map((q) => (
                   <QueuedRow key={q.key} label={q.label} subject={q.subject} skipped={q.skipped} workloadId={q.workloadId} by={op.initiated_by} since={op.approved_at || op.started_at || op.created_at} />
                 ))
               }
-              isAdmin={isAdmin}
-            />
-            <Section
-              title="Awaiting Approval"
-              ops={awaitingApproval}
-              emptyText="Nothing waiting on you."
-              onApproved={refresh}
-              divider
               isAdmin={isAdmin}
             />
           </div>

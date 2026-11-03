@@ -30,6 +30,8 @@ from sqlalchemy.orm import Session
 from . import host_update_workflow, lifecycle_workflow, reboot_workflow
 from .locks import LockContention, acquire_lock, release_locks_for_operation
 from .vm_liveness import liveness_block_reason, scan_vm_liveness
+from .vm_locks import lock_context
+from .stopped_guests import stopped_shared_item
 from .maintenance import _quorum_after_removal, _has_pci_passthrough, _qemu_config, flag_onboot, vm_lock_reason
 from .migration_workflow import (
     MigrationWorkflowError,
@@ -44,6 +46,7 @@ from .operations_engine import (
     OperationError,
     approve_operation,
     block_operation,
+    cancel_operation,
     check_cancel_requested,
     create_operation,
     enter_stage,
@@ -136,7 +139,7 @@ def dry_run_maintenance(
                     blocked_workloads.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
                                                "reasons": ["PCI/device passthrough -- no safe automated path"]})
                     continue
-                block_reasons = [r for r in (vm_lock_reason(wl.vmid, config), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r]
+                block_reasons = [r for r in (vm_lock_reason(wl.vmid, config, **lock_context(db, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r]
                 if block_reasons:
                     blocked_workloads.append({"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name, "reasons": block_reasons})
                     continue
@@ -164,7 +167,7 @@ def dry_run_maintenance(
                         "candidates": [
                             {
                                 "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                             }
                             for c in ranked
                         ],
@@ -203,7 +206,7 @@ def dry_run_maintenance(
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -230,11 +233,7 @@ def dry_run_maintenance(
                                                          "included": False})
                     continue
                 if on_shared:
-                    stopped_no_action.append(flag_onboot(
-                        {"workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
-                         "reasons": ["stopped, and its disk is on shared storage -- no action needed for this reboot"]},
-                        _qemu_config(client, node.name, wl),
-                    ))
+                    stopped_relocation_required.append(stopped_shared_item(db, client, node, wl, candidates_all, nodes_by_id, simulated_added_bytes, "stopped, and its disk is on shared storage -- no action needed for this reboot -- optional: move it too (offline, config only, nothing is copied)"))
                 else:
                     # Never required -- a stopped guest costs this node
                     # nothing either way, and for a plain temporary reboot
@@ -274,7 +273,7 @@ def dry_run_maintenance(
                             "candidates": [
                                 {
                                     "node_id": str(c.node_id), "node_name": c.node_name, "score": c.score,
-                                    "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
+                                    "projected_mem_pct": c.projected_pct, "blocked": c.blocked, "blocking_reasons": c.blocking_reasons, "reasons": c.reasons,
                                 }
                                 for c in ranked
                             ],
@@ -427,6 +426,8 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
                     child = lifecycle_workflow.execute_lifecycle_action(db, child.id)
                     if child.status != "completed":
                         release_locks_for_operation(db, op.id)
+                        if child.status == "cancelled":
+                            return cancel_operation(db, op, note="Guests already moved stay where they are.")
                         return fail_operation(db, op, error=f"graceful shutdown for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                     completed_shutdowns.append(item["workload_id"])
                     save_progress()
@@ -455,6 +456,8 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
                 child = execute_migration(db, child.id)
                 if child.status != "completed":
                     release_locks_for_operation(db, op.id)
+                    if child.status == "cancelled":
+                        return cancel_operation(db, op, note="Guests already moved stay where they are.")
                     return fail_operation(db, op, error=f"migration for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                 completed_migrations.append(item["workload_id"])
                 save_progress()
@@ -505,6 +508,8 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
                     child = execute_migration(db, child.id)
                     if child.status != "completed":
                         release_locks_for_operation(db, op.id)
+                        if child.status == "cancelled":
+                            return cancel_operation(db, op, note="Guests already moved stay where they are.")
                         return fail_operation(db, op, error=f"migration for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                     completed_shutdowns.append(item["workload_id"])
                     save_progress()
@@ -521,6 +526,8 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
                 child = lifecycle_workflow.execute_lifecycle_action(db, child.id)
                 if child.status != "completed":
                     release_locks_for_operation(db, op.id)
+                    if child.status == "cancelled":
+                        return cancel_operation(db, op, note="Guests already moved stay where they are.")
                     return fail_operation(db, op, error=f"graceful shutdown for {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                 completed_shutdowns.append(item["workload_id"])
                 save_progress()
@@ -593,6 +600,8 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
 
                 if child.status != "completed":
                     release_locks_for_operation(db, op.id)
+                    if child.status == "cancelled":
+                        return cancel_operation(db, op, note="Guests already moved stay where they are.")
                     return fail_operation(db, op, error=f"relocation for stopped {vm_label(item)} did not complete (status={child.status}): {child_reason(child)}")
                 completed_stopped.append(item["workload_id"])
                 save_progress()
@@ -712,7 +721,7 @@ def execute_maintenance(db: Session, operation_id) -> Operation:
                             db, workload, node, actor=f"maintenance.run:{op.id}",
                             parent_operation_id=op.id, correlation_id=op.correlation_id,
                         )
-                    except MigrationWorkflowError as exc:
+                    except MigrationWorkflowError:
                         # Non-fatal: leave it on its evacuation destination,
                         # note it and move on -- restoring placement is a nicety,
                         # not a safety requirement.

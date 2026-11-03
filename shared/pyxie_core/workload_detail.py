@@ -105,6 +105,7 @@ def parse_nets(config: dict, *, lxc: bool = False) -> list[dict]:
                 "vlan_tag": opts.get("tag"),
                 "firewall": _truthy(opts.get("firewall")),
                 "rate": opts.get("rate"),
+                "mtu": opts.get("mtu"),
                 "link_down": _truthy(opts.get("link_down")),
                 "ip": opts.get("ip"),
             }
