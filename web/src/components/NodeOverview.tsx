@@ -64,9 +64,10 @@ function useNodeLive(nodeId: string): NodeLive | null {
   return live;
 }
 
-function useNodeRrd(nodeId: string, timeframe: Timeframe): { rows: NodeRrdRow[]; error: string | null; loading: boolean } {
+function useNodeRrd(nodeId: string, timeframe: Timeframe, enabled: boolean): { rows: NodeRrdRow[]; error: string | null; loading: boolean } {
   const [state, setState] = useState<{ rows: NodeRrdRow[]; error: string | null; loading: boolean }>({ rows: [], error: null, loading: true });
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     setState({ rows: [], error: null, loading: true });
     const load = () =>
@@ -82,7 +83,7 @@ function useNodeRrd(nodeId: string, timeframe: Timeframe): { rows: NodeRrdRow[];
       cancelled = true;
       clearInterval(iv);
     };
-  }, [nodeId, timeframe]);
+  }, [nodeId, timeframe, enabled]);
   return state;
 }
 
@@ -116,18 +117,23 @@ export default function NodeOverview({
   initialNode,
   rebootRequired,
   header,
+  tab,
+  tabs,
 }: {
   nodeId: string;
   /** Page title block, rendered at the top of the block that sits beside the inventory tree. */
   header?: React.ReactNode;
   initialNode: Node;
+  tab: string;
+  /** The tab bar, shown directly under the tiles. */
+  tabs: React.ReactNode;
   /** From the host-maintenance readiness check; null when that check could not run. */
   rebootRequired: boolean | null;
 }) {
   const [node, setNode] = useState<Node>(initialNode);
   const [timeframe, setTimeframe] = useState<Timeframe>("hour");
   const live = useNodeLive(nodeId);
-  const rrd = useNodeRrd(nodeId, timeframe);
+  const rrd = useNodeRrd(nodeId, timeframe, tab === "overview");
   const responsiveness = useNodeLiveness(nodeId);
   const s = live?.status ?? null;
 
@@ -198,6 +204,8 @@ export default function NodeOverview({
       </div>
 
       <div className="col-span-2 min-w-0">
+      {tabs}
+      {tab === "overview" && (<>
       <div className="flex items-center justify-between mb-2">
         <div className="text-xs text-muted">Graphs are PVE's own rrd series for this host, read live.</div>
         <label className="text-sm text-muted flex items-center gap-2">
@@ -239,6 +247,8 @@ export default function NodeOverview({
         </div>
       )}
 
+      </>)}
+      {tab === "overview" && (<>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
         <Card>
           <CardTitle>System</CardTitle>
@@ -322,6 +332,7 @@ export default function NodeOverview({
           })()
         )}
       </Card>
+      </>)}
       </div>
     </div>
   );
