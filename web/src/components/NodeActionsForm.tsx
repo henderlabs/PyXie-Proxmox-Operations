@@ -12,6 +12,7 @@ import { useMe } from "@/lib/useMe";
 import { isInFlight, isTerminal } from "@/lib/operationStatus";
 import { formatBytes, formatRelativeTime, isOverprovisioned, overprovisionedPct } from "@/lib/format";
 import { nodeLiveState } from "@/lib/nodeState";
+import { useStaleAfterMs } from "@/lib/useStaleAfterMs";
 import { WrenchIcon, PlugIcon, PackageIcon, ClockIcon, ChecklistIcon } from "@/components/Icons";
 
 // "Wx" stage numbers are an internal build-tracking label, not something an
@@ -214,8 +215,9 @@ export default function NodeActionsForm({
   const evacuatingCount = evacuating.length;
   const evacuatingNames = evacuating.map((o) => nodes.find((n) => n.id === o.node_id)?.name).filter(Boolean).join(", ") || "the node";
 
+  const staleMs = useStaleAfterMs();
   // Offline nodes (PVE reports them down or they stopped answering) cannot be picked for any action.
-  const selectable = nodes.filter((n) => nodeLiveState(n) !== "offline");
+  const selectable = nodes.filter((n) => nodeLiveState(n, Date.now(), staleMs) !== "offline");
   const allSelected = selectable.length > 0 && selectedNodeIds.length === selectable.length;
 
   useEffect(() => {
@@ -434,7 +436,7 @@ export default function NodeActionsForm({
               render: (n) => isPbs(n) ? (
                 <input type="checkbox" checked={selectedPbsIds.includes(n.id)} onChange={() => togglePbs(n.id)} />
               ) : (
-                <input type="checkbox" checked={selectedNodeIds.includes(n.id)} disabled={nodeLiveState(n) === "offline"} title={nodeLiveState(n) === "offline" ? `${n.name} is offline: actions are unavailable` : undefined} onChange={() => toggleNode(n.id)} />
+                <input type="checkbox" checked={selectedNodeIds.includes(n.id)} disabled={nodeLiveState(n, Date.now(), staleMs) === "offline"} title={nodeLiveState(n, Date.now(), staleMs) === "offline" ? `${n.name} is offline: actions are unavailable` : undefined} onChange={() => toggleNode(n.id)} />
               ),
             },
             {
@@ -468,12 +470,12 @@ export default function NodeActionsForm({
                       Maintenance
                     </span>
                   )}
-                  {!n.is_missing && nodeLiveState(n) === "offline" && (
+                  {!n.is_missing && nodeLiveState(n, Date.now(), staleMs) === "offline" && (
                     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted/20 text-muted uppercase tracking-wide" title="PVE reports this node offline, or it stopped answering. Its numbers are not shown and it cannot be selected.">
                       Offline <span className="normal-case">· last seen {formatRelativeTime(n.last_seen)}</span>
                     </span>
                   )}
-                  {!n.is_missing && nodeLiveState(n) === "just_offline" && (
+                  {!n.is_missing && nodeLiveState(n, Date.now(), staleMs) === "just_offline" && (
                     <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-warn/20 text-warn uppercase tracking-wide" title="This node just stopped answering (hung, rebooting or powered off). Numbers shown are the last known.">
                       Just went offline <span className="normal-case">· {formatRelativeTime(n.last_seen)}</span>
                     </span>
@@ -508,12 +510,12 @@ export default function NodeActionsForm({
             },
             {
               header: "CPU",
-              render: (n) => (!isPbs(n) && nodeLiveState(n) === "offline") ? <span className="text-muted text-xs">—</span> : <Meter value={isPbs(n) ? (n.status?.cpu != null ? n.status.cpu * 100 : null) : n.cpu_usage_pct} width={56} />,
+              render: (n) => (!isPbs(n) && nodeLiveState(n, Date.now(), staleMs) === "offline") ? <span className="text-muted text-xs">—</span> : <Meter value={isPbs(n) ? (n.status?.cpu != null ? n.status.cpu * 100 : null) : n.cpu_usage_pct} width={56} />,
               sortValue: (n) => (isPbs(n) ? (n.status?.cpu ?? 0) * 100 : n.cpu_usage_pct),
             },
             {
               header: "RAM",
-              render: (n) => (!isPbs(n) && nodeLiveState(n) === "offline") ? <span className="text-muted text-xs">—</span> : <Meter value={isPbs(n) ? (n.status?.memory ? (100 * n.status.memory.used) / n.status.memory.total : null) : n.mem_usage_pct} width={56} />,
+              render: (n) => (!isPbs(n) && nodeLiveState(n, Date.now(), staleMs) === "offline") ? <span className="text-muted text-xs">—</span> : <Meter value={isPbs(n) ? (n.status?.memory ? (100 * n.status.memory.used) / n.status.memory.total : null) : n.mem_usage_pct} width={56} />,
               sortValue: (n) => (isPbs(n) ? (n.status?.memory ? n.status.memory.used / n.status.memory.total : 0) * 100 : n.mem_usage_pct),
             },
             {
@@ -539,7 +541,7 @@ export default function NodeActionsForm({
               header: "Workloads",
               tooltip: "Running workloads on this node; stopped ones in brackets. Handy for spotting empty nodes before an evacuation.",
               render: (n) => {
-                if (isPbs(n) || nodeLiveState(n) === "offline") return <span className="text-muted text-xs">—</span>;
+                if (isPbs(n) || nodeLiveState(n, Date.now(), staleMs) === "offline") return <span className="text-muted text-xs">—</span>;
                 const c = workloadCounts[n.id] || { running: 0, stopped: 0 };
                 return (
                   <span className="text-sm tabular-nums" title={`${c.running} running, ${c.stopped} stopped`}>
