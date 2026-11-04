@@ -14,7 +14,7 @@ on
 |---|---|---|
 | Not needed | nothing | none; the console stays unusable |
 | **Add VM.Console to the admin role** | adds `VM.Console` to the `PyXieAdmin` role that the admin token (default `pyxie-admin@pve!maintenance`) holds | none beyond the `maintenance` credential: it is used for the console too |
-| **Separate console token** | creates `pyxie-console@pve` (default name), token id `console`, built-in role `PVEVMConsole` at `/vms` | Credentials > + Add Credential Purpose > `console` (token user as created, token id `console`) |
+| **Separate console token** | creates `pyxie-console@pve` (default name), token id `console`, and a custom role `PyXieConsole` (`VM.Console` only) granted at `/vms` to the user and its token | Credentials > + Add Credential Purpose > `console` (token user as created, token id `console`) |
 
 The separate token has the smaller blast radius if it leaks: it cannot power off, migrate or reconfigure anything.
 
@@ -25,9 +25,16 @@ whether the console is off, and whether a credential that can open a console exi
 (the grant is on the token because of privilege separation: `pveum acl list` shows it). For a dedicated token:
 
 ```
+pveum role add PyXieConsole --privs VM.Console
+pveum user add pyxie-console@pve
 pveum user token add pyxie-console@pve console --privsep 1
-pveum acl modify /vms --tokens 'pyxie-console@pve!console' --roles PVEVMConsole
+pveum acl modify /vms --users 'pyxie-console@pve' --roles PyXieConsole
+pveum acl modify /vms --tokens 'pyxie-console@pve!console' --roles PyXieConsole
 ```
+
+Grant the role to the user as well as the token: with privilege separation a token only gets the privileges its user
+also has. Proxmox has no built-in console-only role (there is no `PVEVMConsole`; scripts from v0.55.2 and earlier
+stop with "role 'PVEVMConsole' does not exist"). Re-running the current account script fixes such an install.
 
 The account names are only labels; an install made earlier may use others (for example `pyxie-manager@pve`).
 

@@ -39,7 +39,7 @@ const NAMES: [string, string, string][] = [
   ["On the node you ran it on", "/root/pyxie-tokens.txt", "Where the account script saves the token secrets (root only). Copy them into PyXie, then delete the file with shred -u."],
   ["Proxmox account (optional)", "pyxie-console@pve", "Only if you choose a separate console token. Holds the console token."],
   ["Proxmox token (optional)", "pyxie-console@pve!console", "Token ID console. PyXie credential purpose: console."],
-  ["Proxmox role (optional)", "PVEVMConsole", "Built into Proxmox. Only for that optional console token, at /vms."],
+  ["Proxmox role (optional)", "PyXieConsole", "Custom role the script creates: VM.Console only. Granted at /vms to the console user and its token."],
   ["Each host", "pyxie-hostmaint", "The SSH identity PyXie uses to patch and reboot a node (no shell, seven fixed commands)."],
   ["Backup server (optional)", "pyxie-pbs-ro@pbs", "The read-only Proxmox Backup Server account. Holds the inventory token. Audit role on /."],
   ["Backup server (optional)", "pyxie-pbs-admin@pbs", "The account that edits sync, prune and verify jobs. Holds the administrative token. Audit on /, DatastoreAdmin on /datastore, RemoteSyncOperator on /remote."],
