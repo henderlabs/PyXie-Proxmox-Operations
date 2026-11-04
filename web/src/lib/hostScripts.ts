@@ -104,7 +104,14 @@ export function pveScript(o: { roUser: string; adminUser: string; consoleUser: s
   }
   if (o.console === "separate") {
     users.push(o.consoleUser);
-    B.push("", "# Console account: its own token, VM.Console only (built-in role PVEVMConsole)", `ensure_user '${o.consoleUser}' "PyXie embedded console"`, `add_token '${o.consoleUser}' console "PyXie embedded console"`, `grant /vms PVEVMConsole '${o.consoleUser}' console`);
+    B.push(
+      "",
+      "# Console account: its own token, VM.Console only, on every guest (Proxmox has no built-in console-only role, so the script makes PyXieConsole)",
+      `ensure_user '${o.consoleUser}' "PyXie embedded console"`,
+      `pveum role add PyXieConsole --privs "VM.Console" 2>/dev/null || pveum role modify PyXieConsole --privs "VM.Console"`,
+      `add_token '${o.consoleUser}' console "PyXie embedded console"`,
+      `grant /vms PyXieConsole '${o.consoleUser}' console`,
+    );
   }
   if (o.shell && o.shellUser) {
     users.push(o.shellUser);
