@@ -927,6 +927,29 @@ class PveConsoleClient:
     def active_host(self) -> str:
         return self._pool.active_host
 
+    def termproxy(self, node: str) -> dict:
+        """PVE's node shell: POST /nodes/{node}/termproxy opens a short-lived terminal session on the
+        host (needs Sys.Console on the node for BOTH the token and its user). Returns
+        {port, ticket, user, host, api_port}; the websocket handshake must send `user:ticket\\n` first."""
+        try:
+            resp = self._pool.request("POST", f"/nodes/{node}/termproxy", data={})
+        except httpx.ConnectError as exc:
+            if "certificate" in str(exc).lower() or "SSL" in str(exc):
+                raise PveTlsError(str(exc)) from exc
+            raise PveConnectionError(str(exc)) from exc
+        except httpx.TimeoutException as exc:
+            raise PveConnectionError(f"timeout: {exc}") from exc
+        except httpx.TransportError as exc:
+            raise PveConnectionError(str(exc)) from exc
+        if resp.status_code in (401, 403):
+            raise PveAuthError(f"{resp.status_code}: {resp.text[:300]}")
+        resp.raise_for_status()
+        data = resp.json().get("data") or {}
+        if not all(k in data for k in ("port", "ticket", "user")):
+            raise PveConnectionError("PVE termproxy returned no port/ticket/user")
+        return {"port": int(data["port"]), "ticket": data["ticket"], "user": data["user"],
+                "host": self._pool.active_host, "api_port": self._creds.api_port}
+
     def vncproxy(self, node: str, vmid: int, kind: str) -> dict:
         """Returns {port, vncticket, password, host, api_port}. QEMU: `ticket` authorises the
         websocket and `password` (generate-password) is the VNC password. LXC has no separate

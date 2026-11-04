@@ -20,6 +20,11 @@
 		reverse_proxy pyxie-manager-api:8000
 	}
 
+	# Embedded host shell: same arrangement, its own one-time ticket path.
+	handle /shell-ws/* {
+		reverse_proxy pyxie-manager-api:8000
+	}
+
 	handle {
 		reverse_proxy pyxie-manager-web:3000
 	}

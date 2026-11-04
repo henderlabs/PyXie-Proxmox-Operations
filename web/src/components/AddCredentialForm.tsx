@@ -6,8 +6,8 @@ import { useMe } from "@/lib/useMe";
 
 // The purposes PyXie uses. The Proxmox account script creates a token whose id equals the purpose name, so the token id is
 // pre-filled to match; the user names are the defaults the script builder proposes (yours may differ).
-const ALL_SLOTS = ["inventory", "maintenance", "console"];
-const DEFAULT_USER: Record<string, string> = { inventory: "pyxie-ro@pve", maintenance: "pyxie-admin@pve", console: "pyxie-console@pve" };
+const ALL_SLOTS = ["inventory", "maintenance", "console", "shell"];
+const DEFAULT_USER: Record<string, string> = { inventory: "pyxie-ro@pve", maintenance: "pyxie-admin@pve", console: "pyxie-console@pve", shell: "pyxie-shell@pve" };
 
 export default function AddCredentialForm({ targetId, existingSlots }: { targetId: string; existingSlots: string[] }) {
   const router = useRouter();

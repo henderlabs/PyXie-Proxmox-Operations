@@ -75,7 +75,7 @@ export function pbsScript(o: { roUser: string; adminUser: string; inventory: boo
   ].join("\n");
 }
 
-export function pveScript(o: { roUser: string; adminUser: string; consoleUser: string; inventory: boolean; maintenance: boolean; console: ConsoleOpt }): string {
+export function pveScript(o: { roUser: string; adminUser: string; consoleUser: string; inventory: boolean; maintenance: boolean; console: ConsoleOpt; shell?: boolean; shellUser?: string }): string {
   const B: string[] = [
     "set -Eeuo pipefail",
     `trap 'echo "STOPPED at line $LINENO: $BASH_COMMAND" >&2' ERR`,
@@ -105,6 +105,17 @@ export function pveScript(o: { roUser: string; adminUser: string; consoleUser: s
   if (o.console === "separate") {
     users.push(o.consoleUser);
     B.push("", "# Console account: its own token, VM.Console only (built-in role PVEVMConsole)", `ensure_user '${o.consoleUser}' "PyXie embedded console"`, `add_token '${o.consoleUser}' console "PyXie embedded console"`, `grant /vms PVEVMConsole '${o.consoleUser}' console`);
+  }
+  if (o.shell && o.shellUser) {
+    users.push(o.shellUser);
+    B.push(
+      "",
+      "# Shell account: its own token, Sys.Console only, on every host (the host shell opens a login prompt; deleting this token switches it off)",
+      `ensure_user '${o.shellUser}' "PyXie host shell"`,
+      `pveum role add PyXieShell --privs "Sys.Console" 2>/dev/null || pveum role modify PyXieShell --privs "Sys.Console"`,
+      `add_token '${o.shellUser}' shell "PyXie host shell"`,
+      `grant /nodes PyXieShell '${o.shellUser}' shell`,
+    );
   }
   B.push("", 'echo ""', 'echo "DONE. Tokens on these accounts (secrets are not shown again):"');
   for (const u of users) B.push(`pveum user token list '${u}'`);

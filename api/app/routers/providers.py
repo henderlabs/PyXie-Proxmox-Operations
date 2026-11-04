@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from pyxie_core.audit import write_audit_event
+from pyxie_core import shell_token
 from pyxie_core.credentials import CredentialNotConfigured, describe_pve_endpoints, load_pve_credentials
 from pyxie_core.crypto import decrypt_secret, encrypt_secret, mask_secret
 from pyxie_core.discovery import run_discovery
@@ -252,7 +253,7 @@ def list_credentials(target_id: uuid.UUID, db: Session = Depends(get_db)):
     return out
 
 
-CREDENTIAL_SLOT_NAMES = {"inventory", "maintenance", "administrative", "console"}
+CREDENTIAL_SLOT_NAMES = {"inventory", "maintenance", "administrative", "console", "shell"}
 
 
 @router.post("/pve-targets/{target_id}/credentials", response_model=schemas.CredentialOut, dependencies=[Depends(require_admin)])
@@ -427,12 +428,21 @@ def test_credential(target_id: uuid.UUID, credential_id: uuid.UUID, db: Session 
     except CredentialNotConfigured:
         raise HTTPException(404, "credential not found")
 
+    shell_message = None
     try:
         client = PveClient(creds)
         with client:
             client.version()
             if cred.slot_name == "inventory":
                 client.cluster_status()
+                ok = True
+            elif cred.slot_name == "shell":
+                names = [n.get("node") for n in client.nodes() if n.get("node")]
+                perms = {n: (client._get("/access/permissions", {"path": f"/nodes/{n}"}) or {}).get(f"/nodes/{n}") or {} for n in names}
+                bad = shell_token.missing_console(perms)
+                if bad or not names:
+                    return {"status": "failed", "error": shell_token.explain(bad, len(names))}
+                shell_message = f"Sys.Console confirmed on all {len(names)} hosts"
                 ok = True
             elif cred.slot_name == "console":
                 # VM.Console is only exercised by opening a console; authenticating
@@ -466,7 +476,7 @@ def test_credential(target_id: uuid.UUID, credential_id: uuid.UUID, db: Session 
         metadata={"pve_target_id": str(target_id), "slot_name": cred.slot_name},
     )
     db.commit()
-    return {"status": "ok"}
+    return {"status": "ok", **({"message": shell_message} if shell_message else {})}
 
 
 @router.get("/pve-targets/{target_id}/host-maintenance-credential", response_model=Optional[schemas.HostMaintenanceCredentialOut])

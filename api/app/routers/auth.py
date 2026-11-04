@@ -53,6 +53,7 @@ class AcceptInviteRequest(BaseModel):
 
 class UserUpdate(BaseModel):
     is_admin: bool | None = None
+    can_use_shell: bool | None = None
     is_active: bool | None = None
 
 
@@ -65,6 +66,7 @@ class MeUpdate(BaseModel):
 
 def _me_out(user: User) -> dict:
     return {"email": user.email, "display_name": user.display_name, "is_admin": user.is_admin,
+            "can_use_shell": bool(user.is_admin and user.can_use_shell),
             "activity_banner": (user.preferences or {}).get("activity_banner", True)}
 
 
@@ -74,6 +76,7 @@ def _user_out(user: User) -> dict:
         "email": user.email,
         "display_name": user.display_name,
         "is_admin": user.is_admin,
+        "can_use_shell": bool(user.can_use_shell),
         "is_active": user.is_active,
         "created_at": user.created_at.isoformat(),
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
@@ -363,9 +366,14 @@ def update_user(
         if other_active_admins == 0:
             raise HTTPException(status_code=400, detail="You are the only active admin -- promote another user first")
 
-    before = {"is_admin": target.is_admin, "is_active": target.is_active}
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    before = {"is_admin": target.is_admin, "is_active": target.is_active, "can_use_shell": target.can_use_shell}
+    changes = payload.model_dump(exclude_unset=True)
+    if changes.get("can_use_shell") and not (changes.get("is_admin", target.is_admin)):
+        raise HTTPException(status_code=400, detail="Only an admin can hold the host shell permission")
+    for field, value in changes.items():
         setattr(target, field, value)
+    if changes.get("is_admin") is False:
+        target.can_use_shell = False  # losing admin takes the shell permission with it
     write_audit_event(
         db,
         event_category="auth",
@@ -373,7 +381,7 @@ def update_user(
         actor=admin.email,
         actor_type="user",
         state_before=before,
-        state_after={"is_admin": target.is_admin, "is_active": target.is_active},
+        state_after={"is_admin": target.is_admin, "is_active": target.is_active, "can_use_shell": target.can_use_shell},
         metadata={"target_email": target.email},
     )
     try:

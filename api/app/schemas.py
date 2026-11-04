@@ -2,8 +2,14 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+
+
+def _strip_token_text(v):
+    """A pasted token secret often carries a trailing newline or space (copied from a terminal); strip it
+    at the door so it can never end up inside an HTTP header ("illegal header value")."""
+    return v.strip() if isinstance(v, str) else v
 
 class OrmModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -191,6 +197,7 @@ class PveFailoverUpdate(BaseModel):
 
 
 class PveTargetCreate(BaseModel):
+    _strip_token = field_validator('token_user', 'token_id', 'token_secret', mode="before")(_strip_token_text)
     site_id: uuid.UUID
     name: str
     hostname: str
@@ -221,6 +228,7 @@ class CredentialOut(OrmModel):
 
 
 class CredentialCreate(BaseModel):
+    _strip_token = field_validator('token_user', 'token_id', 'token_secret', mode="before")(_strip_token_text)
     slot_name: str  # inventory | maintenance | administrative | console
     token_user: str
     token_id: str
@@ -228,6 +236,7 @@ class CredentialCreate(BaseModel):
 
 
 class CredentialUpdate(BaseModel):
+    _strip_token = field_validator('token_user', 'token_id', 'token_secret', mode="before")(_strip_token_text)
     token_user: str
     token_id: str
     token_secret: str
@@ -279,6 +288,9 @@ class AppSettingsOut(OrmModel):
     rightsizing_round_vcpu_even: bool
     pve_mutations_enabled: bool
     console_enabled: bool = False
+    shell_enabled: bool = False
+    shell_require_maintenance: bool = False
+    shell_idle_minutes: int = 15
     smtp_enabled: bool
     smtp_host: Optional[str] = None
     smtp_port: int
@@ -302,6 +314,9 @@ class AppSettingsUpdate(BaseModel):
     rightsizing_round_vcpu_even: Optional[bool] = None
     pve_mutations_enabled: Optional[bool] = None
     console_enabled: Optional[bool] = None
+    shell_enabled: Optional[bool] = None
+    shell_require_maintenance: Optional[bool] = None
+    shell_idle_minutes: Optional[int] = Field(default=None, ge=5, le=60)
     smtp_enabled: Optional[bool] = None
     smtp_host: Optional[str] = None
     smtp_port: Optional[int] = None
