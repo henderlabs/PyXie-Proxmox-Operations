@@ -4,7 +4,9 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import type { Cluster, Node, Site } from "@/lib/api";
 import { MapPinIcon, ClusterIcon, ServerIcon } from "@/components/Icons";
+import { useEffect, useState } from "react";
 import { nodeLiveState } from "@/lib/nodeState";
+import { useStaleAfterMs } from "@/lib/useStaleAfterMs";
 
 // vSphere-style "Hosts and Clusters" inventory tree. Sites/Clusters hold
 // almost nothing on their own -- Nodes carries all the
@@ -18,12 +20,23 @@ import { nodeLiveState } from "@/lib/nodeState";
 export default function HostsClustersTree({
   sites,
   clusters,
-  nodes,
+  nodes: initialNodes,
 }: {
   sites: Site[];
   clusters: Cluster[];
   nodes: Node[];
 }) {
+  // The layout loads the hosts once; re-read them so the tree never shows hours-old status.
+  const [nodes, setNodes] = useState<Node[]>(initialNodes);
+  useEffect(() => setNodes(initialNodes), [initialNodes]);
+  useEffect(() => {
+    const iv = setInterval(() => {
+      if (document.hidden) return;
+      fetch("/api/nodes").then((r) => (r.ok ? r.json() : null)).then((d) => Array.isArray(d) && setNodes(d)).catch(() => {});
+    }, 30000);
+    return () => clearInterval(iv);
+  }, []);
+  const staleMs = useStaleAfterMs();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -75,16 +88,16 @@ export default function HostsClustersTree({
                     >
                       <ServerIcon className="w-3.5 h-3.5 shrink-0" />
                       <span className="truncate">{node.name}</span>
-                      {nodeLiveState(node) !== "online" && (
+                      {nodeLiveState(node, Date.now(), staleMs) !== "online" && (
                         <span
-                          className={`ml-auto text-[9px] uppercase font-bold px-1 rounded ${nodeLiveState(node) === "just_offline" ? "bg-warn/20 text-warn" : "bg-muted/20 text-muted"}`}
-                          title={nodeLiveState(node) === "just_offline" ? "Just stopped answering" : "Offline"}
+                          className={`ml-auto text-[9px] uppercase font-bold px-1 rounded ${nodeLiveState(node, Date.now(), staleMs) === "just_offline" ? "bg-warn/20 text-warn" : "bg-muted/20 text-muted"}`}
+                          title={nodeLiveState(node, Date.now(), staleMs) === "just_offline" ? "Just stopped answering" : "Offline"}
                         >
-                          {nodeLiveState(node) === "just_offline" ? "Down" : "Offline"}
+                          {nodeLiveState(node, Date.now(), staleMs) === "just_offline" ? "Down" : "Offline"}
                         </span>
                       )}
                       <span
-                        className={`${nodeLiveState(node) === "online" ? "ml-auto " : ""}w-1.5 h-1.5 rounded-full shrink-0 ${nodeLiveState(node) === "online" ? "bg-good" : nodeLiveState(node) === "just_offline" ? "bg-warn" : "bg-muted"}`}
+                        className={`${nodeLiveState(node, Date.now(), staleMs) === "online" ? "ml-auto " : ""}w-1.5 h-1.5 rounded-full shrink-0 ${nodeLiveState(node, Date.now(), staleMs) === "online" ? "bg-good" : nodeLiveState(node, Date.now(), staleMs) === "just_offline" ? "bg-warn" : "bg-muted"}`}
                         title={node.status}
                       />
                     </Link>
