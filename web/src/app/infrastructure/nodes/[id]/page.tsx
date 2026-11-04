@@ -10,13 +10,14 @@ import StatusBadge from "@/components/StatusBadge";
 import { ServerIcon, WrenchIcon } from "@/components/Icons";
 import RemoveHostButton from "@/components/RemoveHostButton";
 import NodeConfig from "@/components/NodeConfig";
+import HostTabs, { type HostTab } from "@/components/HostTabs";
 import HostShell from "@/components/HostShell";
 import HostPower from "@/components/HostPower";
 import WrapperPanel from "@/components/WrapperPanel";
 import type { PolicyRow, StorageItem } from "@/lib/api";
 
 export default async function NodeDetailPage({ params, searchParams }: { params: { id: string }; searchParams?: { tab?: string; wrapper?: string } }) {
-  const tab = searchParams?.tab === "config" ? "config" : searchParams?.tab === "shell" ? "shell" : "overview";
+  const tab: HostTab = searchParams?.tab === "config" ? "config" : searchParams?.tab === "shell" ? "shell" : "overview";
   const [node, workloads, tasks, hostMaintenance, shellInfo] = await Promise.all([
     apiFetch<Node>(`/api/nodes/${params.id}`),
     apiFetch<Workload[]>(`/api/nodes/${params.id}/workloads`),
@@ -50,6 +51,8 @@ export default async function NodeDetailPage({ params, searchParams }: { params:
       <NodeOverview
         nodeId={params.id}
         initialNode={node}
+        tab={tab}
+        tabs={<HostTabs nodeId={params.id} tab={tab} showShell={showShellTab} />}
         rebootRequired={hostMaintenance ? hostMaintenance.reboot_required ?? null : null}
         header={
           <>
@@ -69,11 +72,6 @@ export default async function NodeDetailPage({ params, searchParams }: { params:
       />
 
       <div className="col-span-2 min-w-0">
-      <div className="flex gap-4 border-b border-border mb-3 text-sm">
-        <Link scroll={false} href={`/infrastructure/nodes/${params.id}`} className={`pb-1.5 ${tab === "overview" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Overview</Link>
-        <Link scroll={false} href={`/infrastructure/nodes/${params.id}?tab=config`} className={`pb-1.5 ${tab === "config" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Config</Link>
-        {showShellTab && <Link scroll={false} href={`/infrastructure/nodes/${params.id}?tab=shell`} className={`pb-1.5 ${tab === "shell" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Shell</Link>}
-      </div>
       {tab === "shell" && showShellTab ? (
         <HostShell nodeId={params.id} nodeName={node.name} />
       ) : tab === "config" && pyxie ? (
