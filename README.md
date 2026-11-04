@@ -31,7 +31,7 @@ PyXie runs as one Docker stack (web, API, worker, PostgreSQL, Redis and Caddy fo
 
 Bugs, requests and feedback: Platform > Feedback in the app, or [`docs/feedback.md`](docs/feedback.md).
 
-The Tasks panel, Cancel and the top bar are explained in [`docs/tasks-panel.md`](docs/tasks-panel.md); emptying, restarting and retiring a host in [`docs/host-lifecycle.md`](docs/host-lifecycle.md); host settings and network in [`docs/host-config.md`](docs/host-config.md); guest settings in [`docs/guest-config.md`](docs/guest-config.md); stuck guest locks in [`docs/stale-locks.md`](docs/stale-locks.md); workers and limits in [`docs/workers.md`](docs/workers.md).
+The Tasks panel, Cancel and the top bar are explained in [`docs/tasks-panel.md`](docs/tasks-panel.md); emptying, restarting and retiring a host in [`docs/host-lifecycle.md`](docs/host-lifecycle.md); host settings and network in [`docs/host-config.md`](docs/host-config.md); guest settings in [`docs/guest-config.md`](docs/guest-config.md); stuck guest locks in [`docs/stale-locks.md`](docs/stale-locks.md); workers and limits in [`docs/workers.md`](docs/workers.md). A root shell on a host, opened from PyXie, in [`docs/host-shell.md`](docs/host-shell.md).
 
 The older native systemd install (no Docker) is still supported but is the legacy path:
 [`docs/INSTALL.md`](docs/INSTALL.md). Pick one per host.

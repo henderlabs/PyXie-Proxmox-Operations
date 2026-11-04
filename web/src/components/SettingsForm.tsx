@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AppSettings } from "@/lib/api";
 import { useMe } from "@/lib/useMe";
 
@@ -113,6 +113,44 @@ export default function SettingsForm({ initial }: { initial: AppSettings }) {
           default. Checked on every connection and every minute while one is open; switching it off closes open
           consoles. Open in PVE keeps working either way.
         </p>
+      </div>
+      <div className="p-3 rounded border border-border space-y-2">
+        <label className="flex items-center gap-2 text-sm font-medium text-text">
+          <input
+            type="checkbox"
+            disabled={!isAdmin}
+            checked={form.shell_enabled}
+            onChange={(e) => setForm({ ...form, shell_enabled: e.target.checked })}
+          />
+          Allow the host shell
+        </label>
+        <p className="text-[11px] text-muted normal-case">
+          Lets admins open a terminal on a Proxmox host inside PyXie (the Shell tab on a host page), like the Shell
+          in Proxmox. You sign in at the host&apos;s login prompt with a Linux account (PyXie stores no shell password).
+          It uses the separate &quot;shell&quot; credential (or the maintenance one) and has no preview or undo, so it is off
+          by default. Each person also needs the &quot;host shell&quot; permission, granted on the Users page. Only the open and close are logged, never what is typed. Checked on every
+          connection and every minute while one is open; switching it off closes open shells.
+        </p>
+        <ShellTokenStatus />
+        <label className="flex items-center gap-2 text-sm text-text">
+          <input
+            type="checkbox"
+            disabled={!isAdmin || !form.shell_enabled}
+            checked={form.shell_require_maintenance}
+            onChange={(e) => setForm({ ...form, shell_require_maintenance: e.target.checked })}
+          />
+          Only while the host is in maintenance mode
+        </label>
+        <label className="flex items-center gap-2 text-sm text-text">
+          Close after
+          <input
+            type="number" min={5} max={60} className="input w-20"
+            disabled={!isAdmin || !form.shell_enabled}
+            value={form.shell_idle_minutes}
+            onChange={(e) => setForm({ ...form, shell_idle_minutes: Math.max(5, Math.min(60, Number(e.target.value) || 15)) })}
+          />
+          minutes without typing (5 to 60)
+        </label>
       </div>
       <Field label="Sync frequency (inventory, PVE health/status, protection, recommendations -- one shared schedule)">
         <select
@@ -283,6 +321,37 @@ function RightsizingTargetField({
         style={{ width: 64 }}
       />
       <span className="text-xs text-muted">%</span>
+    </div>
+  );
+}
+
+type ShellTokenRow = { target_id: string; target: string; saved: boolean; status: string | null; token: string | null };
+
+/** One line under "Allow the host shell": is the dedicated shell token saved and did its last test pass. */
+function ShellTokenStatus() {
+  const [rows, setRows] = useState<ShellTokenRow[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/shell/status").then((r) => (r.ok ? r.json() : null)).then((d) => { if (alive) setRows(Array.isArray(d) ? d : null); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!rows || rows.length === 0) return null;
+  return (
+    <div className="text-[11px] text-muted normal-case space-y-0.5">
+      {rows.map((r) => (
+        <div key={r.target_id}>
+          Shell token{rows.length > 1 ? ` (${r.target})` : ""}:{" "}
+          {!r.saved ? (
+            <span className="text-bad">not set up</span>
+          ) : r.status === "valid" ? (
+            <span className="text-good">saved and valid ({r.token})</span>
+          ) : (
+            <span className="text-warn">saved, not tested yet ({r.token}). Press Test Connection on the Credentials page</span>
+          )}
+          {" · "}
+          <a className="text-accent hover:underline" href="/platform/providers">{r.saved ? "Setup guide" : "Set it up"}</a>
+        </div>
+      ))}
     </div>
   );
 }

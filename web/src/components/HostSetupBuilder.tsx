@@ -162,6 +162,8 @@ export function PveAccountsBuilder() {
   const [roUser, setRoUser] = useState("pyxie-ro@pve");
   const [adminUser, setAdminUser] = useState("pyxie-admin@pve");
   const [consoleUser, setConsoleUser] = useState("pyxie-console@pve");
+  const [shell, setShell] = useState(false);
+  const [shellUser, setShellUser] = useState("pyxie-shell@pve");
   const [inventory, setInventory] = useState(false);
   const [maintenance, setMaintenance] = useState(false);
   const [consoleOpt, setConsoleOpt] = useState<ConsoleOpt>("none");
@@ -169,11 +171,11 @@ export function PveAccountsBuilder() {
 
   const okName = (u: string) => /^[A-Za-z0-9._-]+@pve$/.test(u);
   const effConsole: ConsoleOpt = consoleOpt === "maintenance" && !maintenance ? "none" : consoleOpt;
-  const anyPve = inventory || maintenance || effConsole === "separate";
-  const namesOk = (!inventory || okName(roUser)) && (!maintenance || okName(adminUser)) && (effConsole !== "separate" || okName(consoleUser));
+  const anyPve = inventory || maintenance || effConsole === "separate" || shell;
+  const namesOk = (!inventory || okName(roUser)) && (!maintenance || okName(adminUser)) && (effConsole !== "separate" || okName(consoleUser)) && (!shell || okName(shellUser));
   const pve = useMemo(
-    () => (namesOk && anyPve ? pveScript({ roUser, adminUser, consoleUser, inventory, maintenance, console: effConsole }) : ""),
-    [roUser, adminUser, consoleUser, namesOk, inventory, maintenance, effConsole, anyPve],
+    () => (namesOk && anyPve ? pveScript({ roUser, adminUser, consoleUser, inventory, maintenance, console: effConsole, shell, shellUser }) : ""),
+    [roUser, adminUser, consoleUser, namesOk, inventory, maintenance, effConsole, anyPve, shell, shellUser],
   );
   const touch = () => setGenerated(false);
 
@@ -183,6 +185,7 @@ export function PveAccountsBuilder() {
   if (inventory) rows.push(["inventory", roUser, "inventory", "Step 3, Connect your cluster (PVE target form), or Credentials if the target already exists"]);
   if (maintenance) rows.push(["maintenance", adminUser, "maintenance", "Credentials > + Add Credential Purpose" + (effConsole === "maintenance" ? " (also covers the console: VM.Console is in this role)" : "")]);
   if (effConsole === "separate") rows.push(["console", consoleUser, "console", "Credentials > + Add Credential Purpose"]);
+  if (shell) rows.push(["shell", shellUser, "shell", "Credentials > + Add Credential Purpose, then Test Connection (it checks Sys.Console on every host)"]);
 
   return (
     <div className="space-y-4">
@@ -215,6 +218,10 @@ export function PveAccountsBuilder() {
             ))}
           </div>
           {effConsole === "separate" && <UserField label="Console account name" value={consoleUser} def="pyxie-console@pve" onChange={(v) => { setConsoleUser(v); touch(); }} ok={okName(consoleUser)} />}
+        </div>
+        <div className="space-y-1">
+          <Check checked={shell} onChange={(v) => { setShell(v); touch(); }} label="Host shell token (Sys.Console only)" sub="Lets PyXie open a terminal at a host's login prompt. Needs Admin plus the host shell permission on the Users page, and Settings > Allow the host shell. Deleting this one token switches the shell off everywhere." />
+          {shell && <UserField label="Shell account name" value={shellUser} def="pyxie-shell@pve" onChange={(v) => { setShellUser(v); touch(); }} ok={okName(shellUser)} />}
         </div>
       </div>
 

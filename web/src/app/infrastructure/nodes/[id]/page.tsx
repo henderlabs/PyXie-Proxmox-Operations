@@ -10,18 +10,21 @@ import StatusBadge from "@/components/StatusBadge";
 import { ServerIcon, WrenchIcon } from "@/components/Icons";
 import RemoveHostButton from "@/components/RemoveHostButton";
 import NodeConfig from "@/components/NodeConfig";
+import HostShell from "@/components/HostShell";
 import HostPower from "@/components/HostPower";
 import WrapperPanel from "@/components/WrapperPanel";
 import type { PolicyRow, StorageItem } from "@/lib/api";
 
 export default async function NodeDetailPage({ params, searchParams }: { params: { id: string }; searchParams?: { tab?: string; wrapper?: string } }) {
-  const tab = searchParams?.tab === "config" ? "config" : "overview";
-  const [node, workloads, tasks, hostMaintenance] = await Promise.all([
+  const tab = searchParams?.tab === "config" ? "config" : searchParams?.tab === "shell" ? "shell" : "overview";
+  const [node, workloads, tasks, hostMaintenance, shellInfo] = await Promise.all([
     apiFetch<Node>(`/api/nodes/${params.id}`),
     apiFetch<Workload[]>(`/api/nodes/${params.id}/workloads`),
     apiFetch<PveTask[]>(`/api/nodes/${params.id}/tasks`),
     apiFetch<HostMaintenanceStatus>(`/api/nodes/${params.id}/host-maintenance-status`).catch(() => null),
+    apiFetch<{ state: string }>(`/api/nodes/${params.id}/shell-info`).catch(() => null),
   ]);
+  const showShellTab = !!shellInfo && shellInfo.state !== "admin_only" && shellInfo.state !== "no_permission";
 
   let pyxie: React.ComponentProps<typeof NodeConfig>["pyxie"] | null = null;
   if (tab === "config") {
@@ -67,10 +70,13 @@ export default async function NodeDetailPage({ params, searchParams }: { params:
 
       <div className="col-span-2 min-w-0">
       <div className="flex gap-4 border-b border-border mb-3 text-sm">
-        <Link href={`/infrastructure/nodes/${params.id}`} className={`pb-1.5 ${tab === "overview" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Overview</Link>
-        <Link href={`/infrastructure/nodes/${params.id}?tab=config`} className={`pb-1.5 ${tab === "config" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Config</Link>
+        <Link scroll={false} href={`/infrastructure/nodes/${params.id}`} className={`pb-1.5 ${tab === "overview" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Overview</Link>
+        <Link scroll={false} href={`/infrastructure/nodes/${params.id}?tab=config`} className={`pb-1.5 ${tab === "config" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Config</Link>
+        {showShellTab && <Link scroll={false} href={`/infrastructure/nodes/${params.id}?tab=shell`} className={`pb-1.5 ${tab === "shell" ? "text-text border-b-2 border-accent" : "text-muted hover:text-text"}`}>Shell</Link>}
       </div>
-      {tab === "config" && pyxie ? (
+      {tab === "shell" && showShellTab ? (
+        <HostShell nodeId={params.id} nodeName={node.name} />
+      ) : tab === "config" && pyxie ? (
         <NodeConfig nodeId={params.id} nodeName={node.name} pyxie={pyxie} />
       ) : (
       <>

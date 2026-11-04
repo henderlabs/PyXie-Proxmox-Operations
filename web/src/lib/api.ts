@@ -344,6 +344,9 @@ export type AppSettings = {
   rightsizing_round_vcpu_even: boolean;
   pve_mutations_enabled: boolean;
   console_enabled: boolean;
+  shell_enabled: boolean;
+  shell_require_maintenance: boolean;
+  shell_idle_minutes: number;
   smtp_enabled: boolean;
   smtp_host: string | null;
   smtp_port: number;
@@ -622,13 +625,14 @@ export type InternalJobRunRow = {
   error: string | null;
 };
 
-export type Me = { email: string; display_name: string | null; is_admin: boolean; activity_banner?: boolean };
+export type Me = { email: string; display_name: string | null; is_admin: boolean; can_use_shell?: boolean; activity_banner?: boolean };
 
 export type UserAccount = {
   id: string;
   email: string;
   display_name: string | null;
   is_admin: boolean;
+  can_use_shell: boolean;
   is_active: boolean;
   created_at: string;
   last_login_at: string | null;

@@ -101,6 +101,14 @@ export default function UsersTable({ initial }: { initial: UserAccount[] }) {
                   >
                     {u.is_admin ? "admin" : "viewer"}
                   </span>
+                  {u.is_admin && u.can_use_shell && (
+                    <span
+                      className="ml-2 text-[10px] uppercase tracking-wide border border-good text-good rounded px-1 py-0.5"
+                      title="Can open a shell on a Proxmox host (Settings > Allow the host shell must also be on)"
+                    >
+                      host shell
+                    </span>
+                  )}
                   {u.pending_invite && (
                     <span className="ml-2 text-[10px] uppercase tracking-wide border border-border rounded px-1 py-0.5 text-muted">
                       invite pending
@@ -115,6 +123,16 @@ export default function UsersTable({ initial }: { initial: UserAccount[] }) {
                 <div className="text-xs text-muted truncate">{u.email}</div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {u.is_admin && (
+                  <button
+                    disabled={busyId === u.id}
+                    onClick={() => patch(u.id, { can_use_shell: !u.can_use_shell })}
+                    title={u.can_use_shell ? "Remove the right to open host shells (open ones close within a minute)" : "Let this admin open a root-capable terminal on Proxmox hosts. Off for everyone by default."}
+                    className="px-2 py-1 rounded text-xs font-medium bg-surface text-text border border-border hover:bg-surface2 disabled:opacity-50"
+                  >
+                    {u.can_use_shell ? "Remove host shell" : "Allow host shell"}
+                  </button>
+                )}
                 <button
                   disabled={busyId === u.id}
                   onClick={() => patch(u.id, { is_admin: !u.is_admin })}

@@ -481,6 +481,10 @@ class AppSettings(Base):
     pve_mutations_enabled = Column(Boolean, nullable=False, default=False)
     # Kill switch for the embedded VM console (console_tickets / routers/console.py); off by default.
     console_enabled = Column(Boolean, nullable=False, default=False)
+    # Host shell (routers/shell.py): off by default; the idle limit is enforced on the server.
+    shell_enabled = Column(Boolean, nullable=False, default=False)
+    shell_require_maintenance = Column(Boolean, nullable=False, default=False)
+    shell_idle_minutes = Column(Integer, nullable=False, default=15)
     # Rightsizing's peak-safety check sizes a workload so its observed peak
     # usage lands at roughly this % of the new allocation -- see
     # rightsizing.py. Memory can be set stricter than CPU (a tight memory
@@ -558,6 +562,8 @@ class User(Base):
     # null password_hash is naturally unauthenticatable, not a special case.
     password_hash = Column(String, nullable=True)
     is_admin = Column(Boolean, nullable=False, default=False)
+    # Per-user permission to open a host shell (routers/shell.py); needs is_admin too, off for everyone by default.
+    can_use_shell = Column(Boolean, nullable=False, default=False)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
     last_login_at = Column(DateTime(timezone=True), nullable=True)
