@@ -382,6 +382,9 @@ def _approve_for_type(db: Session, op: Operation, actor: str) -> Operation:
     if op.operation_type_id in ("workload.shutdown", "workload.start", "workload.force_stop", "workload.reboot"):
         from pyxie_core.lifecycle_workflow import approve as approve_lifecycle
         return approve_lifecycle(db, op, approved_by=actor)
+    if op.operation_type_id == "workload.bulk_lifecycle":
+        from pyxie_core.bulk_lifecycle_workflow import approve as approve_bulk_lifecycle
+        return approve_bulk_lifecycle(db, op, approved_by=actor)
     if op.operation_type_id == "workload.resize":
         from pyxie_core.resize_workflow import approve as approve_resize
         return approve_resize(db, op, approved_by=actor)
@@ -531,7 +534,7 @@ _PRE_EXECUTION_STATUSES = {"pending", "dry_run", "awaiting_approval", "approved"
 # host.update, host.reboot running on its own) has no safe checkpoint to
 # stop at once PVE has already started moving bytes or installing packages,
 # so cancel is only offered for these while they're pre-execution.
-_COOPERATIVE_CANCEL_TYPES = {"node.enter_maintenance", "maintenance.run", "node.evacuate", "cluster.rebalance"}
+_COOPERATIVE_CANCEL_TYPES = {"node.enter_maintenance", "maintenance.run", "node.evacuate", "cluster.rebalance", "workload.bulk_lifecycle"}
 
 
 @router.post("/{operation_id}/cancel", dependencies=[Depends(require_admin)])
@@ -1299,6 +1302,31 @@ def create_lifecycle_dry_run(payload: LifecycleActionRequest, user=Depends(get_c
         else:
             raise HTTPException(400, "action must be 'shutdown', 'start', 'force_stop', or 'reboot'")
     except LifecycleWorkflowError as exc:
+        raise HTTPException(400, str(exc))
+    return _serialize(op)
+
+
+class BulkLifecycleRequest(BaseModel):
+    workload_ids: list[uuid.UUID]
+    action: str  # shutdown | start | force_stop
+    timeout_seconds: int | None = None
+    justification: str | None = None
+
+
+@router.post("/workload-lifecycle/bulk-dry-run", dependencies=[Depends(require_admin)])
+def create_bulk_lifecycle_dry_run(payload: BulkLifecycleRequest, user=Depends(get_current_user), db: Session = Depends(get_db)):
+    """One plan, one approval, for the same power action on several guests."""
+    from pyxie_core.bulk_lifecycle_workflow import BulkLifecycleError, dry_run_bulk_lifecycle
+    ids = list(dict.fromkeys(payload.workload_ids))
+    workloads = db.query(Workload).filter(Workload.id.in_(ids)).all()
+    if len(workloads) != len(ids):
+        raise HTTPException(404, "a selected workload was not found")
+    try:
+        op = dry_run_bulk_lifecycle(
+            db, sorted(workloads, key=lambda w: (w.name or "", w.vmid)), action=payload.action, actor=user.email,
+            timeout_seconds=payload.timeout_seconds or 120, justification=payload.justification,
+        )
+    except BulkLifecycleError as exc:
         raise HTTPException(400, str(exc))
     return _serialize(op)
 

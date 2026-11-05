@@ -175,3 +175,24 @@ def memory_pressure_verdict(summary, windows: bool = False) -> dict:
         "note": f"high usage is file cache -- no memory pressure in {days:.0f}d of readings",
         "detail": None,
     }
+
+
+# At or above this RAM use the UI explains whether it is a shortage or just file cache.
+HIGH_MEM_PCT = 80
+
+
+def memory_states(db: Session, workloads, mem_pcts: dict) -> dict:
+    """workload_id (str) -> verdict dict, only for running VMs at/above HIGH_MEM_PCT. Pure read of data
+    already collected for Rightsizing; no PVE calls."""
+    from .rightsizing import _is_windows
+
+    todo = [w for w in workloads if w.type == "vm" and w.status == "running" and w.mem_guest_stats is not False
+            and (mem_pcts.get(str(w.id)) or 0) >= HIGH_MEM_PCT]
+    if not todo:
+        return {}
+    summaries = pressure_summaries(db)
+    out = {}
+    for w in todo:
+        v = memory_pressure_verdict(summaries.get(w.id), windows=_is_windows(w))
+        out[str(w.id)] = {"state": v["state"], "note": v["note"], "detail": v["detail"]}
+    return out

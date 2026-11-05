@@ -73,6 +73,21 @@ function CheckBadge({ check }: { check: WorkloadLive["check"] }) {
   );
 }
 
+/** "Cache, not a shortage" verdict for high RAM use (read-only, from the swap samples Rightsizing already keeps). */
+function useMemState(workloadId: string, highMem: boolean): { state?: string; note?: string | null; detail?: string | null } | null {
+  const [v, setV] = useState<{ state?: string; note?: string | null; detail?: string | null } | null>(null);
+  useEffect(() => {
+    if (!highMem) { setV(null); return; }
+    let alive = true;
+    fetch(`/api/workloads/${workloadId}/memory-state`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => alive && setV(d && d.state ? d : null))
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [workloadId, highMem]);
+  return v;
+}
+
 /** Polls the live PVE read. Pauses while the tab is hidden. */
 function useLive(workloadId: string): { live: WorkloadLive | null; refresh: () => void } {
   const [live, setLive] = useState<WorkloadLive | null>(null);
@@ -276,6 +291,7 @@ export function WorkloadDetailPanel({
   const cfg: ConfigSummary | null = live?.config ?? null;
   const st = live?.status ?? null;
   const status = st?.status ?? w.status;
+  const memState = useMemState(w.id, status === "running" && !!st?.maxmem && ((st.mem ?? 0) / st.maxmem) * 100 >= 80);
   const rrdSummary = useRrd(w.id, "hour", tab === "summary");
   const rrdStats = useRrd(w.id, timeframe, tab === "statistics");
   const tasks = useTasks(w.id, tab === "tasks", initialTasks);
@@ -326,7 +342,9 @@ export function WorkloadDetailPanel({
               {st && status === "running" && (
                 <div className="mt-3 space-y-2 text-sm">
                   <div className="flex items-center justify-between"><span className="text-muted">CPU</span><span className="flex items-center gap-2"><Meter value={(st.cpu ?? 0) * 100} width={160} /> <span className="text-muted text-xs">of {st.cpus ?? w.cpu_cores ?? "?"} vCPU</span></span></div>
-                  <div className="flex items-center justify-between"><span className="text-muted">RAM</span><span className="flex items-center gap-2"><Meter value={st.maxmem ? ((st.mem ?? 0) / st.maxmem) * 100 : null} width={160} /> <span className="text-muted text-xs">{formatBytes(st.mem)} of {formatBytes(st.maxmem)}</span></span></div>
+                  <div className="flex items-center justify-between"><span className="text-muted">RAM</span><span className="flex items-center gap-2"><Meter value={st.maxmem ? ((st.mem ?? 0) / st.maxmem) * 100 : null} width={160} memState={memState?.state} memNote={memState?.note ?? memState?.detail} /> <span className="text-muted text-xs">{formatBytes(st.mem)} of {formatBytes(st.maxmem)}</span></span></div>
+                  {memState?.state === "no_pressure" && <div className="text-xs text-muted text-right">Mostly file cache, not a shortage. {memState.note}</div>}
+                  {memState?.state === "pressure" && <div className="text-xs text-warn text-right">Real memory pressure: {memState.detail}</div>}
                 </div>
               )}
             </Card>

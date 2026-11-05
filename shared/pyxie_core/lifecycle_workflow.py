@@ -51,6 +51,28 @@ def _load_context(db: Session, workload: Workload):
     return node, cluster, target
 
 
+def blocking_reasons(workload: Workload, operation_type_id: str, require_status: str) -> tuple[list[str], list[str]]:
+    """Why this action cannot run on this guest right now: (reasons, safety rules). Empty = it can. Shared by the single-guest preview and the bulk plan."""
+    reasons: list[str] = []
+    blocking_rules: list[str] = []
+
+    if workload.status != require_status:
+        reasons.append(f"workload status is '{workload.status}', expected '{require_status}' for this action")
+        blocking_rules.append("SAFE-MIGRATE-001")
+
+    if operation_type_id in ("workload.shutdown", "workload.force_stop", "workload.reboot"):
+        if workload.downtime_tolerance == "low":
+            reasons.append(
+                "workload is tagged downtime_tolerance='low' (cannot tolerate downtime) -- "
+                "this action deliberately takes it down, requires explicit review"
+            )
+            blocking_rules.append("SAFE-DOWNTIME-001")
+        if workload.ha_state:
+            reasons.append(f"HA state: {workload.ha_state} -- PVE's HA manager may restart this guest automatically")
+            blocking_rules.append("SAFE-HA-001")
+    return reasons, blocking_rules
+
+
 def _dry_run(
     db: Session, workload: Workload, operation_type_id: str, *, actor: str,
     require_status: str, shutdown_timeout: int | None = None, justification: str | None = None,
@@ -69,23 +91,7 @@ def _dry_run(
         context=context, created_by=actor,
     )
 
-    reasons: list[str] = []
-    blocking_rules: list[str] = []
-
-    if workload.status != require_status:
-        reasons.append(f"workload status is '{workload.status}', expected '{require_status}' for this action")
-        blocking_rules.append("SAFE-MIGRATE-001")
-
-    if operation_type_id in ("workload.shutdown", "workload.force_stop", "workload.reboot"):
-        if workload.downtime_tolerance == "low":
-            reasons.append(
-                "workload is tagged downtime_tolerance='low' (cannot tolerate downtime) -- "
-                "this action deliberately takes it down, requires explicit review"
-            )
-            blocking_rules.append("SAFE-DOWNTIME-001")
-        if workload.ha_state:
-            reasons.append(f"HA state: {workload.ha_state} -- PVE's HA manager may restart this guest automatically")
-            blocking_rules.append("SAFE-HA-001")
+    reasons, blocking_rules = blocking_reasons(workload, operation_type_id, require_status)
 
     # Reboot is deliberately exempt from pve_write_client's self-protection
     # guard (see reboot_vm's own docstring) -- but it should never be

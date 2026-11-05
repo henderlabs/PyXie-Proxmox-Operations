@@ -23,6 +23,7 @@ DEFAULT_POLICIES = [
     ("organization", "limits.node_in", {"count": 1}),
     ("organization", "limits.storage_moves", {"count": 1}),
     ("organization", "limits.bulk_workers", {"count": 1}),
+    ("organization", "limits.power_parallel", {"count": 3}),
 ]
 
 # Providers with no configured target in this lab, seeded so the Providers

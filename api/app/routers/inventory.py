@@ -447,6 +447,20 @@ def list_workloads(db: Session = Depends(get_db), type: str | None = None):
     return q.order_by(Workload.vmid).all()
 
 
+@router.get("/workloads/{workload_id}/memory-state")
+def workload_memory_state(workload_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Is this VM's high RAM use a shortage or file cache? Read-only; from the swap/free-memory samples already
+    collected for Rightsizing. Returns {} when RAM use is below the threshold or there are no guest stats."""
+    from pyxie_core.mem_pressure import memory_states
+    from pyxie_core.models import Workload as W
+
+    w = db.get(W, workload_id)
+    if w is None:
+        raise HTTPException(404, "Workload not found")
+    pct = (latest_workload_metrics(db).get(str(w.id)) or {}).get("mem_pct")
+    return memory_states(db, [w], {str(w.id): pct}).get(str(w.id)) or {}
+
+
 @router.get("/workloads/latest-metrics")
 def workloads_latest_metrics(db: Session = Depends(get_db)):
     """cpu_pct/mem_pct as of the most recent poll, keyed by workload id --

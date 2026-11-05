@@ -61,14 +61,18 @@ export function RadialGauge({
   );
 }
 
-export function Meter({ value, width = 88, hostOnly = false }: { value: number | null; width?: number; hostOnly?: boolean }) {
+export function Meter({ value, width = 88, hostOnly = false, memState, memNote }: { value: number | null; width?: number; hostOnly?: boolean; memState?: string; memNote?: string | null }) {
   const pct = value === null ? 0 : Math.min(Math.max(value, 0), 100);
-  const color = colorForPct(value);
+  // High RAM that Rightsizing's swap check calls file cache is not a warning: draw it neutral.
+  const cache = memState === "no_pressure";
+  const color = cache ? "var(--muted, #8b949e)" : colorForPct(value);
   // Always the same number PVE's summary screen shows. For the few VMs that give PVE no
   // guest memory stats, PVE itself reports the host-side figure; say so on hover only.
   const tip = hostOnly
     ? "PVE reports host-side memory for this VM (no balloon/guest-agent memory stats), so this matches PVE's summary but is not a guest-level reading."
-    : undefined;
+    : memState && memNote
+      ? `Includes file cache (PVE counts cache as used). ${memNote}`
+      : undefined;
   return (
     <div className="flex items-center gap-2" title={tip}>
       <div className="h-1.5 rounded-full bg-border overflow-hidden shrink-0" style={{ width }}>

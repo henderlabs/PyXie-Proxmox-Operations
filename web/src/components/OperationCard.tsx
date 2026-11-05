@@ -16,7 +16,7 @@ import { useMe } from "@/lib/useMe";
 // host.reboot) has no safe point to stop at once PVE has started moving
 // bytes or installing packages, so Cancel is only offered for those while
 // they're still awaiting_approval (see CancelButton below).
-const COOPERATIVE_CANCEL_TYPES = new Set(["node.enter_maintenance", "maintenance.run", "node.evacuate", "cluster.rebalance"]);
+const COOPERATIVE_CANCEL_TYPES = new Set(["node.enter_maintenance", "maintenance.run", "node.evacuate", "cluster.rebalance", "workload.bulk_lifecycle"]);
 // A single guest migration can also be stopped while it copies (the server holds it during the final switchover).
 const CANCEL_WHILE_RUNNING = new Set([...Array.from(COOPERATIVE_CANCEL_TYPES), "vm.live_migrate", "workload.move_storage"]);
 
@@ -152,6 +152,7 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "node.enter_maintenance": "Evacuate / Maint Mode",
   "node.exit_maintenance": "Exit Maintenance Mode",
   "cluster.rebalance": "Balance Load",
+  "workload.bulk_lifecycle": "Power Action",
   "workload.network_vlan_change": "Network VLAN Change",
   "workload.move_storage": "Change Storage",
   "workload.snapshot_create": "Take Snapshot",
@@ -189,11 +190,14 @@ export const OPERATION_TYPE_LABELS: Record<string, string> = {
   "pool.members": "Change Pool Members",
 };
 
+const BULK_ACTION_LABELS: Record<string, string> = { shutdown: "Graceful Shutdown", start: "Start", force_stop: "Force Stop" };
+
 /** Bulk Migrate is a cluster.rebalance whose plan was built from ticked VMs
  *  (context.mode === "bulk_migrate"); everywhere that shows a title uses this
  *  so it reads "Bulk Migrate", not "Balance Load". */
 export function operationTypeLabel(op: { operation_type_id: string; context?: Record<string, unknown> | null }): string {
   if (op.operation_type_id === "cluster.rebalance" && op.context?.mode === "bulk_migrate") return "Bulk Migrate";
+  if (op.operation_type_id === "workload.bulk_lifecycle") return BULK_ACTION_LABELS[String(op.context?.action ?? "")] || "Power Action";
   return OPERATION_TYPE_LABELS[op.operation_type_id] || op.operation_type_id;
 }
 
@@ -252,6 +256,10 @@ function operationSummary(op: Operation): string {
     op.operation_type_id === "node.exit_maintenance"
   ) {
     return `${OPERATION_TYPE_LABELS[op.operation_type_id]} — ${r?.node || "?"}`;
+  }
+  if (op.operation_type_id === "workload.bulk_lifecycle") {
+    const count = (r?.plan as unknown[] | undefined)?.length ?? 0;
+    return `${operationTypeLabel(op)} — ${count} VM${count === 1 ? "" : "s"}`;
   }
   if (op.operation_type_id === "cluster.rebalance") {
     const count = (r?.migrate_plan as unknown[] | undefined)?.length ?? 0;
@@ -851,6 +859,8 @@ export default function OperationCard({
         <MigratePlanEditor op={op} planKey={PLAN_KEY_BY_TYPE[op.operation_type_id]} onUpdated={(updated) => onUpdated?.(updated)} />
       )}
 
+      {op.operation_type_id === "workload.bulk_lifecycle" && <BulkLifecyclePlan op={op} />}
+
       {op.dry_run_result && op.dry_run_result.reasons.length > 0 && (
         <ul className="text-xs text-muted list-disc pl-4 mb-2 space-y-0.5">
           {op.dry_run_result.reasons.map((r, i) => (
@@ -899,6 +909,52 @@ export default function OperationCard({
         <div className="text-sm text-good mt-2">Completed and independently verified against live PVE state.</div>
       )}
       {op.status === "failed" && op.error && <div className="text-sm text-bad mt-2">{op.error}</div>}
+    </div>
+  );
+}
+
+type BulkItem = { workload_id: string; vmid: number; name: string | null; node?: string | null; power?: string; reasons?: string[] };
+type BulkResult = { status: string; error?: string };
+
+/** The one plan behind a power action on several VMs: who it will run on, who was left out and why, and (once running) each VM's result. */
+function BulkLifecyclePlan({ op }: { op: Operation }) {
+  const r = (op.dry_run_result || {}) as Record<string, unknown>;
+  const plan = (r.plan as BulkItem[] | undefined) || [];
+  const skipped = (r.skipped as BulkItem[] | undefined) || [];
+  const results = ((op.context || {}) as Record<string, unknown>).results as Record<string, BulkResult> | undefined;
+  const target = op.context?.action === "start" ? "running" : "stopped";
+  const state = (it: BulkItem) => {
+    const res = results?.[it.workload_id];
+    if (res?.status === "completed") return <span className="text-good">done</span>;
+    if (res?.status === "failed") return <span className="text-bad">failed: {res.error}</span>;
+    if (res?.status === "skipped") return <span className="text-warn">skipped: {res.error}</span>;
+    if (op.status === "awaiting_approval") return <span className="text-muted">will go to {target}</span>;
+    if (op.status === "cancelled" || op.status === "failed") return <span className="text-muted">not run</span>;
+    return <span className="text-muted">waiting</span>;
+  };
+  return (
+    <div className="mb-3 text-xs">
+      <table className="w-full">
+        <thead><tr className="text-left text-muted"><th className="pr-3 py-1">VM</th><th className="pr-3">Host</th><th className="pr-3">Now</th><th>{op.status === "awaiting_approval" ? "Plan" : "Result"}</th></tr></thead>
+        <tbody>
+          {plan.map((it) => (
+            <tr key={it.workload_id} className="border-t border-border align-top">
+              <td className="pr-3 py-1 text-text">{it.name || `vmid ${it.vmid}`}</td>
+              <td className="pr-3 text-muted">{it.node || "?"}</td>
+              <td className="pr-3 text-muted">{it.power}</td>
+              <td>{state(it)}</td>
+            </tr>
+          ))}
+          {skipped.map((it) => (
+            <tr key={it.workload_id} className="border-t border-border opacity-70 align-top">
+              <td className="pr-3 py-1">{it.name || `vmid ${it.vmid}`}</td>
+              <td className="pr-3 text-muted">{it.node || "?"}</td>
+              <td className="pr-3 text-muted">{it.power}</td>
+              <td className="text-bad">not in the plan: {(it.reasons || [])[0]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -19,7 +19,7 @@ from ..deps import get_db
 router = APIRouter(prefix="/api/workers", tags=["workers"], dependencies=[Depends(get_current_user)])
 
 PROFILES = ("single", "standard", "large")
-LIMIT_KEYS = {"evac_parallel": "limits.evac_parallel", "node_out": "limits.node_out", "node_in": "limits.node_in", "storage_moves": "limits.storage_moves", "bulk_workers": "limits.bulk_workers"}
+LIMIT_KEYS = {"evac_parallel": "limits.evac_parallel", "node_out": "limits.node_out", "node_in": "limits.node_in", "storage_moves": "limits.storage_moves", "bulk_workers": "limits.bulk_workers", "power_parallel": "limits.power_parallel"}
 
 
 def _conn():
@@ -64,7 +64,7 @@ def status(db: Session = Depends(get_db)):
     running = db.query(Operation).filter(Operation.status.in_(RUNNING_STATUSES), Operation.parent_operation_id.is_(None)).all()
     return {
         "profile": profile_of(db),
-        "limits": {name: _count(db, key) for name, key in LIMIT_KEYS.items()},
+        "limits": {name: _count(db, key, 3 if name == "power_parallel" else 1) for name, key in LIMIT_KEYS.items()},
         "slots_in_use": slots_in_use(db),
         "quick_lane_running": quick_lane_active(conn),
         "workers": _alive(conn),
@@ -102,9 +102,10 @@ def update(payload: WorkersUpdate, user=Depends(get_current_user), db: Session =
     for name, value in (payload.limits or {}).items():
         if name not in LIMIT_KEYS:
             raise HTTPException(422, f"unknown limit '{name}'")
-        if not 1 <= value <= MAX_LIMIT:
-            raise HTTPException(422, f"'{name}' must be between 1 and {MAX_LIMIT}")
-        changes.setdefault("limits", {})[name] = {"from": _count(db, LIMIT_KEYS[name]), "to": value}
+        top = 10 if name == "power_parallel" else MAX_LIMIT
+        if not 1 <= value <= top:
+            raise HTTPException(422, f"'{name}' must be between 1 and {top}")
+        changes.setdefault("limits", {})[name] = {"from": _count(db, LIMIT_KEYS[name], 3 if name == "power_parallel" else 1), "to": value}
         _set_count(db, LIMIT_KEYS[name], value)
     if changes.get("profile", {}).get("to") == "large" and _count(db, "limits.bulk_workers") < 2 and "bulk_workers" not in (payload.limits or {}):
         raise HTTPException(422, "choose how many long-job workers (2 to 4) when selecting Large")
