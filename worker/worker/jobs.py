@@ -239,6 +239,9 @@ def execute_operation_job(operation_id: str):
         elif op.operation_type_id in ("workload.shutdown", "workload.start", "workload.force_stop", "workload.reboot"):
             from pyxie_core.lifecycle_workflow import execute_lifecycle_action
             result = execute_lifecycle_action(db, operation_id)
+        elif op.operation_type_id == "workload.bulk_lifecycle":
+            from pyxie_core.bulk_lifecycle_workflow import execute_bulk_lifecycle
+            result = execute_bulk_lifecycle(db, operation_id)
         elif op.operation_type_id == "workload.resize":
             from pyxie_core.resize_workflow import execute_resize
             result = execute_resize(db, operation_id)

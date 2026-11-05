@@ -517,6 +517,14 @@ def latest_workload_metrics(db: Session) -> dict[str, dict]:
             entry["ballooning"] = state
             entry["balloon_min_mb"] = bmb
 
+    from .mem_pressure import memory_states
+
+    high = {k: v["mem_pct"] for k, v in out.items() if v.get("mem_pct") is not None}
+    running = db.query(Workload).filter(Workload.status == "running", Workload.is_missing.is_(False), Workload.type == "vm").all()
+    for wid, verdict in memory_states(db, running, high).items():
+        out[wid]["mem_state"] = verdict["state"]
+        out[wid]["mem_note"] = verdict["note"] or verdict["detail"]
+
     return out
 
 

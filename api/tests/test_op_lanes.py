@@ -24,7 +24,7 @@ def test_quick_actions_are_short():
 
 
 def test_long_work_is_never_in_the_quick_lane():
-    for t in ("vm.live_migrate", "workload.move_storage", "workload.restore", "workload.clone", "node.evacuate", "maintenance.run", "host.update", "host.reboot", "cluster.rebalance"):
+    for t in ("vm.live_migrate", "workload.move_storage", "workload.restore", "workload.clone", "node.evacuate", "maintenance.run", "host.update", "host.reboot", "cluster.rebalance", "workload.bulk_lifecycle"):
         assert lane_for(t) == "bulk", t
 
 
@@ -35,7 +35,7 @@ def test_unknown_types_default_to_bulk():
 def test_resume_timeouts_unchanged_from_before_the_registry():
     assert {t: timeout_for(t) for t in RESUMABLE_TYPES} == {
         "vm.live_migrate": 16200, "maintenance.run": 21600, "node.enter_maintenance": 10800, "node.exit_maintenance": 1800,
-        "cluster.rebalance": 10800, "protection.backup_membership": 120, "protection.backup_retention": 120, "workload.network_vlan_change": 120}
+        "cluster.rebalance": 10800, "workload.bulk_lifecycle": 14400, "protection.backup_membership": 120, "protection.backup_retention": 120, "workload.network_vlan_change": 120}
 
 
 def test_routing_follows_the_heartbeat():

@@ -37,7 +37,7 @@ type WorkloadFacts = {
   storages: string[];
 };
 
-type WorkloadMetric = { cpu_pct?: number; mem_pct?: number; mem_source?: "guest" | "host"; ballooning?: "on" | "off" | "pending"; balloon_min_mb?: number | null };
+type WorkloadMetric = { cpu_pct?: number; mem_pct?: number; mem_source?: "guest" | "host"; mem_state?: string; mem_note?: string | null; ballooning?: "on" | "off" | "pending"; balloon_min_mb?: number | null };
 
 export default function WorkloadsTable({
   workloads,
@@ -396,7 +396,7 @@ export default function WorkloadsTable({
         {
           header: "RAM Usage",
           tooltip: "Live, as of the last poll (every 5s) -- distinct from the RAM column, which is the configured allocation, not actual usage.",
-          render: (w) => <Meter value={metrics[w.id]?.mem_pct ?? null} width={56} hostOnly={metrics[w.id]?.mem_source === "host"} />,
+          render: (w) => <Meter value={metrics[w.id]?.mem_pct ?? null} width={56} hostOnly={metrics[w.id]?.mem_source === "host"} memState={metrics[w.id]?.mem_state} memNote={metrics[w.id]?.mem_note} />,
           sortValue: (w) => metrics[w.id]?.mem_pct,
         },
         {

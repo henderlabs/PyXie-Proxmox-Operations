@@ -27,6 +27,7 @@ JOB_TIMEOUT_BY_TYPE = {
     # fully solved here.
     "node.evacuate": 10800,  # 3h
     "workload.shutdown": 600,
+    "workload.bulk_lifecycle": 14400,  # up to 50 guests one after another, each with its own shutdown timeout
     "workload.start": 300,
     "workload.force_stop": 300,
     "workload.reboot": 600,
@@ -97,7 +98,7 @@ QUICK_TYPES = frozenset({
 
 # Types an operation worker re-enqueues on start when they were mid-flight (the others are left for a person, as before).
 RESUMABLE_TYPES = frozenset({
-    "vm.live_migrate", "maintenance.run", "node.enter_maintenance", "node.exit_maintenance", "cluster.rebalance",
+    "vm.live_migrate", "maintenance.run", "node.enter_maintenance", "node.exit_maintenance", "cluster.rebalance", "workload.bulk_lifecycle",
     "protection.backup_membership", "protection.backup_retention", "workload.network_vlan_change",
 })
 

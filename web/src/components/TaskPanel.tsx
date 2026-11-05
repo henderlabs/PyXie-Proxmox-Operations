@@ -39,7 +39,7 @@ const IN_FLIGHT_STATUSES = new Set([
 const TERMINAL_STATUSES = new Set(["completed", "failed", "blocked", "cancelled"]);
 
 // Types a Cancel makes sense for while they run (mirrors OperationCard's CANCEL_WHILE_RUNNING).
-const CANCELLABLE = new Set(["node.enter_maintenance", "maintenance.run", "node.evacuate", "cluster.rebalance", "vm.live_migrate", "workload.move_storage"]);
+const CANCELLABLE = new Set(["node.enter_maintenance", "maintenance.run", "node.evacuate", "cluster.rebalance", "workload.bulk_lifecycle", "vm.live_migrate", "workload.move_storage"]);
 
 // Left edge and tint per state, the same colour language as the top bar: blue running, amber needs you, red failed, green done.
 function stateClass(status: string): string {
@@ -158,6 +158,10 @@ export function subjectFor(op: Operation): string {
   }
   if (["workload.shutdown", "workload.start", "workload.force_stop", "workload.resize", "workload.network_vlan_change", "workload.move_storage", "workload.snapshot_create", "workload.snapshot_delete", "workload.snapshot_rollback", "workload.tags_change", "workload.disk_grow", "workload.hw_change", "workload.nic_change", "workload.create", "workload.delete", "workload.clone", "workload.cdrom_change", "workload.ct_create", "workload.ct_resize", "workload.ct_nic_change"].includes(op.operation_type_id)) {
     return r?.workload_name || (r?.vmid ? `vmid ${r.vmid}` : r?.node || "?");
+  }
+  if (op.operation_type_id === "workload.bulk_lifecycle") {
+    const count = ((r?.plan as unknown[] | undefined) || []).length;
+    return `${count} VM${count === 1 ? "" : "s"}`;
   }
   if (op.operation_type_id === "cluster.rebalance") {
     // Not tied to one node -- dry_run_result.node is always null here.

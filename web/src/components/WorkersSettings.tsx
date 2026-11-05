@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useMe } from "@/lib/useMe";
 
 type Lane = { waiting: number; running: number; oldest_waiting_seconds: number | null; longest_wait_seconds: number | null };
-type Limits = { evac_parallel: number; node_out: number; node_in: number; storage_moves: number; bulk_workers: number };
+type Limits = { evac_parallel: number; node_out: number; node_in: number; storage_moves: number; bulk_workers: number; power_parallel: number };
 type Status = {
   profile: "single" | "standard" | "large";
   limits: Limits;
@@ -23,7 +23,7 @@ export default function WorkersSettings() {
   const isAdmin = me === undefined || me?.is_admin === true;
   const [st, setSt] = useState<Status | null>(null);
   const [choice, setChoice] = useState<"single" | "standard" | "large">("single");
-  const [limits, setLimits] = useState<Limits>({ evac_parallel: 1, node_out: 1, node_in: 1, storage_moves: 1, bulk_workers: 1 });
+  const [limits, setLimits] = useState<Limits>({ evac_parallel: 1, node_out: 1, node_in: 1, storage_moves: 1, bulk_workers: 1, power_parallel: 3 });
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,7 @@ export default function WorkersSettings() {
     try {
       const body = what === "profile"
         ? { profile: choice, ...(choice === "large" ? { limits: { bulk_workers: limits.bulk_workers } } : {}) }
-        : { limits: { evac_parallel: limits.evac_parallel, node_out: limits.node_out, node_in: limits.node_in, storage_moves: limits.storage_moves } };
+        : { limits: { evac_parallel: limits.evac_parallel, node_out: limits.node_out, node_in: limits.node_in, storage_moves: limits.storage_moves, power_parallel: limits.power_parallel } };
       const r = await fetch("/api/workers", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.error || d.detail || `Save failed (${r.status})`);
@@ -88,12 +88,13 @@ export default function WorkersSettings() {
         <div className="text-xs text-muted">These limits protect your hosts, storage and network. Every one starts at 1, which is how PyXie has always behaved: one thing at a time. Raise one only if you know that part has spare capacity. A task that has to wait for a free place shows &quot;Waiting for&quot; and starts by itself.</div>
         {([
           ["evac_parallel", "Guests moved at once when you empty a host (Evacuate / Maint Mode, Evacuate)", "When you empty a host for maintenance, PyXie moves this many guests at the same time. 1 means one after another. 2 or 3 finish sooner if the hosts and the network between them have room; if they do not, every move gets slower and a live move can fail to catch up. Full Maintenance and Balance Load always move one at a time."],
+          ["power_parallel", "Guests started or stopped at once (Maintenance > Workloads, several VMs)", "When you shut down, start or force-stop several VMs in one plan, PyXie works on this many at the same time. Each VM still waits for its own guest to finish, so a higher number finishes a large batch sooner. It does not move any data. Up to 10."],
           ["node_out", "Moves out of one host at once", "A host has one network connection (or a few) to send guests through, and more than one move out of the same host shares it. To move two guests off the same host at the same time this must be 2 or more as well."],
           ["node_in", "Moves into one host at once", "The same for the host that receives the guests."],
           ["storage_moves", "Disk copies per storage at once", "Copying disks to or from the same storage server (a NAS or shared storage) competes for that server's speed."],
         ] as [keyof Limits, string, string][]).map(([key, title, body]) => (
           <div key={key} className="flex items-start gap-3">
-            <input type="number" min={1} max={4} value={limits[key]} disabled={!isAdmin} onChange={(e) => setLimits({ ...limits, [key]: Math.max(1, Math.min(4, Number(e.target.value) || 1)) })} className="w-14 bg-canvas border border-border rounded px-1 py-0.5 text-text text-sm mt-0.5" />
+            <input type="number" min={1} max={key === "power_parallel" ? 10 : 4} value={limits[key]} disabled={!isAdmin} onChange={(e) => setLimits({ ...limits, [key]: Math.max(1, Math.min(key === "power_parallel" ? 10 : 4, Number(e.target.value) || 1)) })} className="w-14 bg-canvas border border-border rounded px-1 py-0.5 text-text text-sm mt-0.5" />
             <span className="text-sm"><b className="text-text">{title}</b><span className="block text-xs text-muted">{body}</span></span>
           </div>
         ))}

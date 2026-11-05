@@ -4,14 +4,13 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Node, Operation, StorageItem, Workload } from "@/lib/api";
 import OperationCard from "@/components/OperationCard";
-import WorkloadSearchSelect from "@/components/WorkloadSearchSelect";
 import { Table, type Column } from "@/components/Table";
 import { Meter } from "@/components/Gauges";
 import { useOperationPolling } from "@/lib/useOperationPolling";
 import { notifyOperationsChanged, onOperationsChanged } from "@/lib/operationsBus";
 import { useMe } from "@/lib/useMe";
 
-type WorkloadMetric = { cpu_pct?: number; mem_pct?: number; mem_source?: "guest" | "host" };
+type WorkloadMetric = { cpu_pct?: number; mem_pct?: number; mem_source?: "guest" | "host"; mem_state?: string; mem_note?: string | null };
 type WorkloadStorage = { name: string; scope: string | null };
 
 type BulkReviewItem = {
@@ -114,14 +113,9 @@ export default function WorkloadLifecycleForm({
   }, []);
 
   const [filterByNode, setFilterByNode] = useState(true);
-  const [workloadId, setWorkloadId] = useState(initialWorkloadId || "");
   const [action, setAction] = useState("");
   const [timeoutSeconds, setTimeoutSeconds] = useState(120);
   const [justification, setJustification] = useState("");
-  const [destNodeId, setDestNodeId] = useState("");
-  const [destStorageId, setDestStorageId] = useState("");
-  const [recommendation, setRecommendation] = useState<RecommendCandidate[] | null>(null);
-  const [recommendLoading, setRecommendLoading] = useState(false);
   const [op, setOp] = useOperationPolling(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,7 +127,9 @@ export default function WorkloadLifecycleForm({
   // (blank = best fit per VM), Preview -> one editable line per VM in the
   // same plan card Balance Load uses, approved once. It IS a cluster.rebalance
   // operation underneath, so execution/cancel/resume are the existing ones.
-  const [bulkIds, setBulkIds] = useState<Set<string>>(new Set());
+  const [bulkIds, setBulkIds] = useState<Set<string>>(new Set(initialWorkloadId ? [initialWorkloadId] : []));
+  // One selection feeds every action: exactly one ticked VM uses the single-VM plan card, several use the combined review.
+  const workloadId = bulkIds.size === 1 ? Array.from(bulkIds)[0] : "";
   const [bulkDestId, setBulkDestId] = useState("");
   const [bulkOp, setBulkOp] = useOperationPolling(null);
   const [bulkPending, setBulkPending] = useState(false);
@@ -145,7 +141,7 @@ export default function WorkloadLifecycleForm({
   const [bulkReviewTick, setBulkReviewTick] = useState(0);
 
   useEffect(() => {
-    if (bulkIds.size === 0) {
+    if (bulkIds.size === 0 || action !== "move") {
       setBulkReview(null);
       setBulkChoices({});
       return;
@@ -177,7 +173,7 @@ export default function WorkloadLifecycleForm({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [bulkIds, bulkDestId, bulkReviewTick]);
+  }, [bulkIds, bulkDestId, bulkReviewTick, action]);
 
   function setBulkChoice(id: string, patch: BulkChoice) {
     setBulkChoices((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
@@ -286,54 +282,6 @@ export default function WorkloadLifecycleForm({
       ]
     : [];
 
-  const workload = vms.find((w) => w.id === workloadId) || null;
-  const topPick = recommendation?.find((c) => !c.blocked) || null;
-  const destinationCandidates = nodes.filter((n) => workload && n.cluster_id === workload.cluster_id && n.id !== workload.node_id);
-  const storageCandidates = useMemo(
-    () => storage.filter((s) => s.scope === "cluster-shared" || (s.scope === "node-local" && s.node_id === destNodeId)),
-    [storage, destNodeId]
-  );
-
-  // Only fetch a recommendation when the "Move" action is actually being
-  // used -- no point ranking destinations for a shutdown/start/force-stop.
-  useEffect(() => {
-    if (!workloadId || action !== "move") {
-      setRecommendation(null);
-      return;
-    }
-    let cancelled = false;
-    setRecommendLoading(true);
-    fetch("/api/operations/vm-migrations/recommend", {
-      method: "POST",
-      body: JSON.stringify({ workload_id: workloadId }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return;
-        setRecommendation(data.candidates || []);
-        if (data.top_pick) {
-          setDestNodeId(data.top_pick.node_id);
-          // Disks already on shared storage stay there by default (no copy); only local-disk guests get a recommended pool.
-          const onShared = currentStorageByWorkload[workloadId]?.scope === "cluster-shared";
-          setDestStorageId(onShared ? "" : data.top_pick.recommended_storage?.id || "");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setRecommendLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workloadId, action]);
-
-  function selectWorkload(id: string) {
-    setWorkloadId(id);
-    setDestNodeId("");
-    setDestStorageId("");
-    setRecommendation(null);
-    setOp(null);
-  }
-
   // Selections are for the move you are about to make, not a standing choice:
   // once the move has gone (approved from this card OR from the Task Panel),
   // clear the ticked rows; once a single-VM action completes, clear the picker
@@ -343,17 +291,20 @@ export default function WorkloadLifecycleForm({
     if (bulkOp && !["awaiting_approval", "pending", "dry_run"].includes(bulkOp.status)) {
       setBulkIds(new Set());
       setBulkDestId("");
+      setAction("");
     }
   }, [bulkOp?.status]);
   useEffect(() => {
     if (op?.status === "completed") {
-      setWorkloadId("");
+      setBulkIds(new Set());
       setAction("");
-      setDestNodeId("");
-      setDestStorageId("");
-      setRecommendation(null);
     }
   }, [op?.status]);
+  // A changed selection or action invalidates an open combined review and any single-VM plan.
+  useEffect(() => {
+    if (op && op.status === "awaiting_approval") setOp(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkIds, action]);
 
   // Arrived here via a VM name link from the Workloads page -- scroll the
   // now-preselected (and already-highlighted via rowClassName) row into
@@ -382,22 +333,18 @@ export default function WorkloadLifecycleForm({
     setOp(null);
     notifyOperationsChanged();
     try {
-      const res = await fetch(
-        action === "move" ? "/api/operations/vm-migrations/dry-run" : "/api/operations/workload-lifecycle/dry-run",
-        {
-          method: "POST",
-          body: JSON.stringify(
-            action === "move"
-              ? { workload_id: workloadId, destination_node_id: destNodeId, destination_storage_id: destStorageId || null }
-              : {
-                  workload_id: workloadId,
-                  action,
-                  timeout_seconds: action === "shutdown" ? timeoutSeconds : undefined,
-                  justification: action === "force_stop" ? justification : undefined,
-                }
-          ),
-        }
-      );
+      // Several VMs become ONE plan (one approval); a single VM keeps its own plan.
+      const many = bulkIds.size > 1;
+      const res = await fetch(many ? "/api/operations/workload-lifecycle/bulk-dry-run" : "/api/operations/workload-lifecycle/dry-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...(many ? { workload_ids: Array.from(bulkIds) } : { workload_id: workloadId }),
+          action,
+          timeout_seconds: action === "shutdown" ? timeoutSeconds : undefined,
+          justification: action === "force_stop" ? justification : undefined,
+        }),
+      });
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Dry run failed");
@@ -462,8 +409,8 @@ export default function WorkloadLifecycleForm({
           rows={visibleVms}
           emptyMessage={filterByNode && selectedNodeIds.length > 0 ? "No VMs on the selected node(s)." : "No VMs."}
           storageKey="maintenance-workloads"
-          onRowClick={(w) => selectWorkload(w.id)}
-          rowClassName={(w) => (workloadId === w.id ? "bg-accent/10 pyxie-jump-target" : "")}
+          onRowClick={isAdmin ? (w) => toggleBulk(w.id) : undefined}
+          rowClassName={(w) => (bulkIds.has(w.id) ? "bg-accent/10 pyxie-jump-target" : "")}
           columns={[
             ...bulkColumns,
             {
@@ -502,7 +449,7 @@ export default function WorkloadLifecycleForm({
             },
             {
               header: "RAM",
-              render: (w) => <Meter value={metrics[w.id]?.mem_pct ?? null} width={56} hostOnly={metrics[w.id]?.mem_source === "host"} />,
+              render: (w) => <Meter value={metrics[w.id]?.mem_pct ?? null} width={56} hostOnly={metrics[w.id]?.mem_source === "host"} memState={metrics[w.id]?.mem_state} memNote={metrics[w.id]?.mem_note} />,
               sortValue: (w) => metrics[w.id]?.mem_pct,
             },
             {
@@ -521,10 +468,10 @@ export default function WorkloadLifecycleForm({
         />
       </div>
 
-      {isAdmin && bulkIds.size > 0 && (
+      {isAdmin && bulkIds.size > 0 && action === "move" && (
         <div className="flex flex-wrap items-end gap-3 border border-accent/30 rounded p-3">
           <div className="text-sm">
-            <span className="font-medium">{bulkIds.size}</span> VM{bulkIds.size === 1 ? "" : "s"} selected for bulk migrate
+            <span className="font-medium">{bulkIds.size}</span> VM{bulkIds.size === 1 ? "" : "s"} selected to migrate
           </div>
           <div>
             <label className="block text-xs text-muted mb-1">Destination</label>
@@ -653,26 +600,26 @@ export default function WorkloadLifecycleForm({
       )}
 
       {isAdmin && (
-      <div className="flex flex-wrap items-end gap-3">
-        <div>
-          <label className="block text-xs text-muted mb-1">Workload</label>
-          <WorkloadSearchSelect vms={vms} value={workloadId} onChange={selectWorkload} />
+      <div className="flex flex-wrap items-end gap-3 sticky bottom-0 bg-surface py-2 border-t border-border">
+        <div className="text-sm pb-1.5">
+          <span className="font-medium">{bulkIds.size}</span> selected
         </div>
         <div>
           <label className="block text-xs text-muted mb-1">Action</label>
           <select
-            className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm"
+            className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm disabled:opacity-50"
             value={action}
+            disabled={bulkIds.size === 0}
             onChange={(e) => {
               setAction(e.target.value);
               setOp(null);
             }}
           >
             <option value="">Select an action…</option>
+            <option value="move">Migrate to another node</option>
             <option value="shutdown">Graceful Shutdown</option>
             <option value="start">Start</option>
             <option value="force_stop">Force Stop (higher-risk)</option>
-            <option value="move">Move to Another Node</option>
           </select>
         </div>
         {action === "shutdown" && (
@@ -698,101 +645,26 @@ export default function WorkloadLifecycleForm({
             />
           </div>
         )}
-        {action === "move" && (
-          <>
-            <div>
-              <label className="block text-xs text-muted mb-1">Destination node</label>
-              <select
-                className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm min-w-[160px]"
-                value={destNodeId}
-                onChange={(e) => {
-                  setDestNodeId(e.target.value);
-                  setDestStorageId("");
-                }}
-                disabled={!workload}
-              >
-                <option value="">Select a node…</option>
-                {destinationCandidates.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name}
-                    {n.maintenance_mode ? " (in maintenance -- will be blocked)" : ""}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Destination storage</label>
-              <select
-                className="bg-surface2 border border-border rounded px-2 py-1.5 text-sm min-w-[200px]"
-                value={destStorageId}
-                onChange={(e) => setDestStorageId(e.target.value)}
-                disabled={!destNodeId}
-              >
-                <option value="">Keep current storage (no relocation)</option>
-                {storageCandidates.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.scope === "node-local" ? "local" : "shared"})
-                  </option>
-                ))}
-              </select>
-            </div>
-            {workload?.status === "stopped" && (
-              <p className="text-xs text-muted w-full">
-                <span className="text-text font-medium">Offline migration</span>: this VM is stopped, so Proxmox simply re-registers it on the destination
-                (nothing runs). Disks on shared storage are not copied; a local disk is copied to the storage you pick.
-              </p>
-            )}
-          </>
+        {action !== "move" && (
+          <button
+            onClick={runDryRun}
+            disabled={bulkIds.size === 0 || !action || pending || (action === "force_stop" && !justification.trim())}
+            title="Shows what would happen -- nothing changes until you review the result and approve it."
+            className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50"
+          >
+            Preview
+          </button>
         )}
-        <button
-          onClick={runDryRun}
-          disabled={
-            !workloadId ||
-            !action ||
-            pending ||
-            (action === "force_stop" && !justification.trim()) ||
-            (action === "move" && !destNodeId)
-          }
-          title="Shows what would happen -- nothing changes until you review the result and approve it."
-          className="px-3 py-1.5 rounded text-sm font-medium bg-ink text-on-ink border border-accent hover:bg-accent/10 disabled:opacity-50"
-        >
-          Preview
-        </button>
-        {!workloadId ? (
-          <p className="text-xs text-muted w-full">Select a VM above to enable Preview.</p>
+        {bulkIds.size === 0 ? (
+          <p className="text-xs text-muted w-full">Tick one or more VMs above to enable an action.</p>
         ) : !action ? (
-          <p className="text-xs text-muted w-full">Select an action above to enable Preview.</p>
+          <p className="text-xs text-muted w-full">Select an action to continue.</p>
+        ) : action === "move" ? (
+          <p className="text-xs text-muted w-full">Choose the destination and storage for each VM above, then create the plan.</p>
         ) : null}
       </div>
       )}
 
-      {isAdmin && action === "move" && workloadId && recommendLoading && (
-        <p className="text-xs text-muted">Ranking destinations (balance, performance/trust tiers, affinity rules)…</p>
-      )}
-      {action === "move" && topPick && (
-        <p className="text-xs text-muted">
-          <span className="text-accent">Recommended:</span> {topPick.node_name} (score {topPick.score}) — {topPick.reasons.join(", ")}
-          {topPick.recommended_storage && (
-            <> · storage: {topPick.recommended_storage.name} ({topPick.recommended_storage.reason})</>
-          )}
-          . Still fully editable above.
-        </p>
-      )}
-      {action === "move" && recommendation && recommendation.some((c) => c.blocked) && (
-        <p className="text-xs text-muted">
-          {recommendation.filter((c) => c.blocked).length} node(s) excluded:{" "}
-          {recommendation
-            .filter((c) => c.blocked)
-            .map((c) => `${c.node_name} (${c.blocking_reasons[0] || "blocked"})`)
-            .join("; ")}
-        </p>
-      )}
-      {action === "move" && (
-        <p className="text-xs text-muted">
-          Leaving storage on "Keep current" only moves compute -- a VM already on shared storage stays on shared storage.
-          Pick a specific (e.g. local SSD) target to actually relocate its disk(s) as part of the move.
-        </p>
-      )}
       <p className="text-xs text-muted">
         Force Stop is deliberately never an automatic fallback if a graceful shutdown times out -- it's always its
         own separately-approved action.
