@@ -78,6 +78,7 @@ from .vm_liveness import liveness_block_reason, probe_vm
 from .maintenance import (
     _has_pci_passthrough,
     _qemu_config,
+    lxc_bind_mounts,
     _workload_disk_storage_names,
     check_crs_affinity,
     check_cpu_compatibility,
@@ -153,15 +154,16 @@ def _evaluate_migration_hard_blocks(
     # guest stopped -- live migration can be too costly time-wise with
     # node-local storage, so offline only requires the guest be in a sane
     # state to move at all, not that it stay running.
+    is_ct = workload.type == "lxc"
     if transport == "live" and not was_running:
         reasons.append(f"workload is not running (status={workload.status}); live migration requires a running VM")
         blocking_rules.append("SAFE-MIGRATE-001")
-    elif transport == "offline" and workload.status not in ("running", "stopped"):
+    elif transport in ("offline", "restart") and workload.status not in ("running", "stopped"):
         reasons.append(f"workload status is '{workload.status}' -- not safe to migrate right now")
         blocking_rules.append("SAFE-MIGRATE-001")
 
     # A running VM whose QEMU does not answer would hang the move (live) or its shutdown (offline).
-    if client and was_running:
+    if client and was_running and not is_ct:
         live_reason = liveness_block_reason(workload.vmid, probe_vm(client, source_node.name, workload.vmid))
         if live_reason:
             reasons.append(live_reason)
@@ -171,10 +173,10 @@ def _evaluate_migration_hard_blocks(
     # transport powers a running guest off for the duration of the disk
     # copy, same as a resize power-cycle, so a guest tagged as unable to
     # tolerate that needs the same explicit-review gate.
-    if transport == "offline" and was_running and workload.downtime_tolerance == "low":
+    if transport in ("offline", "restart") and was_running and workload.downtime_tolerance == "low":
         reasons.append(
             "workload is tagged downtime_tolerance='low' (cannot tolerate downtime) -- "
-            "offline migration will power it off for the duration of the move, requires explicit review"
+            f"{'a container restart migration stops it' if is_ct else 'offline migration will power it off'} for the duration of the move, requires explicit review"
         )
         blocking_rules.append("SAFE-DOWNTIME-001")
 
@@ -200,11 +202,23 @@ def _evaluate_migration_hard_blocks(
     if client:
         if destination_storage is not None:
             try:
-                qlist = client.qemu_list(source_node.name)
-                entry = next((v for v in qlist if v.get("vmid") == workload.vmid), None)
+                qlist = client.lxc_list(source_node.name) if is_ct else client.qemu_list(source_node.name)
+                entry = next((v for v in qlist if int(v.get("vmid", -1)) == workload.vmid), None)
                 expected_disk_bytes = entry.get("maxdisk") if entry else None
             except Exception:
                 expected_disk_bytes = None
+        if is_ct and destination_storage is not None:
+            # Proxmox refuses a container disk on a storage that does not hold "rootdir" content ("storage 'X' does not support CT rootdirs").
+            try:
+                holds = next((r for r in client.storage_list(destination_node.name) or [] if r.get("storage") == destination_storage.name), None)
+            except Exception:  # noqa: BLE001
+                holds = None
+            if holds is not None and (not holds.get("active", 1) or "rootdir" not in str(holds.get("content") or "")):
+                reasons.append(
+                    f"storage '{destination_storage.name}' cannot hold container disks on {destination_node.name} (Proxmox: it does not support CT rootdirs) -- "
+                    "pick a storage that holds container disks, or enable 'Disk image / Container' on it in Proxmox"
+                )
+                blocking_rules.append("SAFE-STORAGE-001")
         # The disks must fit on the target storage: not a judgment call, so it is never overridable.
         no_room = capacity_shortfall_reason(destination_storage, expected_disk_bytes)
         if no_room:
@@ -248,6 +262,14 @@ def _evaluate_migration_hard_blocks(
         if passthrough:
             reasons.append("PCI/device passthrough configured -- destination must have the same device")
             blocking_rules.append("SAFE-MIGRATE-001")
+        if is_ct:
+            mounts = lxc_bind_mounts(config)
+            if mounts:
+                reasons.append(
+                    f"container has a bind mount to a path on this host ({', '.join(mounts)}) -- Proxmox cannot migrate it; "
+                    "shut it down in place instead, or remove the bind mount first"
+                )
+                blocking_rules.append("SAFE-MIGRATE-001")
 
         # CRS/affinity and CPU compatibility are about node placement,
         # not storage -- they apply regardless of whether this is a
@@ -313,10 +335,15 @@ def dry_run_migration(
     parent_operation_id=None,
     correlation_id=None,
 ) -> Operation:
-    if workload.type != "vm":
-        raise MigrationWorkflowError("only VM (qemu) live migration is implemented in Stage W1, not LXC")
-    if transport not in ("live", "offline"):
-        raise MigrationWorkflowError(f"unknown transport {transport!r} -- must be 'live' or 'offline'")
+    if workload.type not in ("vm", "lxc"):
+        raise MigrationWorkflowError(f"unknown guest type {workload.type!r}")
+    if transport not in ("live", "offline", "restart"):
+        raise MigrationWorkflowError(f"unknown transport {transport!r} -- must be 'live', 'offline' or 'restart'")
+    if workload.type == "lxc":
+        # A container cannot be moved live. Running: Proxmox "restart migration" (stop, move, start); stopped: a plain offline move.
+        transport = "restart" if workload.status == "running" else "offline"
+    elif transport == "restart":
+        raise MigrationWorkflowError("restart migration is for containers; a VM moves 'live' or 'offline'")
 
     source_node, cluster, target = _load_context(db, workload)
     if destination_node.cluster_id != cluster.id:
@@ -398,7 +425,8 @@ def dry_run_migration(
         "vmid": workload.vmid,
         "workload_name": workload.name,
         "transport": transport,
-        "will_power_cycle": transport == "offline" and was_running,
+        "will_power_cycle": transport in ("offline", "restart") and was_running,
+        "guest_kind": "lxc" if workload.type == "lxc" else "qemu",
     }
 
     if blocking_rules:
@@ -496,7 +524,10 @@ def execute_migration(db: Session, operation_id) -> Operation:
     # offline path available, so they were only ever created against a
     # running guest -- default True is the correct backfill for those.
     was_running = ctx.get("was_running", True)
-    power_cycles = transport == "offline" and was_running
+    is_ct = workload.type == "lxc"
+    # A VM moved offline is shut down by PyXie, moved, then started by PyXie. A container's restart migration does all three inside the one Proxmox
+    # task (it stops, moves and starts the container itself), so PyXie runs no separate shutting_down / starting_up stages for it.
+    power_cycles = transport == "offline" and was_running and not is_ct
 
     try:
         if op.status == "approved":
@@ -510,6 +541,7 @@ def execute_migration(db: Session, operation_id) -> Operation:
                     target_node=destination_node.name,
                     expected_memory_bytes=ctx.get("expected_memory_bytes"),
                     require_running=was_running,
+                    guest_kind="lxc" if is_ct else "qemu",
                 )
                 if not precheck.ok:
                     op.dry_run_result = with_revalidation_block(op.dry_run_result, precheck.reasons)
@@ -597,10 +629,16 @@ def execute_migration(db: Session, operation_id) -> Operation:
 
         if op.status == "executing" and not op.pve_upid:
             with PveMaintenanceClient(maintenance_creds) as write_client:
-                upid = write_client.migrate_vm(
-                    source_node.name, workload.vmid, destination_node.name, online=(transport == "live"),
-                    target_storage=ctx.get("target_storage_name"),
-                )
+                if is_ct:
+                    upid = write_client.migrate_ct(
+                        source_node.name, workload.vmid, destination_node.name, restart=(transport == "restart"),
+                        target_storage=ctx.get("target_storage_name"),
+                    )
+                else:
+                    upid = write_client.migrate_vm(
+                        source_node.name, workload.vmid, destination_node.name, online=(transport == "live"),
+                        target_storage=ctx.get("target_storage_name"),
+                    )
             op.pve_upid = upid
             db.commit()
             op = enter_stage(db, op, status="monitoring", stage="monitoring", pve_upid=upid)
@@ -668,8 +706,8 @@ def execute_migration(db: Session, operation_id) -> Operation:
         if op.status == "verifying":
             read_client, _cred = build_pve_client(db, target)
             with read_client:
-                dest_vms = read_client.qemu_list(destination_node.name)
-                source_vms = read_client.qemu_list(source_node.name)
+                dest_vms = read_client.lxc_list(destination_node.name) if is_ct else read_client.qemu_list(destination_node.name)
+                source_vms = read_client.lxc_list(source_node.name) if is_ct else read_client.qemu_list(source_node.name)
             on_dest = next((v for v in dest_vms if int(v.get("vmid", -1)) == workload.vmid), None)
             still_on_source = next((v for v in source_vms if int(v.get("vmid", -1)) == workload.vmid), None)
 
@@ -684,19 +722,21 @@ def execute_migration(db: Session, operation_id) -> Operation:
                 release_locks_for_operation(db, op.id)
                 return fail_operation(
                     db, op,
-                    error="PVE task reported success but VM is not listed on the destination node -- read-back verification failed",
+                    error=f"PVE task reported success but the {'container' if is_ct else 'VM'} is not listed on the destination node -- read-back verification failed",
                 )
             if still_on_source is not None:
                 release_locks_for_operation(db, op.id)
                 return fail_operation(
                     db, op,
-                    error="PVE task reported success but VM is still listed on the source node -- read-back verification failed",
+                    error=f"PVE task reported success but the {'container' if is_ct else 'VM'} is still listed on the source node -- read-back verification failed",
                 )
             # A live migration (or an offline one that power-cycled) must
             # land running; an offline migration of a guest that was
             # already stopped is expected to land stopped -- same
             # was-it-running-before contract as workload.resize.
             expect_status = "running" if (transport == "live" or was_running) else "stopped"
+            if is_ct and was_running:
+                expect_status = "running"  # restart migration starts the container again on the destination
             if on_dest.get("status") != expect_status:
                 release_locks_for_operation(db, op.id)
                 return fail_operation(

@@ -684,3 +684,33 @@ def guest_disk_rows(db: Session, workload: Workload) -> list[dict]:
     for s in db.query(Storage).filter(Storage.cluster_id == workload.cluster_id, Storage.is_missing.is_(False)).all():
         shared[s.name] = shared.get(s.name, False) or s.scope == "cluster-shared"
     return [{"slot": d.slot, "storage": d.storage, "size_bytes": d.size_bytes, "shared": bool(shared.get(d.storage or "", False))} for d in disks]
+
+
+def fit_ct_storage(db: Session, client, workload: Workload, destination_node: Node, storage_rec: Optional[dict], currently_on_shared: bool) -> Optional[dict]:
+    """A container's disk can only go on a storage whose content types include "rootdir" (Proxmox answers "storage 'X' does not support CT rootdirs" otherwise,
+    seen 2026-11-13 moving pyxie-test-ct to the NAS). VMs are untouched. Returns `storage_rec` when it is fine (or when nothing can be checked), else the best
+    storage on the destination that CAN hold container disks (a shared one when the guest is on shared storage now, else the local one with the most free
+    space), else the unchanged `storage_rec` so the preview's own check names the problem."""
+    if workload.type != "lxc" or client is None or storage_rec is None:
+        return storage_rec
+    try:
+        ok = {r["storage"]: r for r in client.storage_list(destination_node.name) or [] if r.get("active", 1) and "rootdir" in str(r.get("content") or "")}
+    except Exception:  # noqa: BLE001
+        return storage_rec
+    if storage_rec.get("name") in ok:
+        return storage_rec
+    from .models import Storage
+    rows = [
+        s for s in db.query(Storage).filter(
+            (Storage.scope == "cluster-shared") | ((Storage.scope == "node-local") & (Storage.node_id == destination_node.id))
+        ).all()
+        if s.name in ok and not s.is_missing
+    ]
+    shared = [s for s in rows if s.scope == "cluster-shared"]
+    local = sorted([s for s in rows if s.scope == "node-local" and s.capacity_bytes and s.used_bytes is not None], key=lambda s: s.capacity_bytes - s.used_bytes, reverse=True)
+    pick = (shared or local) if currently_on_shared else (local or shared)
+    if not pick:
+        return storage_rec
+    chosen = pick[0]
+    return {"id": str(chosen.id), "name": chosen.name, "scope": chosen.scope,
+            "reason": f"{storage_rec.get('name')} cannot hold container disks on {destination_node.name}; using {chosen.name}"}

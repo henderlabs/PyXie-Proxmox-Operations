@@ -369,7 +369,7 @@ def evaluate_findings(db: Session) -> dict:
     current.extend(_pbs_server_findings(db))
     current.extend(_stale_inventory_findings(db))
     current.extend(_edge_findings(db))
-    for extra in (_certificate_findings, _missed_backup_findings, _long_wait_findings):
+    for extra in (_certificate_findings, _missed_backup_findings, _long_wait_findings, _guest_in_maintenance_findings):
         try:  # newer checks: one failing must never stop the rest of the findings
             current.extend(extra(db))
         except Exception:  # noqa: BLE001
@@ -673,6 +673,36 @@ def _stale_lock_findings(db: Session) -> list[dict]:
                 },
             }
         )
+    return out
+
+
+def _guest_in_maintenance_findings(db: Session) -> list[dict]:
+    """A guest running on a host that is in maintenance mode. A host in maintenance mode is meant to be empty; the usual cause is a guest with Start at
+    boot on that Proxmox powered on after the host rebooted (st-pve105, 2026-11-13). Closes itself when the guest stops, moves, or the host exits maintenance."""
+    from .models import Node, Workload
+    out: list[dict] = []
+    for node in db.query(Node).filter(Node.maintenance_mode.is_(True), Node.is_missing.is_(False)).all():
+        for wl in db.query(Workload).filter(Workload.node_id == node.id, Workload.is_missing.is_(False), Workload.status == "running").all():
+            label = wl.name or wl.vmid
+            kind = "container" if wl.type == "lxc" else "VM"
+            out.append(
+                {
+                    "dedupe_key": f"maintenance.guest_running:{wl.id}",
+                    "object_type": "workload",
+                    "object_id": wl.id,
+                    "category": "maintenance",
+                    "severity": "warning",
+                    "title": f"{kind} '{label}' ({wl.vmid}) is running on {node.name}, which is in maintenance mode",
+                    "evidence": {
+                        "vmid": wl.vmid, "name": wl.name, "node": node.name, "node_id": str(node.id), "workload_ids": [str(wl.id)],
+                        "maintenance_since": node.maintenance_mode_since.isoformat() if node.maintenance_mode_since else None,
+                        "fix": f"{node.name} is meant to be empty while it is in maintenance mode. If this guest started by itself after the host rebooted, it has "
+                               "Start at boot on: Evacuate / Maint Mode and Full Maintenance can turn that off for the window (choose Leave stopped in the plan) "
+                               "and put it back when you exit maintenance mode. Shut the guest down or move it from its workload page, or exit maintenance mode if "
+                               "the host is ready to carry load again. This finding closes by itself.",
+                    },
+                }
+            )
     return out
 
 

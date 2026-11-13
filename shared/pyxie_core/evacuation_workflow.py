@@ -43,7 +43,7 @@ from .operations_engine import (
     enter_stage,
     fail_operation,
 )
-from .placement import note_planned_move, current_storage_name, is_currently_on_shared_storage, rank_with_simulated_load, recommend_destinations, recommend_storage_for_candidate
+from .placement import note_planned_move, current_storage_name, is_currently_on_shared_storage, rank_with_simulated_load, recommend_destinations, recommend_storage_for_candidate, fit_ct_storage
 from .discovery import build_pve_client
 
 
@@ -74,8 +74,9 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
         blocking_rules.append("SAFE-QUORUM-001")
 
     workloads = db.query(Workload).filter(Workload.node_id == node.id, Workload.is_missing.is_(False)).all()
-    running_vms = [w for w in workloads if w.type == "vm" and w.status == "running"]
-    running_lxc = [w for w in workloads if w.type == "lxc" and w.status == "running"]
+    # Running containers are planned like VMs, with a restart migration (stop, move, start) because Proxmox cannot move a container live.
+    running_vms = [w for w in workloads if w.type in ("vm", "lxc") and w.status == "running"]
+    running_lxc: list = []
     stopped_workloads = [w for w in workloads if w.status != "running"]
 
     client = None
@@ -106,7 +107,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
             )
             nodes_by_id = {n.id: n for n in candidates_all}
             simulated_added_bytes: dict = {}
-            liveness = scan_vm_liveness(client, [(node.name, w.vmid) for w in running_vms])
+            liveness = scan_vm_liveness(client, [(node.name, w.vmid) for w in running_vms if w.type == "vm"])
             for wl in running_vms:
                 block_reasons = [
                     r for r in (vm_lock_reason(wl.vmid, _qemu_config(client, node.name, wl), **lock_context(db, wl)), liveness_block_reason(wl.vmid, liveness.get(wl.vmid))) if r
@@ -128,6 +129,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                 currently_on_shared = is_currently_on_shared_storage(client, node, wl, db)
                 current_storage = current_storage_name(client, node, wl)
                 storage_rec = recommend_storage_for_candidate(db, destination_node.id, currently_on_shared)
+                storage_rec = fit_ct_storage(db, client, wl, destination_node, storage_rec, currently_on_shared)
                 storage_choice = storage_rec["id"] if storage_rec else None
                 plan.append({
                     "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
@@ -151,7 +153,8 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                     # override -- defaults to live so existing behavior
                     # doesn't change unless picked (live migration can be
                     # too costly time-wise with node-local storage).
-                    "transport": "live",
+                    "transport": "restart" if wl.type == "lxc" else "live",
+                    "guest_type": wl.type,
                 })
 
             for wl in stopped_workloads:
@@ -203,6 +206,7 @@ def dry_run_evacuation(db: Session, node: Node, *, actor: str) -> Operation:
                     if top is not None:
                         destination_node = db.query(Node).filter(Node.id == top.node_id).one()
                         storage_rec = recommend_storage_for_candidate(db, destination_node.id, False)
+                        storage_rec = fit_ct_storage(db, client, wl, destination_node, storage_rec, False)
                         item.update({
                             "destination_node_id": str(destination_node.id), "destination_node": destination_node.name,
                             "destination_storage_id": storage_rec["id"] if storage_rec else None,

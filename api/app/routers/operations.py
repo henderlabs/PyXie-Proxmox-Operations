@@ -13,7 +13,7 @@ from pyxie_core.audit import write_audit_event
 from pyxie_core.locks import release_locks_for_operation
 from pyxie_core.operations_engine import OperationError, TERMINAL_STATUSES, cancel_operation
 from pyxie_core import placement
-from pyxie_core.placement import get_cluster_storage_preference, is_currently_on_shared_storage, recommend_destinations, recommend_storage_for_candidate
+from pyxie_core.placement import get_cluster_storage_preference, is_currently_on_shared_storage, recommend_destinations, recommend_storage_for_candidate, fit_ct_storage
 
 from ..auth_deps import get_current_user, require_admin
 from ..deps import get_db
@@ -623,8 +623,8 @@ def update_migrate_plan_destination(
 ):
     if payload.destination_node_id is None and payload.transport is None:
         raise HTTPException(400, "nothing to update -- pass destination_node_id and/or transport")
-    if payload.transport is not None and payload.transport not in ("live", "offline", "shutdown_in_place", "skip"):
-        raise HTTPException(400, "transport must be 'live', 'offline', 'shutdown_in_place', or 'skip'")
+    if payload.transport is not None and payload.transport not in ("live", "offline", "restart", "shutdown_in_place", "skip"):
+        raise HTTPException(400, "transport must be 'live', 'offline', 'restart', 'shutdown_in_place', or 'skip'")
 
     op = db.query(Operation).filter(Operation.id == operation_id).one_or_none()
     if op is None:
@@ -680,6 +680,17 @@ def update_migrate_plan_destination(
         storage_rec = recommend_storage_for_candidate(
             db, destination_node.id, bool(item.get("currently_on_shared")), storage_preference=item.get("storage_preference"),
         )
+        if item.get("guest_type") == "lxc" and storage_rec:
+            # A container disk needs a storage that holds container disks (not every shared storage does).
+            try:
+                ct = db.query(Workload).filter(Workload.id == workload_id).one()
+                ct_cluster = db.query(Cluster).filter(Cluster.id == ct.cluster_id).one()
+                ct_target = db.query(PveTarget).filter(PveTarget.id == ct_cluster.pve_target_id).one()
+                ct_client, _c = build_pve_client(db, ct_target)
+                with ct_client:
+                    storage_rec = fit_ct_storage(db, ct_client, ct, destination_node, storage_rec, bool(item.get("currently_on_shared")))
+            except Exception:  # noqa: BLE001 -- the preview's own check still names a bad storage
+                pass
         item["destination_node_id"] = str(destination_node.id)
         item["destination_node"] = destination_node.name
         item["destination_storage_id"] = storage_rec["id"] if storage_rec else None
@@ -691,6 +702,11 @@ def update_migrate_plan_destination(
         item["manually_set"] = True
 
     if payload.transport is not None:
+        # A container cannot move live and a VM has no restart migration: refuse the mismatch instead of silently coercing it.
+        if item.get("guest_type") == "lxc" and payload.transport == "live":
+            raise HTTPException(400, "a container cannot be moved live; choose 'restart' (stop, move, start) or 'shutdown_in_place'")
+        if payload.transport == "restart" and item.get("guest_type") != "lxc":
+            raise HTTPException(400, "'restart' is a container option; a VM moves 'live' or 'offline'")
         # Independent of destination -- doesn't mark manually_set, since
         # that flag exists purely to protect a destination override from
         # rescore_migrate_plan(); the transport choice was never something
@@ -770,8 +786,8 @@ def update_stopped_relocation(
 ):
     if payload.included is None and payload.destination_node_id is None and payload.transport is None and payload.boot_off is None:
         raise HTTPException(400, "nothing to update -- pass included, destination_node_id, transport and/or boot_off")
-    if payload.transport is not None and payload.transport not in ("live", "offline"):
-        raise HTTPException(400, "transport must be 'live' or 'offline'")
+    if payload.transport is not None and payload.transport not in ("live", "offline", "restart"):
+        raise HTTPException(400, "transport must be 'live', 'offline' or 'restart'")
 
     op = db.query(Operation).filter(Operation.id == operation_id).one_or_none()
     if op is None:
@@ -807,8 +823,8 @@ def update_stopped_relocation(
         item["destination_storage_id"] = None if item.get("currently_on_shared") else (storage_rec["id"] if storage_rec else None)
 
     if payload.boot_off is not None:
-        if op.operation_type_id != "node.enter_maintenance":
-            raise HTTPException(400, "turning Start at boot off for the window is only available for Evacuate / Maint Mode")
+        if op.operation_type_id not in ("node.enter_maintenance", "maintenance.run"):
+            raise HTTPException(400, "turning Start at boot off for the window is only available for Evacuate / Maint Mode and Full Maintenance")
         if not item.get("starts_on_boot"):
             raise HTTPException(400, "this guest does not have Start at boot on")
         item["boot_off"] = payload.boot_off

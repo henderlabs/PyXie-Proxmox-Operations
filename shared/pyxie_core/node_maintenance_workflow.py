@@ -48,7 +48,7 @@ from .operations_engine import (
     enter_stage,
     fail_operation,
 )
-from .placement import note_planned_move, current_storage_name, guest_disk_rows, get_cluster_storage_preference, is_currently_on_shared_storage, rank_with_simulated_load, recommend_destinations, recommend_storage_for_candidate
+from .placement import note_planned_move, current_storage_name, guest_disk_rows, get_cluster_storage_preference, is_currently_on_shared_storage, rank_with_simulated_load, recommend_destinations, recommend_storage_for_candidate, fit_ct_storage
 from .discovery import build_pve_client
 
 
@@ -127,7 +127,9 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
         blocking_rules.append("SAFE-QUORUM-001")
 
     workloads = db.query(Workload).filter(Workload.node_id == node.id, Workload.is_missing.is_(False)).all()
-    running_vms = [w for w in workloads if w.type == "vm" and w.status == "running"]
+    # Running VMs AND containers: the final check asks Proxmox for both, so the plan must cover both (a running container used to be left out here and
+    # then failed the check at the very end, 2026-11-13). A container cannot move live, so its default is a restart migration.
+    running_vms = [w for w in workloads if w.type in ("vm", "lxc") and w.status == "running"]
     stopped_workloads = [w for w in workloads if w.status != "running"]
 
     migrate_plan = []
@@ -159,7 +161,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
             nodes_by_id = {n.id: n for n in candidates_all}
             simulated_added_bytes: dict = {}
             # One timed status call per running VM: a VM whose QEMU does not answer would hang its migration.
-            liveness = scan_vm_liveness(client, [(node.name, w.vmid) for w in running_vms])
+            liveness = scan_vm_liveness(client, [(node.name, w.vmid) for w in running_vms if w.type == "vm"])
             for wl in running_vms:
                 config = _qemu_config(client, node.name, wl)
                 if _has_pci_passthrough(config):
@@ -180,6 +182,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                     current_storage = current_storage_name(client, node, wl)
                     effective_pref = wl.storage_preference or get_cluster_storage_preference(db, cluster.id)
                     storage_rec = recommend_storage_for_candidate(db, destination_node.id, currently_on_shared, storage_preference=effective_pref)
+                    storage_rec = fit_ct_storage(db, client, wl, destination_node, storage_rec, currently_on_shared)
                     migrate_plan.append({
                         "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
                         "destination_node_id": str(destination_node.id), "destination_node": destination_node.name,
@@ -211,7 +214,8 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                         # existing behavior doesn't change unless picked
                         # (live migration can be too costly time-wise with
                         # node-local storage).
-                        "transport": "live",
+                        "transport": "restart" if wl.type == "lxc" else "live",
+                        "guest_type": wl.type,
                     })
                 else:
                     if wl.downtime_tolerance == "low":
@@ -249,13 +253,15 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                                 }
                                 for c in ranked
                             ],
-                            "transport": "live",
+                            "transport": "restart" if wl.type == "lxc" else "live",
+                            "guest_type": wl.type,
                         }
                         if fallback is not None:
                             destination_node = db.query(Node).filter(Node.id == fallback.node_id).one()
                             currently_on_shared = is_currently_on_shared_storage(client, node, wl, db)
                             effective_pref = wl.storage_preference or get_cluster_storage_preference(db, cluster.id)
                             storage_rec = recommend_storage_for_candidate(db, destination_node.id, currently_on_shared, storage_preference=effective_pref)
+                            storage_rec = fit_ct_storage(db, client, wl, destination_node, storage_rec, currently_on_shared)
                             item.update({
                                 "destination_node_id": str(destination_node.id), "destination_node": destination_node.name,
                                 "destination_storage_id": storage_rec["id"] if storage_rec else None,
@@ -295,6 +301,7 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                     if top is not None:
                         destination_node = db.query(Node).filter(Node.id == top.node_id).one()
                         storage_rec = recommend_storage_for_candidate(db, destination_node.id, False)
+                        storage_rec = fit_ct_storage(db, client, wl, destination_node, storage_rec, False)
                         item.update({
                             "destination_node_id": str(destination_node.id), "destination_node": destination_node.name,
                             "destination_storage_id": storage_rec["id"] if storage_rec else None,
@@ -307,7 +314,10 @@ def dry_run_enter_maintenance(db: Session, node: Node, *, actor: str, reason: st
                                 for c in ranked
                             ],
                         })
-                    stopped_relocation_required.append(item)
+                    stopped_relocation_required.append(flag_onboot({**item, "guest_type": wl.type}, _qemu_config(client, node.name, wl)))
+            # Start at boot: this host stays in maintenance mode afterward, so the safe default is Leave stopped (see boot_window.py).
+            from . import boot_window
+            boot_window.set_default(db, target, stopped_relocation_required, window=True)
     else:
         blocked_workloads = [{"workload_id": str(w.id), "vmid": w.vmid, "name": w.name, "reasons": ["no read client available"]} for w in running_vms]
         stopped_relocation_required = [{"workload_id": str(w.id), "vmid": w.vmid, "name": w.name,
@@ -395,20 +405,11 @@ def execute_enter_maintenance(db: Session, operation_id) -> Operation:
         if op.status == "evacuating":
             # Stopped guests whose Start at boot the operator chose to turn off for this window. Done FIRST, before anything moves, so a
             # missing PVE privilege fails the operation cleanly. The original value (on) is recorded and put back on Exit Maintenance Mode.
-            boot_disabled = list(ctx.get("boot_disabled", []))
-            boot_todo = [i for i in ctx.get("stopped_relocation_required", [])
-                         if i.get("boot_off") and not i.get("included") and i["workload_id"] not in boot_disabled]
-            if boot_todo:
-                try:
-                    with PveMaintenanceClient(load_pve_credentials(db, target, "maintenance")) as writer:
-                        for item in boot_todo:
-                            writer.set_vm_config_keys(node.name, item["vmid"], {"onboot": 0})
-                            boot_disabled.append(item["workload_id"])
-                            ctx["boot_disabled"] = boot_disabled
-                            save_progress()
-                except Exception as exc:  # noqa: BLE001
-                    release_locks_for_operation(db, op.id)
-                    return fail_operation(db, op, error=f"could not turn Start at boot off for the maintenance window (the PVE account needs VM.Config.Options): {exc}")
+            from . import boot_window
+            boot_error = boot_window.apply_off(db, target, node.name, ctx, ctx.get("stopped_relocation_required", []), save_progress)
+            if boot_error:
+                release_locks_for_operation(db, op.id)
+                return fail_operation(db, op, error=boot_error)
 
             from .parallel_children import parallel_k, run_parallel
 
@@ -684,11 +685,9 @@ def dry_run_exit_maintenance(db: Session, node: Node, *, actor: str) -> Operatio
                 restart_plan.append({"workload_id": str(workload.id), "vmid": workload.vmid, "name": workload.name})
 
     boot_restore_plan = []
-    if node.maintenance_mode and entry is not None:
-        for wid in (entry.context or {}).get("boot_disabled", []):
-            workload = db.query(Workload).filter(Workload.id == wid).one_or_none()
-            if workload is not None and not workload.is_missing and workload.node_id == node.id:
-                boot_restore_plan.append({"workload_id": str(workload.id), "vmid": workload.vmid, "name": workload.name})
+    if node.maintenance_mode:
+        from . import boot_window
+        boot_restore_plan = boot_window.restore_rows(db, node)
         if boot_restore_plan:
             reasons.append("Start at boot will be turned back on for: " + ", ".join(i["name"] or str(i["vmid"]) for i in boot_restore_plan) + " (it was turned off for this maintenance window).")
 
@@ -758,17 +757,15 @@ def execute_exit_maintenance(db: Session, operation_id) -> Operation:
             boot_restored = list(ctx.get("boot_restored", []))
             boot_plan = [i for i in ctx.get("boot_restore_plan", []) if i["workload_id"] not in boot_restored]
             if boot_plan:
+                from . import boot_window
                 cluster_, target_ = _load_context(db, node)
-                try:
-                    with PveMaintenanceClient(load_pve_credentials(db, target_, "maintenance")) as writer:
-                        for item in boot_plan:
-                            writer.set_vm_config_keys(node.name, item["vmid"], {"onboot": 1})
-                            boot_restored.append(item["workload_id"])
-                            ctx["boot_restored"] = boot_restored
-                            save_progress()
-                except Exception as exc:  # noqa: BLE001
+                boot_error = boot_window.restore_on(db, target_, node.name, boot_plan)
+                if boot_error:
                     release_locks_for_operation(db, op.id)
-                    return fail_operation(db, op, error=f"could not turn Start at boot back on: {exc}. Set it back on by hand for: " + ", ".join(i["name"] or str(i["vmid"]) for i in boot_plan))
+                    return fail_operation(db, op, error=boot_error)
+                boot_restored.extend(i["workload_id"] for i in boot_plan)
+                ctx["boot_restored"] = boot_restored
+                save_progress()
 
             op = enter_stage(db, op, status="verifying", stage="verifying")
 

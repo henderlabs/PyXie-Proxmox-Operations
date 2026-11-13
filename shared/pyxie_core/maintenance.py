@@ -82,9 +82,13 @@ def _destination_candidates(db: Session, cluster: Cluster, source_node: Node, re
 
 
 def _qemu_config(client, node_name: str, wl: Workload) -> dict | None:
-    if wl.type != "vm" or client is None:
+    """The guest's live PVE config: a VM's (qemu) or a container's (lxc). None when it cannot be read (callers then fail toward the conservative answer).
+    The name is historical; containers were left out until 0.55.5, which is why a running container never reached the maintenance plans."""
+    if wl.type not in ("vm", "lxc") or client is None:
         return None
     try:
+        if wl.type == "lxc":
+            return client.lxc_config(node_name, wl.vmid) or {}
         return client.qemu_config(node_name, wl.vmid) or {}
     except Exception:
         return None
@@ -102,8 +106,9 @@ def onboot_restart_reason(vmid, config: dict | None) -> str | None:
     if str(config.get("onboot", "")).strip().lower() not in ("1", "yes", "true", "on"):
         return None
     return (
-        "Start at boot is on -- this stopped VM will power on by itself when the host reboots. "
-        f"If it should stay off, turn Start at boot off first (VM > Options, or `qm set {vmid} --onboot 0`) and preview again."
+        "Start at boot is on -- Proxmox will power this stopped guest on by itself when the host reboots, even in maintenance mode. "
+        "Choose Leave stopped and PyXie turns Start at boot off for the window and puts it back on Exit Maintenance Mode "
+        f"(or turn it off yourself: `qm set {vmid} --onboot 0` for a VM, `pct set {vmid} --onboot 0` for a container)."
     )
 
 
@@ -150,7 +155,7 @@ def _has_pci_passthrough(config: dict | None) -> bool | None:
     return any(k.startswith("hostpci") for k in config.keys())
 
 
-_DISK_KEY_PREFIXES = ("scsi", "virtio", "ide", "sata", "efidisk", "tpmstate")
+_DISK_KEY_PREFIXES = ("scsi", "virtio", "ide", "sata", "efidisk", "tpmstate", "rootfs", "mp")
 
 
 def _workload_disk_storage_names(config: dict) -> set[str]:
@@ -164,10 +169,21 @@ def _workload_disk_storage_names(config: dict) -> set[str]:
         val = str(value)
         if "media=cdrom" in val:
             continue  # ISO-backed virtual CD-ROM, not an actual VM disk
+        if val.startswith("/"):
+            continue  # a container bind mount (a host path, not a volume): see lxc_bind_mounts
         storage_name = val.split(":", 1)[0].strip()
         if storage_name:
             names.add(storage_name)
     return names
+
+
+def lxc_bind_mounts(config: dict | None) -> list[str]:
+    """Host paths a container mounts directly (mp0: /srv/data,mp=/data). Proxmox refuses to migrate a container that has one: the path only exists on this host."""
+    found = []
+    for key, value in (config or {}).items():
+        if key.rstrip("0123456789") == "mp" and str(value).startswith("/"):
+            found.append(str(value).split(",", 1)[0])
+    return found
 
 
 def workload_node_local_disk_storages(db: Session, node: Node, config: dict | None) -> list[str] | None:
