@@ -49,6 +49,7 @@ def revalidate_live_migration(
     target_node: str,
     expected_memory_bytes: Optional[int],
     require_running: bool = True,
+    guest_kind: str = "qemu",
 ) -> MigrationPrecondition:
     reasons: list[str] = []
     snapshot: dict = {}
@@ -74,9 +75,9 @@ def revalidate_live_migration(
 
     # confirm the VM is still where PyXie's plan thinks it is, and running
     try:
-        qemu_list = client.qemu_list(source_node)
+        qemu_list = client.lxc_list(source_node) if guest_kind == "lxc" else client.qemu_list(source_node)
     except Exception as exc:
-        reasons.append(f"could not read live VM list on {source_node}: {exc}")
+        reasons.append(f"could not read live guest list on {source_node}: {exc}")
         qemu_list = []
     live_vm = next((v for v in qemu_list if int(v.get("vmid", -1)) == vmid), None)
     snapshot["source_qemu_entry"] = live_vm

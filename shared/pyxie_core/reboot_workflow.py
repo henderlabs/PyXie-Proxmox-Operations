@@ -306,6 +306,26 @@ def execute_reboot(db: Session, operation_id) -> Operation:
                 return fail_operation(db, op, error=f"node uptime ({verification['uptime_seconds']}s) suggests it may not have actually rebooted")
 
             log_stage(op.id, f"Verification passed: online, quorate, uptime {verification['uptime_seconds']}s, kernel {verification['kernel_version']}.")
+            # The host was idle before this reboot, so any guest running now was started by Proxmox itself (Start at boot). Report it: a host that is
+            # in maintenance mode is meant to stay empty.
+            try:
+                from .boot_window import started_by_themselves, wait_for_startall
+                client, _cred = build_pve_client(db, target, avoid_node_id=node.id)
+                with client:
+                    log_stage(op.id, f"Waiting for Proxmox to finish starting the guests that start at boot on {node.name}.")
+                    verification["startall_finished"] = wait_for_startall(client, node.name, verification.get("uptime_seconds"))
+                    started = started_by_themselves(client.qemu_list(node.name), client.lxc_list(node.name))
+                verification["guests_started_by_themselves"] = started
+                op.verification_result = dict(verification)
+                db.commit()
+                if started:
+                    log_stage(
+                        op.id,
+                        f"{len(started)} guest(s) started by themselves after the reboot (Start at boot): {', '.join(started)}."
+                        + (f" {node.name} is in maintenance mode and was meant to stay empty: shut them down or move them, or choose Leave stopped in the plan next time." if node.maintenance_mode else ""),
+                    )
+            except Exception:  # noqa: BLE001 -- informational only, never fails a reboot that verified
+                pass
             release_locks_for_operation(db, op.id)
             try:
                 from .discovery import run_discovery

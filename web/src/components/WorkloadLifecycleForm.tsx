@@ -1,5 +1,6 @@
 "use client";
 
+import GuestBadge from "./GuestBadge";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Node, Operation, StorageItem, Workload } from "@/lib/api";
@@ -254,11 +255,19 @@ export default function WorkloadLifecycleForm({
   // offering a deleted VM as a real action target here has no honest
   // outcome: PVE has nothing to act on -- a real gap found live, two
   // already-deleted guests (is_missing=true) were selectable here.
-  const vms = useMemo(() => workloads.filter((w) => w.type === "vm" && !w.is_missing), [workloads]);
+  // Every guest on the host, VMs AND containers: a running container used to be invisible here, which hid what was blocking maintenance mode.
+  const vms = useMemo(() => workloads.filter((w) => (w.type === "vm" || w.type === "lxc") && !w.is_missing), [workloads]);
   const visibleVms = useMemo(
     () => (filterByNode && selectedNodeIds.length > 0 ? vms.filter((w) => selectedNodeIds.includes(w.node_id)) : vms),
     [vms, filterByNode, selectedNodeIds]
   );
+
+  // A ticked container: Bulk Migrate is for VMs (a container cannot move live; it is restarted by Evacuate / Maint Mode), the power actions work for both.
+  const bulkHasCt = useMemo(() => vms.some((w) => bulkIds.has(w.id) && w.type === "lxc"), [vms, bulkIds]);
+  useEffect(() => {
+    if (bulkHasCt && action === "move") setAction("");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bulkHasCt]);
 
   const bulkDestNodes = useMemo(() => {
     const clusterIds = new Set(vms.filter((w) => bulkIds.has(w.id)).map((w) => w.cluster_id));
@@ -400,14 +409,17 @@ export default function WorkloadLifecycleForm({
               )}
             </>
           )}
-          <span>{visibleVms.length} VM{visibleVms.length === 1 ? "" : "s"}</span>
+          <span>
+            {visibleVms.length} guest{visibleVms.length === 1 ? "" : "s"}
+            {visibleVms.some((w) => w.type === "lxc") ? ` (${visibleVms.filter((w) => w.type !== "lxc").length} VMs, ${visibleVms.filter((w) => w.type === "lxc").length} CT)` : ""}
+          </span>
         </div>
       </div>
 
       <div className="max-h-[34rem] lg:max-h-none lg:flex-1 lg:basis-0 lg:min-h-[28rem] overflow-y-auto" ref={tableScrollRef}>
         <Table
           rows={visibleVms}
-          emptyMessage={filterByNode && selectedNodeIds.length > 0 ? "No VMs on the selected node(s)." : "No VMs."}
+          emptyMessage={filterByNode && selectedNodeIds.length > 0 ? "No guests on the selected node(s)." : "No guests."}
           storageKey="maintenance-workloads"
           onRowClick={isAdmin ? (w) => toggleBulk(w.id) : undefined}
           rowClassName={(w) => (bulkIds.has(w.id) ? "bg-accent/10 pyxie-jump-target" : "")}
@@ -416,14 +428,17 @@ export default function WorkloadLifecycleForm({
             {
               header: "Name",
               render: (w) => (
-                <Link
-                  href={`/infrastructure/workloads/${w.id}`}
-                  onClick={(e) => e.stopPropagation()}
-                  className="text-accent hover:underline"
-                  title="Open on the Workloads page"
-                >
-                  {w.name || `vmid ${w.vmid}`}
-                </Link>
+                <>
+                  <Link
+                    href={`/infrastructure/workloads/${w.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-accent hover:underline"
+                    title="Open on the Workloads page"
+                  >
+                    {w.name || `vmid ${w.vmid}`}
+                  </Link>
+                  <GuestBadge type={w.type} />
+                </>
               ),
               sortValue: (w) => w.name || `vmid ${w.vmid}`,
             },
@@ -616,7 +631,9 @@ export default function WorkloadLifecycleForm({
             }}
           >
             <option value="">Select an action…</option>
-            <option value="move">Migrate to another node</option>
+            <option value="move" disabled={bulkHasCt} title={bulkHasCt ? "Containers cannot move live. Use Evacuate / Maint Mode on the host: it restarts them on another host." : undefined}>
+              Migrate to another node{bulkHasCt ? " (VMs only)" : ""}
+            </option>
             <option value="shutdown">Graceful Shutdown</option>
             <option value="start">Start</option>
             <option value="force_stop">Force Stop (higher-risk)</option>
@@ -656,7 +673,7 @@ export default function WorkloadLifecycleForm({
           </button>
         )}
         {bulkIds.size === 0 ? (
-          <p className="text-xs text-muted w-full">Tick one or more VMs above to enable an action.</p>
+          <p className="text-xs text-muted w-full">Tick one or more guests above to enable an action.</p>
         ) : !action ? (
           <p className="text-xs text-muted w-full">Select an action to continue.</p>
         ) : action === "move" ? (

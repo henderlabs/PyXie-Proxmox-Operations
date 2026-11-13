@@ -1,5 +1,6 @@
 "use client";
 
+import GuestBadge from "./GuestBadge";
 import WrapperPanel from "@/components/WrapperPanel";
 import MigrationBars from "@/components/MigrationBars";
 import { useState } from "react";
@@ -358,7 +359,9 @@ type MigratePlanItem = {
   // about moving load OFF a node for good. Some workloads can stay in
   // place and just be powered down during updates, then brought back up
   // once updates/reboot are complete, without migrating at all.
-  transport?: "live" | "offline" | "shutdown_in_place" | "skip";
+  transport?: "live" | "offline" | "restart" | "shutdown_in_place" | "skip";
+  // "lxc" for a container (it cannot move live: restart migration), else a VM.
+  guest_type?: string;
 };
 type OtherPlanItem = {
   workload_id: string; vmid: number; name: string | null;
@@ -377,7 +380,10 @@ type OptionalPlanItem = {
   // already off, and the UI should note when a workload is stopped vs.
   // running.
   currently_running?: boolean;
-  transport?: "live" | "offline";
+  transport?: "live" | "offline" | "restart";
+  guest_type?: string;
+  // Start at boot can be turned off by PyXie for the window (false when the PyXie token lacks VM.Config.Options).
+  boot_off_available?: boolean;
   // A stopped guest with Start at boot on: a reboot of this host would power it on.
   starts_on_boot?: boolean;
   // Enter Maintenance Mode: turn Start at boot off for the window (restored on exit).
@@ -424,7 +430,7 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
     }
   }
 
-  async function changeTransport(item: MigratePlanItem, transport: "live" | "offline" | "shutdown_in_place" | "skip") {
+  async function changeTransport(item: MigratePlanItem, transport: "live" | "offline" | "restart" | "shutdown_in_place" | "skip") {
     if (transport === (item.transport || "live")) return;
     setSavingId(item.workload_id);
     setSaveError(null);
@@ -514,7 +520,7 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
     }
   }
 
-  async function changeOptionalTransport(item: OptionalPlanItem, transport: "live" | "offline") {
+  async function changeOptionalTransport(item: OptionalPlanItem, transport: "live" | "offline" | "restart") {
     if (transport === (item.transport || "live")) return;
     setSavingId(item.workload_id);
     setSaveError(null);
@@ -604,10 +610,12 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
         {plan.map((item) => (
           <div
             key={item.workload_id}
-            className={`flex items-center justify-between px-2 py-1.5 text-xs gap-2 ${item.transport === "skip" ? "opacity-60" : ""}`}
+            className={`flex flex-wrap items-center justify-between px-2 py-1.5 text-xs gap-x-2 gap-y-1 ${item.transport === "skip" ? "opacity-60" : ""}`}
           >
-            <span className={`text-text truncate flex-1 min-w-0 ${item.transport === "skip" ? "line-through" : ""}`}>
+            {/* The name keeps a minimum width so a long disk description can never squeeze it out (it used to collapse to nothing). */}
+            <span className={`text-text font-medium break-words basis-40 grow min-w-[10rem] ${item.transport === "skip" ? "line-through" : ""}`}>
               {item.name || `vmid ${item.vmid}`}
+              <GuestBadge type={item.guest_type} />
             </span>
             {op.operation_type_id === "cluster.rebalance" && item.source_node && (
               <span className="text-muted shrink-0 hidden sm:inline">
@@ -626,7 +634,7 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
             )}
             {item.transport !== "skip" && item.transport !== "shutdown_in_place" && (item.current_storage || item.destination_storage) && (
               <span
-                className="text-muted shrink-0 hidden sm:inline"
+                className="text-muted order-last basis-full text-[11px] leading-snug"
                 title={
                   `Storage: now ${item.current_storage || "unknown"}${item.currently_on_shared ? " (shared -- reachable from any node)" : " (node-local)"}. ` +
                   (item.destination_storage
@@ -646,11 +654,13 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
               </span>
             )}
             <select
-              value={item.transport || "live"}
+              value={item.transport || (item.guest_type === "lxc" ? "restart" : "live")}
               disabled={savingId === item.workload_id || op.status !== "awaiting_approval" || !isAdmin}
-              onChange={(e) => changeTransport(item, e.target.value as "live" | "offline" | "shutdown_in_place" | "skip")}
+              onChange={(e) => changeTransport(item, e.target.value as "live" | "offline" | "restart" | "shutdown_in_place" | "skip")}
               title={
-                item.currently_on_shared === false
+                item.guest_type === "lxc"
+                  ? "A container cannot move live. Restart migration stops it, moves it and starts it again on the new host (a short outage; about as long as a restart when the disk is on shared storage, longer when the disk has to be copied)."
+                  : item.currently_on_shared === false
                   ? "This disk is on node-local storage -- live has to block-mirror it while the guest keeps writing; offline (shutdown, migrate, power back on) is usually faster, at the cost of downtime for the copy."
                   : "Live keeps the guest running throughout. Offline shuts it down first, copies, then powers it back on."
               }
@@ -658,8 +668,14 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
               // an independent per-row choice, not tied to the destination.
               className="w-40 shrink-0 bg-surface2 border border-border rounded px-1.5 py-1 text-xs text-left disabled:opacity-50"
             >
-              <option value="live">Live</option>
-              <option value="offline">Shutdown + migrate</option>
+              {item.guest_type === "lxc" ? (
+                <option value="restart">Restart migrate (short outage)</option>
+              ) : (
+                <>
+                  <option value="live">Live</option>
+                  <option value="offline">Shutdown + migrate</option>
+                </>
+              )}
               {/* Only makes sense when the node stays in the cluster --
                   node.evacuate/cluster.rebalance don't offer this. */}
               {(op.operation_type_id === "node.enter_maintenance" || op.operation_type_id === "maintenance.run") && (
@@ -710,9 +726,10 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
           ))
         )}
         {optionalItems.map((item) => (
-          <div key={item.workload_id} className="flex items-center justify-between px-2 py-1.5 text-xs gap-2">
-            <span className="text-text truncate flex-1 min-w-0" title={(item.reasons || []).join("; ") || undefined}>
+          <div key={item.workload_id} className="flex flex-wrap items-center justify-between px-2 py-1.5 text-xs gap-x-2 gap-y-1">
+            <span className="text-text font-medium break-words basis-40 grow min-w-[10rem]" title={(item.reasons || []).join("; ") || undefined}>
               {item.name || `vmid ${item.vmid}`}
+              <GuestBadge type={item.guest_type} />
             </span>
             {/* Explicit power-state badge, not just implied by wording --
                 the UI should note when a workload is stopped vs. running. */}
@@ -744,7 +761,7 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
               <option value="stay">{item.currently_running ? "Shut down in place" : "Leave stopped"}</option>
               <option value="move">{item.currently_running ? "Migrate instead" : "Relocate"}</option>
             </select>
-            {!item.included && !item.currently_running && item.starts_on_boot && op.operation_type_id === "node.enter_maintenance" && (
+            {!item.included && !item.currently_running && item.starts_on_boot && (op.operation_type_id === "node.enter_maintenance" || op.operation_type_id === "maintenance.run") && (
               <select
                 value={item.boot_off ? "off" : "keep"}
                 disabled={savingId === item.workload_id || op.status !== "awaiting_approval" || !isAdmin}
@@ -752,20 +769,26 @@ function MigratePlanEditor({ op, planKey, onUpdated }: { op: Operation; planKey:
                 title="Start at boot is on, so rebooting this host would power the guest on. Leave stopped turns Start at boot off for the maintenance window and puts it back exactly as it was on Exit Maintenance Mode. Needs the PVE account to have VM.Config.Options."
                 className="w-56 shrink-0 bg-surface2 border border-border rounded px-1.5 py-1 text-xs text-left disabled:opacity-50"
               >
-                <option value="keep">Leave as is (powers on at reboot)</option>
-                <option value="off">Leave stopped (Start at boot off for the window)</option>
+                <option value="off" disabled={item.boot_off_available === false}>Leave stopped (recommended): Start at boot off until Exit</option>
+                <option value="keep">Leave as is: it starts after the reboot</option>
               </select>
             )}
             {item.included && item.currently_running && (
               <select
-                value={item.transport || "live"}
+                value={item.transport || (item.guest_type === "lxc" ? "restart" : "live")}
                 disabled={savingId === item.workload_id || op.status !== "awaiting_approval" || !isAdmin}
-                onChange={(e) => changeOptionalTransport(item, e.target.value as "live" | "offline")}
+                onChange={(e) => changeOptionalTransport(item, e.target.value as "live" | "offline" | "restart")}
                 title="Live keeps the guest running throughout. Offline shuts it down first, copies, then powers it back on. Available even when the destination is flagged -- the operator should still be able to choose live vs. shutdown migration even when memory headroom is insufficient."
                 className="w-40 shrink-0 bg-surface2 border border-border rounded px-1.5 py-1 text-xs text-left disabled:opacity-50"
               >
-                <option value="live">Live</option>
-                <option value="offline">Shutdown + migrate</option>
+                {item.guest_type === "lxc" ? (
+                  <option value="restart">Restart migrate (short outage)</option>
+                ) : (
+                  <>
+                    <option value="live">Live</option>
+                    <option value="offline">Shutdown + migrate</option>
+                  </>
+                )}
               </select>
             )}
             {item.included && (
@@ -887,6 +910,16 @@ export default function OperationCard({
       {(op.operation_type_id === "host.update" || op.operation_type_id === "pbs.update") && op.status === "completed" && op.verification_result && (
         <HostUpdateVerification result={op.verification_result} />
       )}
+
+      {/* Guests Proxmox powered on by itself after a reboot (Start at boot): a host in maintenance mode is meant to stay empty. */}
+      {op.operation_type_id === "host.reboot" && op.status === "completed" && Array.isArray((op.verification_result as Record<string, unknown> | null)?.guests_started_by_themselves) &&
+        ((op.verification_result as Record<string, unknown>).guests_started_by_themselves as string[]).length > 0 && (
+          <div className="mt-2 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-xs">
+            <span className="font-medium text-warn">Started by themselves after the reboot (Start at boot): </span>
+            {((op.verification_result as Record<string, unknown>).guests_started_by_themselves as string[]).join(", ")}.
+            <span className="text-muted"> A host in maintenance mode is meant to stay empty: shut them down or move them, or choose Leave stopped in the plan next time.</span>
+          </div>
+        )}
 
       {(op.status === "awaiting_approval" || op.status === "approved" || (isInFlight(op.status) && CANCEL_WHILE_RUNNING.has(op.operation_type_id))) && (
         <div className="flex items-center gap-2">

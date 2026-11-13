@@ -20,7 +20,7 @@ def stopped_shared_item(db: Session, client, node: Node, wl, candidates_all, nod
     item = {
         "workload_id": str(wl.id), "vmid": wl.vmid, "name": wl.name,
         "reasons": [reason], "included": False, "currently_running": False,
-        "currently_on_shared": True, "transport": "offline",
+        "currently_on_shared": True, "transport": "offline", "guest_type": wl.type,
     }
     if top is not None:
         dest = nodes_by_id.get(top.node_id)

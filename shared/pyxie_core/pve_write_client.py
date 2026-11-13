@@ -377,6 +377,31 @@ class PveMaintenanceClient:
             params["targetstorage"] = target_storage
         return self._request("POST", f"/nodes/{node}/qemu/{vmid}/migrate", data=params)
 
+    def migrate_ct(
+        self,
+        node: str,
+        vmid: int,
+        target_node: str,
+        *,
+        restart: bool = True,
+        target_storage: Optional[str] = None,
+        timeout: int = 180,
+    ) -> str:
+        """POST /nodes/{node}/lxc/{vmid}/migrate. Returns the UPID.
+
+        Containers cannot be moved live. restart=True is Proxmox's "restart migration": it stops the container (waiting up to `timeout` seconds for a
+        clean stop, then killing it), moves it, and starts it again on the target. restart=False is for a container that is already stopped.
+        target_storage is PVE's 'target-storage' (hyphenated for containers): without it every volume stays on the storage it is on."""
+        if not _mutations_enabled():
+            raise MutationsDisabledError(_disabled_message("migrate"))
+        params: dict = {"target": target_node}
+        if restart:
+            params["restart"] = 1
+            params["timeout"] = timeout
+        if target_storage:
+            params["target-storage"] = target_storage
+        return self._request("POST", f"/nodes/{node}/lxc/{vmid}/migrate", data=params)
+
     def shutdown_vm(self, node: str, vmid: int, *, timeout: int) -> str:
         """POST /nodes/{node}/qemu/{vmid}/status/shutdown. Graceful ACPI
         shutdown ONLY -- forceStop is deliberately never set here. If the
