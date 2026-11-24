@@ -1,10 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [checking, setChecking] = useState(true);
   const [needsBootstrap, setNeedsBootstrap] = useState(false);
   const [email, setEmail] = useState("");
@@ -36,6 +34,7 @@ export default function LoginPage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error || "Failed");
+        setPending(false);
         return;
       }
       if (needsBootstrap) {
@@ -48,14 +47,19 @@ export default function LoginPage() {
         if (!loginRes.ok) {
           setError("Account created -- please log in.");
           setNeedsBootstrap(false);
+          setPending(false);
           return;
         }
       }
-      router.push("/");
-      router.refresh();
+      // A full page load, not router.push + router.refresh: called back to
+      // back, the refresh cancels the push's in-flight RSC request, so the
+      // browser stayed on /login after a successful sign-in (seen live on
+      // CRE, 2026-11-24). A hard load also guarantees the new session
+      // cookie goes with the very first dashboard request. Leave the button
+      // disabled while the browser navigates away.
+      window.location.assign("/");
     } catch (e) {
       setError((e as Error).message);
-    } finally {
       setPending(false);
     }
   }
