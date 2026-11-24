@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useMe } from "@/lib/useMe";
 import type { UpdatesResponse } from "@/lib/updates";
@@ -73,7 +73,6 @@ function Clock() {
  * Floats over the page (no row of its own), so nothing is pushed down when the update pill appears. */
 export default function TopBar({ instance }: { instance: string }) {
   const pathname = usePathname();
-  const router = useRouter();
   const me = useMe();
   const info = useUpdateInfo(me?.is_admin === true, pathname);
   // The bar under the header must stop short of this box whatever its width (a long display name, the update chip): publish the width as a CSS variable.
@@ -91,8 +90,9 @@ export default function TopBar({ instance }: { instance: string }) {
 
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/login");
-    router.refresh();
+    // Full page load: router.push + router.refresh back to back race (the
+    // refresh cancels the push), the same bug that stalled sign-in.
+    window.location.assign("/login");
   }
 
   const name = me ? me.display_name || me.email : "";
