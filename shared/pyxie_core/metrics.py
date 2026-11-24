@@ -12,7 +12,7 @@ from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from .models import MetricPoint, Node, Workload
+from .models import MetricPoint, Node, Policy, Workload
 from .pve_client import PveClient
 
 NODE_METRICS = ("cpu_pct", "mem_pct", "mem_used_bytes")
@@ -528,7 +528,31 @@ def latest_workload_metrics(db: Session) -> dict[str, dict]:
     return out
 
 
-def prune_old_metrics(db: Session, retention_days: int = 400) -> int:
+DEFAULT_RETENTION_DAYS = 400
+# Floor so a typo (0, 1) in the policy can't wipe the history rightsizing
+# and capacity need: 60 days is where their confidence reaches "high".
+MIN_RETENTION_DAYS = 60
+MAX_RETENTION_DAYS = 3650
+
+
+def retention_days_for(db: Session) -> int:
+    """The org-wide metrics.retention_days policy, clamped to a safe range.
+    Falls back to the default when the policy is missing or malformed."""
+    p = db.query(Policy).filter(Policy.key == "metrics.retention_days", Policy.scope_type == "organization").one_or_none()
+    try:
+        days = int(p.value.get("days")) if p and isinstance(p.value, dict) else DEFAULT_RETENTION_DAYS
+    except (TypeError, ValueError):
+        days = DEFAULT_RETENTION_DAYS
+    return max(MIN_RETENTION_DAYS, min(MAX_RETENTION_DAYS, days))
+
+
+def prune_old_metrics(db: Session, retention_days: int | None = None) -> int:
+    """Deletes metric points older than the retention period. With no
+    explicit retention_days, uses the metrics.retention_days policy (the
+    nightly job used to call this with no argument and so always kept 400
+    days, whatever the policy said)."""
+    if retention_days is None:
+        retention_days = retention_days_for(db)
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted = db.query(MetricPoint).filter(MetricPoint.sampled_at < cutoff).delete()
     from .mem_pressure import prune_memory_pressure

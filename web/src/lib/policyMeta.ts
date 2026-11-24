@@ -77,7 +77,7 @@ export const POLICY_META: Record<string, PolicyMeta> = {
   },
   "metrics.retention_days": {
     label: "Metrics retention",
-    description: "How long historical CPU/RAM/disk metrics are kept before being pruned.",
+    description: "How long historical CPU/RAM/disk metrics are kept before being pruned (nightly). At least 60 days are always kept, so rightsizing and capacity keep enough history.",
     field: "days",
     control: "count-days",
   },
